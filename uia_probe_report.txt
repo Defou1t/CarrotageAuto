@@ -1,0 +1,237 @@
+UIAutomation Probe Report
+Время: 2026-06-07 17:16:07
+Python: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
+
+============================================================
+  1. ПОИСК ОКОН NeuraLOG
+============================================================
+Найдено окон по 'Neura*': 1
+  HWND=0x00010900  class='Afx:400000:8:10003:0:2640923'  title='NeuraLog  F:\nds\projects\Stanulska_002'
+
+============================================================
+  2. UIA BACKEND (современный, рекомендуется)
+============================================================
+✓ UIA backend подключился успешно
+  Ошибка дерева UIA: No windows for that process could be found
+
+============================================================
+  3. WIN32 BACKEND (классический MFC/WinForms)
+============================================================
+✓ win32 backend подключился успешно
+  Главное окно: 'NeuraLog  F:\nds\projects\Stanulska_002'
+  Класс: 'Afx:400000:8:10003:0:2640923'
+
+  --- Дерево контролов (win32) ---
+Control Identifiers:
+
+Afx:400000:8:10003:0:2640923 - 'NeuraLog  F:\nds\projects\Stanulska_002'    (L-32000, T-32000, R-31840, B-31972)
+['NeuraLog  F:\\nds\\projects\\Stanulska_002Afx:400000:8:10003:0:2640923', 'Afx:400000:8:10003:0:2640923', 'NeuraLog  F:\\nds\\projects\\Stanulska_002']
+child_window(title="NeuraLog  F:\nds\projects\Stanulska_002", class_name="Afx:400000:8:10003:0:2640923")
+   | 
+   | MDIClient - ''    (L-31955, T-31921, R-30314, B-31108)
+   | ['NeuraLog  F:\\nds\\projects\\Stanulska_002MDIClient', 'MDIClient']
+   | child_window(class_name="MDIClient")
+   | 
+   | StatusBar - 'Ready'    (L-32000, T-31055, R-30096, B-31036)
+   | ['ReadyStatusBar', 'StatusBar', 'Ready']
+   | child_window(title="Ready", class_name="msctls_statusbar32")
+   | 
+   | AfxControlBar42 - 'Main'    (L-32000, T-32000, R-30096, B-31921)
+   | ['AfxControlBar42', 'MainAfxControlBar42', 'Main', 'Main0', 'Main1', 'AfxControlBar420', 'AfxControlBar421']
+   | child_window(title="Main", class_name="AfxControlBar42")
+   |    | 
+   |    | #32770 - ''    (L-31052, T-31961, R-30830, B-31919)
+   |    | ['#32770', 'Slow            Tracer Speed                  Fast#32770', '#327700', '#327701', 'Slow            Tracer Speed                  Fast#327700', 'Slow            Tracer Speed                  Fast#327701']
+   |    | child_window(class_name="#32770")
+   |    |    | 
+   |    |    | Static - 'Current Depth:'    (L-30978, T-31958, R-30909, B-31945)
+   |    |    | ['Static', 'Current Depth:', 'Current Depth:Static', 'Static0', 'Static1', 'Current Depth:0', 'Current Depth:1', 'Current Depth:Static0', 'Current Depth:Static1']
+   |    |    | child_window(title="Current Depth:", class_name="Static")
+   |    |    | 
+   |    |    | Static - '3013'    (L-30903, T-31958, R-30853, B-31945)
+   |    |    | ['Static2', '3013', '3013Static']
+   |    |    | child_window(title="3013", class_name="Static")
+   |    |    | 
+   |    |    | Trackbar - 'Slider1'    (L-31041, T-31941, R-30841, B-31921)
+   |    |    | ['Trackbar', 'Slider1', 'Slider1Trackbar', 'Trackbar0', 'Trackbar1', 'Slider10', 'Slider11', 'Slider1Trackbar0', 'Slider1Trackbar1']
+   |    |    | child_window(title="Slider1", class_name="msctls_trackbar32")
+   |    |    | 
+   |    |    | Button - 'BTN_FORWARD'    (L-31040, T-31956, R-31025, B-31944)
+   |    |    | ['BTN_FORWARD', 'Button', 'BTN_FORWARDButton', 'Button0', 'Button1']
+   |    |    | child_window(title="BTN_FORWARD", class_name="Button")
+   |    |    | 
+   |    |    | Button - 'BTN_STOP'    (L-31023, T-31956, R-31011, B-31944)
+   |    |    | ['BTN_STOP', 'BTN_STOPButton', 'Button2']
+   |    |    | child_window(title="BTN_STOP", class_name="Button")
+   |    |    | 
+   |    |    | Button - 'BTN_REVERSE'    (L-31008, T-31956, R-30993, B-31944)
+   |    |    | ['BTN_REVERSE', 'Button3', 'BTN_REVERSEButton']
+   |    |    | child_window(title="BTN_REVERSE", class_name="Button")
+   |    | 
+   |    | Static - 'Current Depth:'    (L-30978, T-31958, R-30909, B-31945)
+   |    | ['Static', 'Current Depth:', 'Current Depth:Static', 'Static0', 'Static1', 'Current Depth:0', 'Current Depth:1', 'Current Depth:Static0', 'Current Depth:Static1']
+   |    | child_window(title="Current Depth:", class_name="Static")
+   |    | 
+   |    | Static - '3013'    (L-30903, T-31958, R-30853, B-31945)
+   |    | ['Static2', '3013', '3013Static']
+   |    | child_window(title="3013", class_name="Static")
+   |    | 
+   |    | Trackbar - 'Slider1'    (L-31041, T-31941, R-30841, B-31921)
+   |    | ['Trackbar', 'Slider1', 'Slider1Trackbar', 'Trackbar0', 'Trackbar1', 'Slider10', 'Slider11', 'Slider1Trackbar0', 'Slider1Trackbar1']
+   |    | child_window(title="Slider1", class_name="msctls_trackbar32")
+   |    | 
+   |    | Button - 'BTN_FORWARD'    (L-31040, T-31956, R-31025, B-31944)
+   |    | ['BTN_FORWARD', 'Button', 'BTN_FORWARDButton', 'Button0', 'Button1']
+   |    | child_window(title="BTN_FORWARD", class_name="Button")
+   |    | 
+   |    | Button - 'BTN_STOP'    (L-31023, T-31956, R-31011, B-31944)
+   |    | ['BTN_STOP', 'BTN_STOPButton', 'Button2']
+   |    | child_window(title="BTN_STOP", class_name="Button")
+   |    | 
+   |    | Button - 'BTN_REVERSE'    (L-31008, T-31956, R-30993, B-31944)
+   |    | ['BTN_REVERSE', 'Button3', 'BTN_REVERSEButton']
+   |    | child_window(title="BTN_REVERSE", class_name="Button")
+   |    | 
+   |    | Toolbar - 'Color Selection'    (L-32002, T-31961, R-31271, B-31920)
+   |    | ['Color SelectionToolbar', 'Color Selection', 'Toolbar', 'Toolbar0', 'Toolbar1']
+   |    | child_window(title="Color Selection", class_name="ToolbarWindow32")
+   |    |    | 
+   |    |    | Edit - ''    (L-31993, T-31956, R-31493, B-31925)
+   |    |    | ['NeuraLog  F:\\nds\\projects\\Stanulska_002Edit', 'Edit', 'NeuraLog  F:\\nds\\projects\\Stanulska_002Edit0', 'NeuraLog  F:\\nds\\projects\\Stanulska_002Edit1', 'Edit0', 'Edit1']
+   |    |    | child_window(class_name="Edit")
+   |    |    | 
+   |    |    | ComboBox - 'Color Mode'    (L-31492, T-31952, R-31342, B-31928)
+   |    |    | ['NeuraLog  F:\\nds\\projects\\Stanulska_002ComboBox', 'ComboBox', 'NeuraLog  F:\\nds\\projects\\Stanulska_002ComboBox0', 'NeuraLog  F:\\nds\\projects\\Stanulska_002ComboBox1', 'ComboBox0', 'ComboBox1']
+   |    |    | child_window(title="Color Mode", class_name="ComboBox")
+   |    |    | 
+   |    |    | Edit - 'Color Mode'    (L-31489, T-31949, R-31362, B-31931)
+   |    |    | ['NeuraLog  F:\\nds\\projects\\Stanulska_002Edit2', 'Edit2']
+   |    |    | child_window(title="Color Mode", class_name="Edit")
+   |    | 
+   |    | Edit - ''    (L-31993, T-31956, R-31493, B-31925)
+   |    | ['NeuraLog  F:\\nds\\projects\\Stanulska_002Edit', 'Edit', 'NeuraLog  F:\\nds\\projects\\Stanulska_002Edit0', 'NeuraLog  F:\\nds\\projects\\Stanulska_002Edit1', 'Edit0', 'Edit1']
+   |    | child_window(class_name="Edit")
+   |    | 
+   |    | ComboBox - 'Color Mode'    (L-31492, T-31952, R-31342, B-31928)
+   |    | ['NeuraLog  F:\\nds\\projects\\Stanulska_002ComboBox', 'ComboBox', 'NeuraLog  F:\\nds\\projects\\Stanulska_002ComboBox0', 'NeuraLog  F:\\nds\\projects\\Stanulska_002ComboBox1', 'ComboBox0', 'ComboBox1']
+   |    | child_window(title="Color Mode", class_name="ComboBox")
+   |    |    | 
+   |    |    | Edit - 'Color Mode'    (L-31489, T-31949, R-31362, B-31931)
+   |    |    | ['NeuraLog  F:\\nds\\projects\\Stanulska_002Edit2', 'Edit2']
+   |    |    | child_window(title="Color Mode", class_name="Edit")
+   |    | 
+   |    | Edit - 'Color Mode'    (L-31489, T-31949, R-31362, B-31931)
+   |    | ['NeuraLog  F:\\nds\\projects\\Stanulska_002Edit2', 'Edit2']
+   |    | child_window(title="Color Mode", class_name="Edit")
+   |    | 
+   |    | Toolbar - 'Curve Edit'    (L-31136, T-32000, R-30903, B-31959)
+   |    | ['Curve Edit', 'Curve EditToolbar', 'Toolbar2']
+   |    | child_window(title="Curve Edit", class_name="ToolbarWindow32")
+   |    | 
+   |    | Toolbar - 'Main'    (L-32002, T-32000, R-31497, B-31959)
+   |    | ['MainToolbar', 'Main2', 'Toolbar3']
+   |    | child_window(title="Main", class_name="ToolbarWindow32")
+   |    | 
+   |    | Toolbar - 'Curve/Track Tools'    (L-31499, T-32000, R-31134, B-31959)
+   |    | ['Curve/Track Tools', 'Curve/Track ToolsToolbar', 'Toolbar4']
+   |    | child_window(title="Curve/Track Tools", class_name="ToolbarWindow32")
+   |    | 
+   |    | #32770 - ''    (L-31273, T-31961, R-31051, B-31919)
+   |    | ['#327702', 'Slow            Tracer Speed                  Fast#327702']
+   |    | child_window(class_name="#32770")
+   |    |    | 
+   |    |    | Static - 'Slow            Tracer Speed                  Fast'    (L-31262, T-31953, R-31061, B-31940)
+   |    |    | ['Slow            Tracer Speed                  Fast', 'Static3', 'Slow            Tracer Speed                  FastStatic']
+   |    |    | child_window(title="Slow            Tracer Speed                  Fast", class_name="Static")
+   |    |    | 
+   |    |    | Trackbar - 'Slider1'    (L-31261, T-31941, R-31061, B-31921)
+   |    |    | ['Trackb
+============================================================
+  4. ДЕТАЛЬНЫЙ ПОИСК КОНТРОЛОВ [uia]
+============================================================
+Ошибка probe_controls: No windows for that process could be found
+
+============================================================
+  5. WIN32 ПРЯМОЙ ОБХОД (win32gui)
+============================================================
+Окна NeuraLOG через EnumWindows: 1
+  {'hwnd': '0x00010900', 'title': 'NeuraLog  F:\\nds\\projects\\Stanulska_002', 'class': 'Afx:400000:8:10003:0:2640923', 'rect': (-32000, -32000, -31840, -31972)}
+
+============================================================
+  5b. ДОЧЕРНИЕ ОКНА (child controls)
+============================================================
+Дочерних контролов: 64
+
+Классы контролов:
+   19x  Button
+   11x  Static
+    7x  ToolbarWindow32
+    7x  Edit
+    4x  AfxControlBar42
+    3x  #32770
+    3x  ComboBox
+    3x  ListBox
+    2x  msctls_trackbar32
+    1x  MDIClient
+    1x  msctls_statusbar32
+    1x  Afx:400000:8:10003:100063:0
+    1x  RICHEDIT
+    1x  Afx:400000:8:10003:11101279:0
+
+Первые 40 контролов:
+  hwnd=0x00010904  class=MDIClient                       title=''
+  hwnd=0x0001090E  class=msctls_statusbar32              title=''
+  hwnd=0x0001094A  class=AfxControlBar42                 title='Main'
+  hwnd=0x0001092E  class=#32770                          title=''
+  hwnd=0x00010930  class=Static                          title='Current Depth:'
+  hwnd=0x00010932  class=Static                          title='3013'
+  hwnd=0x00010934  class=msctls_trackbar32               title='Slider1'
+  hwnd=0x00010936  class=Button                          title='BTN_FORWARD'
+  hwnd=0x00010938  class=Button                          title='BTN_STOP'
+  hwnd=0x0001093A  class=Button                          title='BTN_REVERSE'
+  hwnd=0x0001091C  class=ToolbarWindow32                 title='Color Selection'
+  hwnd=0x0001091E  class=Edit                            title=''
+  hwnd=0x00010920  class=ComboBox                        title=''
+  hwnd=0x00010924  class=Edit                            title=''
+  hwnd=0x00020926  class=ToolbarWindow32                 title='Curve Edit'
+  hwnd=0x0002090A  class=ToolbarWindow32                 title='Main'
+  hwnd=0x0001092A  class=ToolbarWindow32                 title='Curve/Track Tools'
+  hwnd=0x00010944  class=#32770                          title=''
+  hwnd=0x00010946  class=Static                          title='Slow            Tracer Speed                  Fast'
+  hwnd=0x00010948  class=msctls_trackbar32               title='Slider1'
+  hwnd=0x0001094C  class=AfxControlBar42                 title='Zoom'
+  hwnd=0x00010912  class=ToolbarWindow32                 title='Zoom'
+  hwnd=0x00010914  class=ComboBox                        title=''
+  hwnd=0x0001091A  class=Edit                            title=''
+  hwnd=0x00010940  class=Afx:400000:8:10003:100063:0     title='User prompt'
+  hwnd=0x00010942  class=RICHEDIT                        title=''
+  hwnd=0x0001094E  class=AfxControlBar42                 title='Calibrate & Trace'
+  hwnd=0x0001092C  class=ToolbarWindow32                 title='Quality Control'
+  hwnd=0x00010928  class=ToolbarWindow32                 title='Calibrate & Trace'
+  hwnd=0x00010950  class=AfxControlBar42                 title='Curve/Track Dialog'
+  hwnd=0x00020952  class=Afx:400000:8:10003:11101279:0   title='Curve/Track Dialog'
+  hwnd=0x0002096C  class=#32770                          title=''
+  hwnd=0x0002096A  class=ListBox                         title=''
+  hwnd=0x00020968  class=Button                          title='Hide Grid'
+  hwnd=0x00020966  class=Button                          title='Remove'
+  hwnd=0x00020964  class=Static                          title='Top : '
+  hwnd=0x00020962  class=Static                          title='Bottom : '
+  hwnd=0x00020960  class=Edit                            title=''
+  hwnd=0x0002095E  class=Edit                            title=''
+  hwnd=0x0002095C  class=Button                          title='Units'
+
+============================================================
+  6. АНАЛИЗ МЕНЮ И ГОРЯЧИХ КЛАВИШ
+============================================================
+  Ошибка: No windows for that process could be found
+
+============================================================
+  ИТОГ
+============================================================
+UIA backend:   ✓ работает
+win32 backend: ✓ работает
+Окон найдено:  1
+Win32 окна:    1
+
+→ РЕКОМЕНДАЦИЯ: Используйте UIA backend (pywinauto, backend='uia')
+  Контролы доступны по имени/automationId без координат

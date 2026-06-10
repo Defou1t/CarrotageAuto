@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>NeuraLOG Automation — Architecture</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  padding: 24px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+h1 { color: #58a6ff; font-size: 20px; margin-bottom: 4px; }
+h2 { color: #79c0ff; font-size: 14px; margin: 20px 0 8px; border-bottom: 1px solid #30363d; padding-bottom: 4px; }
+h3 { color: #d2a8ff; font-size: 12px; margin-bottom: 6px; }
+.subtitle { color: #8b949e; font-size: 12px; margin-bottom: 24px; }
+
+/* Status badges */
+.ok  { background: #0d4429; color: #3fb950; border: 1px solid #238636; border-radius: 3px; padding: 1px 7px; font-size: 10px; font-weight: 700; }
+.wip { background: #341a00; color: #f0883e; border: 1px solid #9e6a03; border-radius: 3px; padding: 1px 7px; font-size: 10px; font-weight: 700; }
+.todo{ background: #1c1c2a; color: #8b949e; border: 1px solid #30363d;  border-radius: 3px; padding: 1px 7px; font-size: 10px; font-weight: 700; }
+
+/* Main pipeline flow */
+.pipeline {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin: 16px 0;
+  overflow-x: auto;
+}
+.step {
+  flex: 1;
+  min-width: 140px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 12px;
+  position: relative;
+}
+.step + .step { margin-left: 2px; }
+.step-num { font-size: 10px; color: #8b949e; margin-bottom: 4px; }
+.step-title { font-size: 12px; font-weight: 700; color: #e6edf3; margin-bottom: 6px; }
+.step-detail { font-size: 11px; color: #8b949e; }
+.step.done   { border-color: #238636; }
+.step.active { border-color: #f0883e; }
+.step.pending{ border-color: #30363d; opacity: 0.6; }
+.arrow {
+  display: flex; align-items: center;
+  color: #30363d; font-size: 20px;
+  padding: 0 4px; flex-shrink: 0;
+}
+
+/* Two-column layout */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.box {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 14px;
+}
+.box.highlight { border-color: #58a6ff33; background: #1a2235; }
+
+.method {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin: 4px 0;
+  font-family: 'Consolas', monospace;
+  font-size: 11px;
+}
+.method .m-name { color: #79c0ff; }
+.method .m-desc { color: #8b949e; font-size: 10px; margin-top: 1px; }
+.method .m-status { float: right; margin-top: 1px; }
+
+/* Question box — что такое трейсер */
+.tracer-box {
+  background: #0d2318;
+  border: 1px solid #238636;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+}
+.tracer-box h2 { border-color: #238636; }
+
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+.compare-col { background: #0d1117; border-radius: 6px; padding: 10px 12px; }
+.compare-col.no  { border: 1px solid #da3633; }
+.compare-col.yes { border: 1px solid #3fb950; }
+.compare-col h4  { font-size: 11px; margin-bottom: 6px; }
+.compare-col.no  h4 { color: #f85149; }
+.compare-col.yes h4 { color: #3fb950; }
+.compare-col li { font-size: 11px; color: #c9d1d9; margin: 3px 0 3px 14px; }
+
+/* Data flow */
+.flow { margin: 10px 0; }
+.flow-row {
+  display: flex; align-items: center; gap: 8px;
+  margin: 5px 0; font-size: 11px;
+}
+.file  { background: #1c2128; border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px; color: #e6edf3; font-family: monospace; }
+.proc  { background: #1a2235; border: 1px solid #58a6ff44; border-radius: 4px; padding: 3px 8px; color: #79c0ff; }
+.arr   { color: #30363d; font-size: 16px; }
+
+/* Issue/fix table */
+table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 11px; }
+th { background: #21262d; color: #8b949e; padding: 6px 10px; text-align: left; font-weight: 600; }
+td { padding: 6px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
+td:first-child { color: #f85149; }
+td:nth-child(2) { color: #e6edf3; }
+td:nth-child(3) { color: #3fb950; font-family: monospace; font-size: 10px; }
+
+.tag-file { color: #79c0ff; font-weight: 700; }
+.note { background: #161b22; border-left: 3px solid #58a6ff; padding: 8px 12px; border-radius: 0 4px 4px 0; margin: 8px 0; font-size: 11px; color: #c9d1d9; }
+</style>
+</head>
+<body>
+
+<h1>NeuraLOG Automation — Архитектура проекта</h1>
+<div class="subtitle">Автоматизация оцифровки каротажных кривых (well log vectorization) · NeuraLOG v2015 · Python + Win32</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- ОТВЕТ НА ГЛАВНЫЙ ВОПРОС -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+
+<div class="tracer-box">
+  <h2>❓ Что делает трейсер? Скроллирует или оцифровывает?</h2>
+  <p style="font-size:12px; margin: 8px 0; color: #c9d1d9;">
+    <strong style="color:#3fb950">✓ ОЦИФРОВЫВАЕТ.</strong>
+    Трейсер — это алгоритм автоматического следования по кривой на сканированном изображении.
+    Он читает пиксели, определяет положение линии кривой и записывает координаты (глубина, значение).
+  </p>
+  <div class="compare">
+    <div class="compare-col no">
+      <h4>✗ Не скроллирование</h4>
+      <ul>
+        <li>Не листает страницы</li>
+        <li>Не двигает ползунок просмотра</li>
+        <li>Не делает скриншоты</li>
+      </ul>
+    </div>
+    <div class="compare-col yes">
+      <h4>✓ Векторизация (оцифровка)</h4>
+      <ul>
+        <li>Читает пиксели изображения</li>
+        <li>Следует за линией кривой</li>
+        <li><code>Mapped Point = 3087.5M, -636.8 Ohmm</code></li>
+        <li>Результат → LAS-файл с числовыми данными</li>
+      </ul>
+    </div>
+  </div>
+  <div class="flow" style="margin-top:12px">
+    <div class="flow-row">
+      <span class="file">image.tif/jpg</span>
+      <span class="arr">→</span>
+      <span class="proc">NeuraLOG Tracer (BTN_FORWARD)</span>
+      <span class="arr">→</span>
+      <span class="proc">Mapped Points (3080m…3520m)</span>
+      <span class="arr">→</span>
+      <span class="file">export.las</span>
+    </div>
+    <div class="flow-row" style="margin-left: 40px; color: #8b949e; font-size:10px;">
+      Пиксели изображения &nbsp;→&nbsp; Алгоритм NeuraLOG &nbsp;→&nbsp; Глубина + Значение (Ohmm) &nbsp;→&nbsp; LAS 2.0
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- PIPELINE -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>Полный пайплайн (одна скважина)</h2>
+
+<div class="pipeline">
+  <div class="step done">
+    <div class="step-num">01</div>
+    <div class="step-title">Найти .nlgx</div>
+    <div class="step-detail">
+      Рекурсивный поиск в F:\nds\projects\<br>
+      Парсинг глубин из имени файла<br>
+      <code>BK_3080_3520_200</code><br>→ from=3080, to=3520
+    </div>
+    <br><span class="ok">OK</span>
+  </div>
+  <div class="arrow">→</div>
+
+  <div class="step done">
+    <div class="step-num">02</div>
+    <div class="step-title">Открыть проект</div>
+    <div class="step-detail">
+      Проверить MDI-children<br>
+      (уже открыт? → переключить)<br>
+      Если нет → Ctrl+O → путь → Enter<br>
+      Ждать загрузки (до 15с)
+    </div>
+    <br><span class="ok">OK</span>
+  </div>
+  <div class="arrow">→</div>
+
+  <div class="step done">
+    <div class="step-num">03</div>
+    <div class="step-title">Трейсинг</div>
+    <div class="step-detail">
+      BTN_FORWARD → старт<br>
+      Читать Current Depth каждые 2с<br>
+      Таймаут: (target−current)/0.2 м/с<br>
+      Достигли → BTN_STOP
+    </div>
+    <br><span class="ok">OK</span>
+  </div>
+  <div class="arrow">→</div>
+
+  <div class="step done">
+    <div class="step-num">04</div>
+    <div class="step-title">Сохранить .nlgx</div>
+    <div class="step-detail">
+      Ctrl+S<br>
+      Сохраняет кривые внутри .nlgx<br>
+      (бинарный C++ формат)
+    </div>
+    <br><span class="ok">OK</span>
+  </div>
+  <div class="arrow">→</div>
+
+  <div class="step active">
+    <div class="step-num">05</div>
+    <div class="step-title">Экспорт LAS</div>
+    <div class="step-detail">
+      SendMessage WM_COMMAND 3006<br>
+      "Digital Curve Output" диалог<br>
+      WM_SETTEXT → путь → OK<br>
+      Fallback: найти в /las/ + copy
+    </div>
+    <br><span class="wip">В РАБОТЕ</span>
+  </div>
+  <div class="arrow">→</div>
+
+  <div class="step pending">
+    <div class="step-num">06</div>
+    <div class="step-title">Батч-цикл</div>
+    <div class="step-detail">
+      Следующий проект из очереди<br>
+      Запись в CSV-отчёт<br>
+      State.json — checkpoint<br>
+      Resume после сбоя
+    </div>
+    <br><span class="todo">ОЖИДАЕТ</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- ФАЙЛЫ ПРОЕКТА -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>Файлы проекта</h2>
+<div class="cols">
+  <div class="box">
+    <h3><span class="tag-file">neuralog_win32.py</span> — низкоуровневый контроллер</h3>
+    <p style="color:#8b949e; font-size:11px; margin-bottom:8px;">Весь Win32 API. Сюда НЕ входит логика батча.</p>
+    <div class="method"><span class="m-name">connect()</span> <span class="m-status ok">OK</span><div class="m-desc">Найти NeuraLOG по HWND (MDIClient как признак главного окна)</div></div>
+    <div class="method"><span class="m-name">open_project(path)</span> <span class="m-status ok">OK</span><div class="m-desc">Проверить MDI-children → Ctrl+O → ждать загрузки</div></div>
+    <div class="method"><span class="m-name">switch_to_project(path)</span> <span class="m-status ok">OK</span><div class="m-desc">WM_MDIACTIVATE — переключить MDI без повторного открытия</div></div>
+    <div class="method"><span class="m-name">start_trace() / stop_trace()</span> <span class="m-status ok">OK</span><div class="m-desc">BM_CLICK на BTN_FORWARD/BTN_STOP</div></div>
+    <div class="method"><span class="m-name">get_current_depth()</span> <span class="m-status ok">OK</span><div class="m-desc">GetWindowText Static "3013" → float</div></div>
+    <div class="method"><span class="m-name">trace_to_depth(target)</span> <span class="m-status ok">OK</span><div class="m-desc">Старт + мониторинг глубины + стоп у цели</div></div>
+    <div class="method"><span class="m-name">save()</span> <span class="m-status ok">OK</span><div class="m-desc">Ctrl+S</div></div>
+    <div class="method"><span class="m-name">export_las(output_path)</span> <span class="m-status wip">WIP</span><div class="m-desc">SendMessage → "Digital Curve Output" → WM_SETTEXT → OK → fallback</div></div>
+    <div class="method"><span class="m-name">get_curves_list()</span> <span class="m-status ok">OK</span><div class="m-desc">ListBox LB_GETTEXT x8 кривых</div></div>
+    <div class="method"><span class="m-name">get_menu_structure()</span> <span class="m-status ok">OK</span><div class="m-desc">157 пунктов меню, CMD ID карта</div></div>
+  </div>
+
+  <div class="box">
+    <h3><span class="tag-file">batch_pipeline.py</span> — оркестратор</h3>
+    <p style="color:#8b949e; font-size:11px; margin-bottom:8px;">Логика очереди и отчётности. Вызывает neuralog_win32.</p>
+    <div class="method"><span class="m-name">find_projects(dir)</span> <span class="m-status ok">OK</span><div class="m-desc">Рекурсивный glob *.nlgx + парсинг глубин из имени</div></div>
+    <div class="method"><span class="m-name">process_one(proj)</span> <span class="m-status ok">OK</span><div class="m-desc">Шаги 01→05 для одного файла</div></div>
+    <div class="method"><span class="m-name">_run_trace(proj)</span> <span class="m-status ok">OK</span><div class="m-desc">Динамический таймаут: remaining/0.2м/с, min=1800с</div></div>
+    <div class="method"><span class="m-name">run_all(projects)</span> <span class="m-status ok">OK</span><div class="m-desc">Весь батч + CSV-отчёт + state.json checkpoint</div></div>
+    <div class="method"><span class="m-name">--one path.nlgx</span> <span class="m-status ok">OK</span><div class="m-desc">Тест на одном проекте</div></div>
+    <div class="method"><span class="m-name">--resume / --no-resume</span> <span class="m-status ok">OK</span><div class="m-desc">Пропускать уже готовые или перезапускать</div></div>
+    <div class="method"><span class="m-name">--check-sliders</span> <span class="m-status ok">OK</span><div class="m-desc">Показать min/max слайдеров (speed: 0-100000, depth: 3068-3524)</div></div>
+    <div class="method"><span class="m-name">--probe-export</span> <span class="m-status ok">OK</span><div class="m-desc">Определить CMD ID экспорта и сохранить в export_cmd.json</div></div>
+    <br>
+    <h3><span class="tag-file">test_buttons.py</span> — тесты / диагностика</h3>
+    <div class="method"><span class="m-name">state / trace / menu / status</span> <span class="m-status ok">OK</span></div>
+    <div class="method"><span class="m-name">dialog_probe</span> <span class="m-status ok">OK</span><div class="m-desc">Открыть диалог вручную → вывести все контролы (HWND/ID/text)</div></div>
+    <div class="method"><span class="m-name">export2</span> <span class="m-status wip">WIP</span><div class="m-desc">Тест нового export_las (автооткрытие диалога)</div></div>
+    <div class="method"><span class="m-name">full</span> <span class="m-status wip">WIP</span><div class="m-desc">Полный цикл одной скважины</div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- ИЗВЕСТНЫЕ ПРОБЛЕМЫ -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>Известные проблемы и статус исправлений</h2>
+<table>
+  <tr><th>Проблема</th><th>Причина</th><th>Исправление</th></tr>
+  <tr>
+    <td>Открывается старый проект (depth=4357 вместо 3080)</td>
+    <td>MDI-приложение: Ctrl+O открывает файл, но MDI-фокус остаётся на предыдущем</td>
+    <td>switch_to_project() → WM_MDIACTIVATE перед трейсингом</td>
+  </tr>
+  <tr>
+    <td>Диалог экспорта не открывается автоматически</td>
+    <td>PostMessage не обрабатывается когда окно свёрнуто/не в фокусе</td>
+    <td>SendMessage (синхронно) + MDI-child fallback + hotkey fallback</td>
+  </tr>
+  <tr>
+    <td>Файл экспорта создаётся в /las/ проекта, не в /output/</td>
+    <td>WM_SETTEXT не менял путь в Edit (Edit мог быть неверным)</td>
+    <td>id=3369 (из probe), затем _find_recent_las() + shutil.copy2()</td>
+  </tr>
+  <tr>
+    <td>Таймаут трейсинга 900с (15 мин) — мало для 440м</td>
+    <td>Жёстко задан CFG["trace_timeout"]</td>
+    <td>max(1800, remaining/0.20) — ~37 мин для 440м</td>
+  </tr>
+  <tr>
+    <td>UIA backend не работает</td>
+    <td>32-bit приложение + 64-bit Python</td>
+    <td>Используем только win32 backend. UIA убран полностью.</td>
+  </tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- ДАННЫЕ СИСТЕМ (из тестов) -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>Данные из реальных тестов</h2>
+<div class="cols">
+  <div class="box">
+    <h3>Слайдеры и контролы (из --check-sliders)</h3>
+    <div class="method">speed slider: min=0, max=<strong>100000</strong>, current=100000<div class="m-desc">Уже на максимуме. Скорость трейсинга ~0.3 м/с = 18 м/мин</div></div>
+    <div class="method">depth slider: min=<strong>3068</strong>, max=<strong>3524</strong>, current=3081<div class="m-desc">Соответствует диапазону проекта из имени файла</div></div>
+    <div class="method">Тест трейсера: 3078→3088 за 5 сек<div class="m-desc">= 2 м/с при speed=100000 (или 10м за 5с)</div></div>
+    <div class="method">440м диапазон: ~1467с ≈ 24 мин<div class="m-desc">Таймаут установлен 2200с (37 мин) с запасом</div></div>
+  </div>
+
+  <div class="box">
+    <h3>Диалог "Digital Curve Output" (из dialog_probe)</h3>
+    <div class="method">Edit id=3369: путь к файлу (File)<div class="m-desc">Устанавливать через WM_SETTEXT 0x000C</div></div>
+    <div class="method">Edit id=3371: Start Depth (M)</div>
+    <div class="method">Edit id=3372: Stop Depth (M)</div>
+    <div class="method">Edit id=3373: Depth Step (M) = 0.1<div class="m-desc">Шаг дискретизации LAS. Изменить на 0.5 = меньший файл</div></div>
+    <div class="method">Button id=3387: View After Generation<div class="m-desc">Снять чтобы не открывался текстовый редактор</div></div>
+    <div class="method">Button id=1: OK<div class="m-desc">SendMessage BM_CLICK 0x00F5</div></div>
+    <div class="method">ListBox id=3013: список кривых<div class="m-desc">Выбрать какие кривые экспортировать</div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- СТРУКТУРА ДАННЫХ -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>Структура данных</h2>
+<div class="flow">
+  <div class="flow-row">
+    <span class="file">F:\nds\projects\Well_A\wlg\Well_A_BK_3080_3520_200_D1.nlgx</span>
+    <span class="arr">→</span>
+    <span class="proc">Трейсинг 3080→3520м</span>
+    <span class="arr">→</span>
+    <span class="file">F:\nds\output\Well_A_BK_3080_3520_200_D1.las</span>
+  </div>
+  <div class="flow-row" style="color:#8b949e; font-size:10px; margin-left:20px;">
+    Бинарный C++ формат, содержит растровое изображение + цифровые кривые
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+    LAS 2.0: ASCII, ~Depth,BK,MBK столбцы, шаг 0.1м
+  </div>
+</div>
+
+<div class="note">
+  <strong>Парсинг имён файлов:</strong>
+  <code>Semeguniv_20_BK+MBK_3080_3520_200_D1</code> →
+  depth_from=3080, depth_to=3520, dpi=200.
+  Паттерн: <code>_(\d{3,5})_(\d{3,5})_(\d{2,4})</code>
+  — три числа подряд = from, to, dpi.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- СЛЕДУЮЩИЕ ШАГИ -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>Следующие шаги</h2>
+<table>
+  <tr><th>#</th><th>Команда</th><th>Что проверяет</th></tr>
+  <tr><td>1</td><td><code>python test_buttons.py export2</code></td><td>Открывается ли диалог автоматически через SendMessage</td></tr>
+  <tr><td>2</td><td><code>python test_buttons.py full</code></td><td>Полный цикл одной скважины с текущим открытым проектом</td></tr>
+  <tr><td>3</td><td><code>python batch_pipeline.py --list</code></td><td>Показать все найденные проекты и статус</td></tr>
+  <tr><td>4</td><td><code>python batch_pipeline.py --one "F:\nds\projects\...\file.nlgx"</code></td><td>Полный батч для одной скважины</td></tr>
+  <tr><td>5</td><td><code>python batch_pipeline.py --dir "F:\nds\projects"</code></td><td>Полный батч для всей папки</td></tr>
+</table>
+
+<p style="margin-top: 16px; font-size: 11px; color: #8b949e;">
+  Сгенерировано: June 2026 · NeuraLOG v2015 (32-bit MFC) · Python 3.14 64-bit + pywinauto win32 backend
+</p>
+</body>
+</html>
