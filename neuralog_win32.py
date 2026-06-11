@@ -1263,6 +1263,244 @@ class NeuraLog:
             return False
 
     # ─────────────────────────────────────────────────────────────
+    # БЛОК 3 — B4: КАЛИБРОВКА «HUMAN-IN-THE-LOOP»
+    # Код наводит курсор в точную точку (из пикселей Блока 2), эксперт
+    # кликает по канве (синтет-клик канва не принимает), код ловит модальный
+    # диалог и заполняет глубину/единицы сам. Канва-вид своих клик-сообщений
+    # не принимает, но скролл (WM_MOUSEWHEEL), арминг (WM_COMMAND 3194),
+    # маппинг (через вертикальный скроллбар) и заполнение диалогов работают.
+    # ─────────────────────────────────────────────────────────────
+
+    _WM_MOUSEWHEEL = 0x020A
+    # Правильный инструмент = «Create Depth and Scale Axes» (cmd 32840),
+    # опознан по checked-состоянию тулбара (эксперт 11.06.2026).
+    # НЕ «Create/Edit Raster Calibration» (3194) — он НЕ создаёт Depth Axis.
+    _CMD_DEPTH_SCALE_AXES = 32840
+
+    def _canvas_view(self) -> int:
+        """HWND вида документа (AfxFrameOrView42) под mdi_client."""
+        if not self.cm.mdi_client:
+            return 0
+        found = []
+        win32gui.EnumChildWindows(
+            self.cm.mdi_client,
+            lambda h, _: found.append(h) or True, None)
+        for h in found:
+            if "FrameOrView" in win32gui.GetClassName(h):
+                return h
+        return 0
+
+    def _vscrollbar(self) -> int:
+        """HWND вертикального ScrollBar (вид своих скроллбаров не имеет)."""
+        if not self.cm.mdi_client:
+            return 0
+        found = []
+        win32gui.EnumChildWindows(
+            self.cm.mdi_client,
+            lambda h, _: found.append(h) or True, None)
+        for h in found:
+            if win32gui.GetClassName(h) != "ScrollBar":
+                continue
+            r = win32gui.GetWindowRect(h)
+            if (r[3] - r[1]) > (r[2] - r[0]):
+                return h
+        return 0
+
+    def _vscroll_info(self, vbar: int):
+        """(nMin, nMax, nPage, nPos) вертикального скроллбара."""
+        info = win32gui.GetScrollInfo(vbar, win32con.SB_CTL, win32con.SIF_ALL)
+        return info[1], info[2], info[3], info[4]
+
+    def _image_native_height(self, image_path: str) -> int:
+        from PIL import Image
+        with Image.open(image_path) as im:
+            return im.size[1]
+
+    def _zoom_factor(self, vbar: int, image_h: int) -> float:
+        _, nmax, _, _ = self._vscroll_info(vbar)
+        return (nmax + 1) / float(image_h)
+
+    _WM_VSCROLL = 0x0115
+    _SB_THUMBPOSITION = 4
+
+    def _scroll_to_image_y(self, vbar: int, view: int, image_h: int,
+                           target_img_y: int, center_frac: float = 0.4) -> bool:
+        """
+        Прокрутить вид так, чтобы target_img_y оказался в видимой зоне.
+        Надёжный способ (проверено): SetScrollInfo(vbar, want) +
+        WM_VSCROLL SB_THUMBPOSITION родителю скроллбара. WM_MOUSEWHEEL на этом
+        окне нестабилен. Скроллбар — отдельный контрол, его родитель скроллит вид.
+        """
+        nmin, nmax, npage, _ = self._vscroll_info(vbar)
+        Z = (nmax + 1) / float(image_h)
+        want = int(target_img_y * Z - npage * center_frac)
+        want = max(nmin, min(want, nmax - npage))
+        parent = win32gui.GetParent(vbar)
+        try:
+            win32gui.SetScrollInfo(
+                vbar, win32con.SB_CTL,
+                (win32con.SIF_POS, nmin, nmax, npage, want, want), True)
+        except Exception as e:
+            log.debug(f"SetScrollInfo: {e}")
+        # HIWORD позиции — 16-битное; для want<65536 точно, иначе опираемся на
+        # SetScrollInfo (32-бит) и WM_VSCROLL лишь триггерит перерисовку.
+        win32gui.SendMessage(
+            parent, self._WM_VSCROLL,
+            ((min(want, 0xFFFF) << 16) | self._SB_THUMBPOSITION), vbar)
+        time.sleep(0.15)
+        # Баг NeuraLog: после резкого прыжка вид «залипает» (не перерисовывается,
+        # пока не скрольнёшь вручную). Нудж строка вниз-вверх синхронизирует вид
+        # со скроллбаром и форсит перерисовку (net-смещение ~0).
+        SB_LINEUP, SB_LINEDOWN = 0, 1
+        win32gui.SendMessage(parent, self._WM_VSCROLL, SB_LINEDOWN, vbar)
+        win32gui.SendMessage(parent, self._WM_VSCROLL, SB_LINEUP, vbar)
+        try:
+            win32gui.InvalidateRect(view, None, True)
+            win32gui.UpdateWindow(view)
+        except Exception:
+            pass
+        time.sleep(0.2)
+        _, _, _, pos = self._vscroll_info(vbar)
+        return abs(pos - want) <= max(40, npage // 4)
+
+    def _image_to_screen(self, vbar: int, view: int, image_h: int,
+                         img_x: int, img_y: int, x_margin: int = 14):
+        """Текущие экранные координаты пикселя изображения (или None вне вида)."""
+        Z = self._zoom_factor(vbar, image_h)
+        _, _, npage, pos = self._vscroll_info(vbar)
+        client_y = img_y * Z - pos
+        if client_y < 0 or client_y > npage:
+            return None
+        client_x = x_margin + img_x * Z
+        vr = win32gui.GetWindowRect(view)
+        return int(vr[0] + client_x), int(vr[1] + client_y)
+
+    def _is_tool_armed(self, command_id: int) -> bool:
+        """Кнопка тулбара калибровки нажата (армирована)?"""
+        for b in self.get_toolbar_buttons(self.cm.toolbar_calibrate):
+            if b["command_id"] == command_id:
+                return bool(b["state"] & 0x01)  # TBSTATE_CHECKED
+        return False
+
+    def arm_depth_calibration(self) -> str:
+        """
+        Включить «Create Depth and Scale Axes», ЕСЛИ ещё не включён.
+        Повторное WM_COMMAND по уже нажатой кнопке ВЫКЛЮЧАЕТ её (toggle) —
+        поэтому шлём только когда не армирован.
+        """
+        if not self._is_tool_armed(self._CMD_DEPTH_SCALE_AXES):
+            win32api.SendMessage(self.cm.main_window, WM_COMMAND,
+                                 self._CMD_DEPTH_SCALE_AXES, 0)
+            time.sleep(0.4)
+        return self.get_status()
+
+    def _find_dialog(self, *substrings) -> int:
+        """Найти видимое окно (top-level или дочернее главного), чей заголовок
+        содержит все подстроки. Диалог может быть и owned-popup, и child."""
+        res = []
+
+        def match(h):
+            if win32gui.IsWindowVisible(h):
+                t = win32gui.GetWindowText(h).lower()
+                if all(s.lower() in t for s in substrings):
+                    res.append(h)
+
+        win32gui.EnumWindows(lambda h, _: (match(h), True)[1], None)
+        if not res and self.cm.main_window:
+            try:
+                win32gui.EnumChildWindows(
+                    self.cm.main_window, lambda h, _: (match(h), True)[1], None)
+            except Exception:
+                pass
+        return res[0] if res else 0
+
+    def _fill_depth_interval_dialog(self, depth: float, units: str = "Meters",
+                                    timeout: float = 30.0) -> bool:
+        """
+        Дождаться модального «Set Depth Interval Value», вписать глубину,
+        выставить единицы, нажать OK. Возвращает True если заполнено.
+        """
+        # Диалог называется «Set Depth Axis Value» (инструмент 32840) ИЛИ
+        # «Set Depth Interval Value» (старый Raster). Матчим по подстроке.
+        deadline = time.time() + timeout
+        dlg = 0
+        while time.time() < deadline:
+            dlg = self._find_dialog("set depth", "value")
+            if dlg:
+                break
+            time.sleep(0.2)
+        if not dlg:
+            return False
+        time.sleep(0.2)
+        ctrls = []
+        win32gui.EnumChildWindows(
+            dlg, lambda h, _: ctrls.append(
+                (h, win32gui.GetClassName(h), win32gui.GetWindowText(h))) or True, None)
+        edit = next((h for h, cls, _ in ctrls if cls == "Edit"), 0)
+        combo = next((h for h, cls, _ in ctrls if cls == "ComboBox"), 0)
+        ok_btn = next((h for h, cls, t in ctrls
+                       if cls == "Button" and t.strip().upper() == "OK"), 0)
+        if edit:
+            # WM_SETTEXT со строкой маршалится pywin32 межпроцессно — работает.
+            win32gui.SendMessage(edit, win32con.WM_SETTEXT, 0, str(depth))
+        if combo and units:
+            # Чтение текста combo межпроцессно недоступно (буфер в нашем
+            # процессе). Выбираем по индексу: Feet=0, Meters=1 (порядок диалога).
+            idx = 1 if units.strip().lower().startswith("m") else 0
+            win32gui.SendMessage(combo, 0x014E, idx, 0)  # CB_SETCURSEL
+        time.sleep(0.15)
+        if ok_btn:
+            win32gui.SendMessage(ok_btn, BM_CLICK, 0, 0)
+            time.sleep(0.4)
+            return True
+        return False
+
+    def calibrate_depth_assisted(self, image_path: str,
+                                 top_depth: float, top_img_y: int,
+                                 bottom_depth: float, bottom_img_y: int,
+                                 track_img_x: int = 30, units: str = "Meters",
+                                 prompt=None) -> bool:
+        """
+        B4: установить Depth Axis с участием эксперта.
+        Код армирует, наводит курсор в точную точку (пиксель грани из Блока 2),
+        просит эксперта кликнуть ЛКМ, ловит диалог и сам вписывает глубину.
+
+        prompt(text) — колбэк для подсказки эксперту (по умолчанию print).
+        """
+        say = prompt or (lambda t: print("[B4]", t))
+        view = self._canvas_view()
+        vbar = self._vscrollbar()
+        if not view or not vbar:
+            log.error("calibrate_depth_assisted: вид/скроллбар не найдены (изображение открыто?)")
+            return False
+        image_h = self._image_native_height(image_path)
+
+        self.ensure_visible()
+        self.arm_depth_calibration()
+
+        for label, depth, img_y in (("ВЕРХ (Top)", top_depth, top_img_y),
+                                     ("НИЗ (Bottom)", bottom_depth, bottom_img_y)):
+            self._scroll_to_image_y(vbar, view, image_h, img_y)
+            pt = self._image_to_screen(vbar, view, image_h, track_img_x, img_y)
+            if pt is None:
+                log.error(f"calibrate_depth_assisted: не удалось показать {label}")
+                return False
+            try:
+                win32api.SetCursorPos(pt)
+            except Exception:
+                pass
+            say(f">>> {label} = {depth} м. КЛИКНИТЕ ЛКМ по ЖИРНОЙ ГРАНИ {depth} "
+                f"на изображении (курсор-подсказка наведён на ~{pt}). "
+                f"Жду ваш клик до 120 сек, потом сам впишу {depth} м + {units}...")
+            if not self._fill_depth_interval_dialog(depth, units, timeout=120.0):
+                log.error(f"calibrate_depth_assisted: диалог {label} не появился за 120 с "
+                          f"(клик по канве не сделан или не на той зоне).")
+                return False
+            say(f"  OK: {label} = {depth} м установлено.")
+        say("Depth Axis установлен.")
+        return True
+
+    # ─────────────────────────────────────────────────────────────
     # ФАЙЛОВЫЕ ОПЕРАЦИИ (через горячие клавиши)
     # ─────────────────────────────────────────────────────────────
 

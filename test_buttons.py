@@ -192,7 +192,7 @@ def test_new_project(nl: NeuraLog,
 
 def test_analyze_image(image_path: str = r"F:\nds\projects\Semeguniv_020\img\Semeguniv_20_BK+MBK_3080_3520_200_D1.tif"):
     """
-    Тест анализа изображения каротажа через Claude Vision API.
+    Тест локального анализа изображения каротажа.
     Не требует запущенного NeuraLOG — работает автономно.
     """
     import os, json

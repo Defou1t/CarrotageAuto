@@ -1,0 +1,81 @@
+C:\Users\Defou1t\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pywinauto\application.py:1085: UserWarning: 32-bit application should be automated using 32-bit Python (you use 64-bit Python)
+  warnings.warn(
+
+[Main] HWND=0x004708A8, ������=18:
+  [ 0] CMD=57664  ON   checked=False
+  [ 1] CMD= 3104  ON   checked=False
+  [ 2] CMD=57603  off  checked=False
+  [ 3] CMD=32835  ON   checked=False
+  [ 4] CMD=32786  ON   checked=False
+  [ 5] CMD=57607  ON   checked=False
+  [ 6] CMD=    0  ON   checked=False
+  [ 7] CMD=32848  off  checked=False
+  [ 8] CMD=    0  ON   checked=False
+  [ 9] CMD=32849  ON   checked=False
+  [10] CMD=32850  off  checked=False
+  [11] CMD=    0  ON   checked=False
+  [12] CMD=57643  off  checked=False
+  [13] CMD=57644  off  checked=False
+  [14] CMD=32774  ON   checked=False
+  [15] CMD= 3167  ON   checked=False
+  [16] CMD=32794  ON   checked=False
+  [17] CMD=32793  ON   checked=False
+
+[Calibrate&Trace] HWND=0x001001A6, ������=7:
+  [ 0] CMD= 3194  ON   checked=False
+  [ 1] CMD=32840  ON   checked=True
+  [ 2] CMD=32841  ON   checked=False
+  [ 3] CMD=32842  ON   checked=False
+  [ 4] CMD=32843  ON   checked=False
+  [ 5] CMD=32844  ON   checked=False
+  [ 6] CMD=32846  ON   checked=False
+
+[Curve Edit] HWND=0x001C0AE2, ������=7:
+  [ 0] CMD=32879  off  checked=False
+  [ 1] CMD=32791  off  checked=False
+  [ 2] CMD=32926  off  checked=False
+  [ 3] CMD=32880  off  checked=False
+  [ 4] CMD=32881  off  checked=False
+  [ 5] CMD=32882  off  checked=False
+  [ 6] CMD=32790  ON   checked=False
+
+[Curve/Track] HWND=0x00150AD8, ������=12:
+  [ 0] CMD= 3147  ON   checked=False
+  [ 1] CMD= 3145  ON   checked=False
+  [ 2] CMD= 3146  ON   checked=False
+  [ 3] CMD= 3144  ON   checked=False
+  [ 4] CMD= 3142  ON   checked=False
+  [ 5] CMD= 3143  ON   checked=False
+  [ 6] CMD=    0  ON   checked=False
+  [ 7] CMD=32909  ON   checked=False
+  [ 8] CMD=32863  ON   checked=False
+  [ 9] CMD= 3132  ON   checked=False
+  [10] CMD=32868  ON   checked=False
+  [11] CMD=32853  ON   checked=False
+
+[Zoom] HWND=0x000F097C, ������=6:
+  [ 0] CMD=  468  ON   checked=False
+  [ 1] CMD=    0  ON   checked=False
+  [ 2] CMD=30778  ON   checked=False
+  [ 3] CMD=30779  ON   checked=False
+  [ 4] CMD=30780  ON   checked=False
+  [ 5] CMD=30775  ON   checked=False
+
+[Color Selection] HWND=0x001507E6, ������=7:
+  [ 0] CMD=    0  ON   checked=False
+  [ 1] CMD=  414  ON   checked=False
+  [ 2] CMD=    0  ON   checked=False
+  [ 3] CMD=  468  ON   checked=False
+  [ 4] CMD=    0  ON   checked=False
+  [ 5] CMD=  415  ON   checked=False
+  [ 6] CMD=30791  ON   checked=False
+
+[Quality Control] HWND=0x000D0700, ������=8:
+  [ 0] CMD= 3109  off  checked=False
+  [ 1] CMD= 3213  off  checked=False
+  [ 2] CMD= 3121  off  checked=False
+  [ 3] CMD= 3110  off  checked=False
+  [ 4] CMD= 3111  off  checked=False
+  [ 5] CMD= 3129  off  checked=False
+  [ 6] CMD= 3149  off  checked=False
+  [ 7] CMD= 3214  off  checked=False
