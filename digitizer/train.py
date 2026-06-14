@@ -52,6 +52,12 @@ class TileDS(Dataset):
                 img = img[::-1].copy(); msk = msk[::-1].copy()
             if np.random.rand() < 0.5:                  # brightness
                 img = np.clip(img * np.random.uniform(0.8, 1.2), 0, 1)
+            if np.random.rand() < 0.5:                  # contrast (бледные/блёклые сканы)
+                img = np.clip((img - 0.5) * np.random.uniform(0.7, 1.4) + 0.5, 0, 1)
+            if np.random.rand() < 0.5:                  # gamma
+                img = np.clip(img ** np.random.uniform(0.7, 1.5), 0, 1)
+            if np.random.rand() < 0.3:                  # лёгкий шум (робастность к сканам)
+                img = np.clip(img + np.random.normal(0, 0.02, img.shape).astype(np.float32), 0, 1)
         img = torch.from_numpy(img).permute(2, 0, 1)    # 3×T×T
         msk = torch.from_numpy(msk).unsqueeze(0)        # 1×T×T
         return img, msk
