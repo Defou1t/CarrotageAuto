@@ -1501,6 +1501,384 @@ class NeuraLog:
         return True
 
     # ─────────────────────────────────────────────────────────────
+    # B4: ПАНЕЛЬ Curve/Track Dialog — SCALE AXIS / CURVES
+    # Контролы панели (#32770 внутри AfxControlBar 'Curve/Track Dialog'):
+    #   DEPTH AXIS : ListBox 3011, Top Edit 3056, Bottom Edit 3059,
+    #                radio Feet 3022 / Meters 3023
+    #   SCALE AXIS : ListBox 3012, Set Type 3029, Add Backup 3028,
+    #                Left Edit 3066, Right Edit 3068, units ComboBox 3024
+    #   CURVES     : ListBox 3013, Add New 3019, Remove 3025, Solid 3020
+    # «Add New» требует ВЫБРАННЫХ Depth Axis И Scale Axis (msgbox иначе).
+    # Создание Scale Axis — продолжение инструмента 32840 после рамки:
+    # клик эксперта по левой позиции шкалы → диалог значения → правая → диалог.
+    # Состояние инструмента читаем из RICHEDIT user-prompt.
+    # ─────────────────────────────────────────────────────────────
+
+    _PANEL_IDS = {
+        3011: "lb_depth_axes", 3012: "lb_scale_axes", 3013: "lb_curves",
+        3019: "btn_add_new", 3025: "btn_curve_remove",
+        3028: "btn_add_backup", 3029: "btn_set_type",
+        3056: "edit_depth_top", 3059: "edit_depth_bottom",
+        3066: "edit_scale_left", 3068: "edit_scale_right",
+        3024: "combo_scale_units", 3022: "radio_feet", 3023: "radio_meters",
+    }
+    _LBN_SELCHANGE = 1
+    _CB_SETCURSEL = 0x014E
+    _WM_GETTEXT = 0x000D
+
+    def panel_controls(self, refresh: bool = False) -> Dict[str, int]:
+        """HWND контролов панели Curve/Track Dialog (кэшируется)."""
+        if getattr(self, "_panel_cache", None) and not refresh:
+            # проверить что хотя бы один HWND ещё жив
+            probe = next(iter(self._panel_cache.values()))
+            if win32gui.IsWindow(probe):
+                return self._panel_cache
+        res: Dict[str, int] = {}
+
+        def visit(h, _):
+            cid = win32gui.GetDlgCtrlID(h)
+            if cid in self._PANEL_IDS:
+                res.setdefault(self._PANEL_IDS[cid], h)
+            return True
+
+        win32gui.EnumChildWindows(self.cm.main_window, visit, None)
+        self._panel_cache = res
+        return res
+
+    def get_prompt_text(self) -> str:
+        """Текст RICHEDIT user-prompt (состояние армированного инструмента)."""
+        if not self.cm.richedit_log:
+            return ""
+        buf = ctypes.create_unicode_buffer(2048)
+        ctypes.windll.user32.SendMessageW(
+            self.cm.richedit_log, self._WM_GETTEXT, 2048, buf)
+        return buf.value.strip()
+
+    def _lb_items(self, hwnd: int) -> List[str]:
+        """Элементы ListBox: LB_GETTEXT, при owner-draw — item-data строка."""
+        n = win32gui.SendMessage(hwnd, LB_GETCOUNT, 0, 0)
+        items = []
+        for i in range(n):
+            ln = win32gui.SendMessage(hwnd, LB_GETTEXTLEN, i, 0)
+            text = None
+            if 0 < ln < 256:
+                buf = ctypes.create_unicode_buffer(ln + 1)
+                ctypes.windll.user32.SendMessageW(hwnd, LB_GETTEXT, i, buf)
+                text = buf.value
+            if not text or not text.strip():
+                text = self._read_curve_item_name(hwnd, i) or f"<item {i}>"
+            items.append(text.strip())
+        return items
+
+    def _lb_select(self, hwnd: int, index: int, ctrl_id: int):
+        """LB_SETCURSEL + уведомление LBN_SELCHANGE родителю (MFC обновит панель)."""
+        win32gui.SendMessage(hwnd, LB_SETCURSEL, index, 0)
+        parent = win32gui.GetParent(hwnd)
+        win32gui.SendMessage(parent, WM_COMMAND,
+                             (self._LBN_SELCHANGE << 16) | ctrl_id, hwnd)
+        time.sleep(0.2)
+
+    def panel_state(self) -> Dict:
+        """Снимок панели: оси/шкалы/кривые + значения edit'ов."""
+        pc = self.panel_controls()
+        def txt(name):
+            h = pc.get(name)
+            return win32gui.GetWindowText(h) if h else ""
+        return {
+            "depth_axes": self._lb_items(pc["lb_depth_axes"]) if pc.get("lb_depth_axes") else [],
+            "scale_axes": self._lb_items(pc["lb_scale_axes"]) if pc.get("lb_scale_axes") else [],
+            "curves":     self._lb_items(pc["lb_curves"]) if pc.get("lb_curves") else [],
+            "depth_top": txt("edit_depth_top"), "depth_bottom": txt("edit_depth_bottom"),
+            "scale_left": txt("edit_scale_left"), "scale_right": txt("edit_scale_right"),
+            "prompt": self.get_prompt_text(),
+        }
+
+    def select_depth_axis(self, index: int = 0):
+        pc = self.panel_controls()
+        self._lb_select(pc["lb_depth_axes"], index, 3011)
+
+    def select_scale_axis(self, index: int):
+        pc = self.panel_controls()
+        self._lb_select(pc["lb_scale_axes"], index, 3012)
+
+    def select_panel_curve(self, index: int):
+        pc = self.panel_controls()
+        self._lb_select(pc["lb_curves"], index, 3013)
+
+    # ── новые top-level окна процесса (диалоги) ──────────────────
+
+    def _process_toplevel(self) -> List[int]:
+        _, pid = win32process.GetWindowThreadProcessId(self.cm.main_window)
+        out = []
+        def cb(h, _):
+            _, p = win32process.GetWindowThreadProcessId(h)
+            if p == pid and win32gui.IsWindowVisible(h) and h != self.cm.main_window:
+                out.append(h)
+            return True
+        win32gui.EnumWindows(cb, None)
+        return out
+
+    def _wait_new_dialog(self, before: set, timeout: float = 15.0) -> int:
+        """Дождаться нового видимого top-level окна процесса (диалога)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for h in self._process_toplevel():
+                if h not in before:
+                    time.sleep(0.25)
+                    return h
+            time.sleep(0.2)
+        return 0
+
+    def _dialog_controls_flat(self, dlg: int) -> List[tuple]:
+        """[(hwnd, class, id, text), ...] всех потомков диалога."""
+        out = []
+        def visit(h, _):
+            out.append((h, win32gui.GetClassName(h),
+                        win32gui.GetDlgCtrlID(h), win32gui.GetWindowText(h)))
+            return True
+        try:
+            win32gui.EnumChildWindows(dlg, visit, None)
+        except Exception:
+            pass
+        return out
+
+    def _log_dialog(self, dlg: int, tag: str):
+        log.info(f"[{tag}] dialog 0x{dlg:08X} '{win32gui.GetWindowText(dlg)}'")
+        for h, cls, cid, txt in self._dialog_controls_flat(dlg):
+            log.info(f"  0x{h:08X} id={cid:<6d} {cls:<22s} '{txt[:50]}'")
+
+    def _dialog_click_button(self, dlg: int, *texts, ctrl_id: int = None) -> bool:
+        """Нажать кнопку диалога по тексту (без учёта регистра/&) или по id."""
+        for h, cls, cid, txt in self._dialog_controls_flat(dlg):
+            if cls != "Button":
+                continue
+            t = txt.replace("&", "").strip().lower()
+            if (ctrl_id is not None and cid == ctrl_id) or \
+               (texts and t in tuple(s.lower() for s in texts)):
+                win32gui.SendMessage(h, BM_CLICK, 0, 0)
+                time.sleep(0.3)
+                return True
+        return False
+
+    def _close_messagebox_if_any(self) -> str:
+        """Закрыть месседжбокс процесса, вернуть его текст ('' если не было)."""
+        for h in self._process_toplevel():
+            if win32gui.GetClassName(h) != "#32770":
+                continue
+            ctrls = self._dialog_controls_flat(h)
+            statics = [t for _, c, _, t in ctrls if c == "Static" and t.strip()]
+            # месседжбокс = только статик-текст + кнопки; наличие полей ввода
+            # или списков (Edit/ListBox/ComboBox/SysListView32/трекбар) — это
+            # рабочий диалог, НЕ закрываем.
+            interactive = {"Edit", "ListBox", "ComboBox", "SysListView32",
+                           "SysTreeView32", "msctls_trackbar32"}
+            has_input = any(c in interactive for _, c, _, _ in ctrls)
+            n_buttons = sum(1 for _, c, _, _ in ctrls if c == "Button")
+            if has_input or not statics or n_buttons > 3:
+                continue  # это не месседжбокс
+            text = " | ".join(statics)
+            log.warning(f"MessageBox: {text}")
+            self._dialog_click_button(h, "ok", "да", "yes", ctrl_id=2) or \
+                self._dialog_click_button(h, ctrl_id=1)
+            time.sleep(0.3)
+            return text
+        return ""
+
+    # ── ассистированный Scale Axis (2 клика эксперта) ────────────
+
+    def calibrate_scale_assisted(self, image_path: str,
+                                 left_value: float, right_value: float,
+                                 left_img_x: int, right_img_x: int,
+                                 img_y: int, prompt=None,
+                                 click_timeout: float = 180.0) -> bool:
+        """
+        Создать base Scale Axis с участием эксперта (продолжение тула 32840
+        после рамки): код наводит курсор на левую позицию шкалы, эксперт
+        кликает, код заполняет диалог значения; затем правая позиция.
+        """
+        say = prompt or (lambda t: print("[B4]", t))
+        view = self._canvas_view()
+        vbar = self._vscrollbar()
+        if not view or not vbar:
+            log.error("calibrate_scale_assisted: вид/скроллбар не найдены")
+            return False
+        image_h = self._image_native_height(image_path)
+
+        self.ensure_visible()
+        self.arm_depth_calibration()  # 32840, если ещё не армирован
+        say(f"Подсказка инструмента: «{self.get_prompt_text()}»")
+
+        for label, img_x, value in (("ЛЕВАЯ", left_img_x, left_value),
+                                    ("ПРАВАЯ", right_img_x, right_value)):
+            self._scroll_to_image_y(vbar, view, image_h, img_y)
+            pt = self._image_to_screen(vbar, view, image_h, img_x, img_y)
+            if pt is None:
+                log.error(f"calibrate_scale_assisted: точка {label} вне вида")
+                return False
+            try:
+                win32api.SetCursorPos(pt)
+            except Exception:
+                pass
+            before = set(self._process_toplevel())
+            say(f">>> {label} позиция шкалы = {value}. КЛИКНИТЕ ЛКМ по "
+                f"{'левому' if label == 'ЛЕВАЯ' else 'правому'} краю сетки "
+                f"трека (курсор наведён на ~{pt}). Жду до {click_timeout:.0f} с...")
+            dlg = self._wait_new_dialog(before, timeout=click_timeout)
+            if not dlg:
+                log.error(f"calibrate_scale_assisted: диалог {label} не появился")
+                return False
+            self._log_dialog(dlg, f"scale-{label}")
+            if not self._fill_value_dialog(dlg, value):
+                return False
+            say(f"  OK: {label} = {value} вписано.")
+        say(f"Scale Axis создан. Панель: {self.panel_state()['scale_axes']}")
+        return True
+
+    def _fill_value_dialog(self, dlg: int, value: float,
+                           combo_index: int = None) -> bool:
+        """Вписать значение в первый Edit диалога, опц. combo, нажать OK."""
+        ctrls = self._dialog_controls_flat(dlg)
+        edit = next((h for h, c, _, _ in ctrls if c == "Edit"), 0)
+        combo = next((h for h, c, _, _ in ctrls if c == "ComboBox"), 0)
+        if not edit:
+            log.error("_fill_value_dialog: Edit не найден")
+            return False
+        sval = f"{value:g}" if isinstance(value, float) else str(value)
+        win32gui.SendMessage(edit, win32con.WM_SETTEXT, 0, sval)
+        if combo and combo_index is not None:
+            win32gui.SendMessage(combo, self._CB_SETCURSEL, combo_index, 0)
+        time.sleep(0.15)
+        if not self._dialog_click_button(dlg, "ok", ctrl_id=1):
+            log.error("_fill_value_dialog: OK не найден")
+            return False
+        time.sleep(0.4)
+        return True
+
+    # ── код-онли: Add Backup (перевыносы) ────────────────────────
+
+    def add_backup(self, option: str = "5x", timeout: float = 10.0) -> bool:
+        """
+        Нажать «Add Backup» (3028) → диалог «Select Backup Curve type» →
+        выбрать радио по тексту (например '5x', '2x', 'Backup Right',
+        'Scale Change') → OK. Требует выбранного Scale Axis.
+        """
+        pc = self.panel_controls()
+        parent = win32gui.GetParent(pc["btn_add_backup"])
+        before = set(self._process_toplevel())
+        win32gui.PostMessage(parent, WM_COMMAND, 3028, pc["btn_add_backup"])
+        dlg = self._wait_new_dialog(before, timeout)
+        if not dlg:
+            msg = self._close_messagebox_if_any()
+            log.error(f"add_backup: диалог не появился ({msg or 'тишина'})")
+            return False
+        self._log_dialog(dlg, "add-backup")
+        # месседжбокс вместо диалога? (нет выбранной шкалы и т.п.)
+        ctrls = self._dialog_controls_flat(dlg)
+        radios = [(h, t) for h, c, _, t in ctrls if c == "Button"
+                  and t.replace("&", "").strip().lower()
+                  not in ("ok", "cancel", "отмена")]
+        want = option.replace("&", "").strip().lower()
+        target = next((h for h, t in radios
+                       if want in t.replace("&", "").strip().lower()), 0)
+        if not target:
+            log.error(f"add_backup: радио '{option}' не найдено среди "
+                      f"{[t for _, t in radios]}")
+            self._dialog_click_button(dlg, "cancel", ctrl_id=2)
+            return False
+        win32gui.SendMessage(target, BM_CLICK, 0, 0)
+        time.sleep(0.2)
+        if not self._dialog_click_button(dlg, "ok", ctrl_id=1):
+            return False
+        time.sleep(0.5)
+        self._close_messagebox_if_any()
+        return True
+
+    def set_scale_values(self, left: float = None, right: float = None) -> Dict:
+        """
+        Вписать Left/Right выбранного Scale Axis (WM_SETTEXT + Enter-коммит +
+        EN_KILLFOCUS родителю — MFC подхватывает значение).
+        Возвращает текущее состояние панели для верификации.
+        """
+        pc = self.panel_controls()
+        EN_KILLFOCUS = 0x0200
+        for val, name, cid in ((left, "edit_scale_left", 3066),
+                               (right, "edit_scale_right", 3068)):
+            if val is None:
+                continue
+            h = pc[name]
+            sval = f"{val:g}"
+            win32gui.SendMessage(h, win32con.WM_SETTEXT, 0, sval)
+            # Enter в edit (коммит при ручном вводе) + kill-focus уведомление
+            win32gui.PostMessage(h, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+            win32gui.PostMessage(h, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+            parent = win32gui.GetParent(h)
+            win32gui.SendMessage(parent, WM_COMMAND,
+                                 (EN_KILLFOCUS << 16) | cid, h)
+            time.sleep(0.2)
+        return self.panel_state()
+
+    # ── код-онли: Add New кривая ─────────────────────────────────
+
+    # «Select Curve»: SysListView32 (1232) стандартных мнемоник + кнопки
+    #   Create(1), Cancel(2), Set Line Style(1233), More Curves...(1234),
+    #   Remove(1235), Step Curve(1585). Текст листвью owner-data (не читается).
+    # «Curve Abbreviation» (от More Curves...): Edit аббревиатуры 3359,
+    #   Edit API 3362, Edit описания 3364, OK(1). НЕ кликать по списку
+    #   Select Curve — owner-data + клик мимо крашит NeuraLOG; кастомную
+    #   кривню (MBK и т.п.) заводим через More Curves...→Curve Abbreviation.
+    _CURVE_ABBREV_EDIT = 3359
+
+    def add_new_curve(self, abbrev: str, timeout: float = 10.0) -> bool:
+        """
+        «Add New» (3019) → «Select Curve» → «More Curves...» (1234) →
+        «Curve Abbreviation» → Edit 3359 = аббревиатура → OK.
+        Кастомная кривая без рискованных кликов по owner-data листвью.
+        Требует выбранных Depth Axis и Scale Axis (иначе msgbox).
+        """
+        pc = self.panel_controls()
+        parent = win32gui.GetParent(pc["btn_add_new"])
+        before = set(self._process_toplevel())
+        win32gui.PostMessage(parent, WM_COMMAND, 3019, pc["btn_add_new"])
+        dlg = self._wait_new_dialog(before, timeout)
+        if not dlg or "select curve" not in win32gui.GetWindowText(dlg).lower():
+            msg = self._close_messagebox_if_any()
+            log.error(f"add_new_curve: «Select Curve» не появился "
+                      f"({msg or 'тишина'})")
+            return False
+        # More Curves... (1234) — обычная кнопка диалога, BM_CLICK надёжен
+        more = next((h for h, c, cid, _ in self._dialog_controls_flat(dlg)
+                     if c == "Button" and cid == 1234), 0)
+        if not more:
+            log.error("add_new_curve: кнопка «More Curves...» (1234) не найдена")
+            self._dialog_click_button(dlg, "cancel", ctrl_id=2)
+            return False
+        before2 = set(self._process_toplevel())
+        win32gui.SendMessage(more, BM_CLICK, 0, 0)
+        abbr_dlg = self._wait_new_dialog(before2, timeout)
+        if not abbr_dlg:
+            log.error("add_new_curve: «Curve Abbreviation» не появился")
+            self._dialog_click_button(dlg, "cancel", ctrl_id=2)
+            return False
+        self._log_dialog(abbr_dlg, "curve-abbrev")
+        edit = next((h for h, c, cid, _ in self._dialog_controls_flat(abbr_dlg)
+                     if c == "Edit" and cid == self._CURVE_ABBREV_EDIT), 0)
+        if not edit:
+            edit = next((h for h, c, _, _ in self._dialog_controls_flat(abbr_dlg)
+                         if c == "Edit"), 0)
+        win32gui.SendMessage(edit, win32con.WM_SETTEXT, 0, abbrev)
+        time.sleep(0.15)
+        if not self._dialog_click_button(abbr_dlg, "ok", ctrl_id=1):
+            log.error("add_new_curve: OK в «Curve Abbreviation» не найден")
+            return False
+        time.sleep(0.6)
+        self._close_messagebox_if_any()
+        st = self.panel_state()
+        ok = any(abbrev.lower() in c.lower() for c in st["curves"])
+        log.info(f"add_new_curve('{abbrev}'): curves={st['curves']} → "
+                 f"{'OK' if ok else 'НЕ ПОЯВИЛАСЬ'}")
+        return ok
+
+    # ─────────────────────────────────────────────────────────────
     # ФАЙЛОВЫЕ ОПЕРАЦИИ (через горячие клавиши)
     # ─────────────────────────────────────────────────────────────
 
