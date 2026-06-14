@@ -578,6 +578,32 @@ continuity 1px когда «поймал линию», иначе мимо (со
 (инстанс/цвет-conditioned сегментация); (в) аугментация под спайки/бледные; (г) проверить, что
 NeuraLOG открывает наш записанный nlgx.
 
+### 6.6.3 ✅ CAPSTONE + СТАРТ НОВОГО ЧАТА (14.06, чекпойнт)
+**СОСТОЯНИЕ:** standalone-оцифровщик собран END-TO-END:
+скан → U-Net маска → трекер `track_multi` → `inject_trace` → **`_auto.nlgx`** (сдаваемый).
+- **NeuraLOG ОТКРЫВАЕТ наш записанный nlgx и рисует трассу по чернилам — ШЛЮЗ СДАЧИ ПОДТВЕРЖДЁН**
+  ([[delivery-qc-neuralog]]).
+- U-Net: v1 `unet_best.pt` (val_dice 0.557); polish `unet_v2.pt` ≈ v1 (аугментация контраст/гамма
+  НЕ помогла — узкое место СТРУКТУРНОЕ, не контраст маски; **оставлен v1**). Разделимые ~1–6px.
+- Наложенные: `track_multi.py` 1–6px вкл. МОНОХРОМ; редкие свопы правит эксперт в NeuraLOG
+  (фикс свопов 3 способа — ненадёжно, shelved). Capstone проверен: BOGAT_011 BKZ 4/4.
+- Бэкап: git **3ebda65**; v1-модель `unet_v1_dice557.pt`; датасет/тайлы `F:\nds\output\unet_data\`.
+
+**СРЕДА (ВАЖНО):** train/infer/track/eval — venv ComfyUI python:
+`D:\ComfyUI\StabilityMatrix\Data\Packages\ComfyUI\venv\Scripts\python.exe` (torch2.11 cu130 RTX5080).
+nlgx/анализ — обычный py3.14. Модель: `F:\nds\output\unet_data\unet_best.pt`.
+
+**ЗАДАЧИ НОВОГО ЧАТА (пп.1–2):**
+1. **Открыть _auto.nlgx наложенных в NeuraLOG (визуальное QC):**
+   `F:\nds\output\BOGAT_011_BKZ_3630-3896_200_1984-04-17_D_1_B_1_auto.nlgx` (наши трассы 4 зондов).
+   КАК: скопировать в `<project>\wlg\`, NeuraLog → Select Project → Wizard → Recent Files
+   (паттерн отлажен на writetest, см. [[delivery-qc-neuralog]]). Проверить: трассы легли на чернила?
+2. **Собрать единый `digitize.py`** (скан→nlgx за один проход, без кэша): связать
+   `infer.predict_prob` → `track_multi.track` → `inject_trace` (обобщить inject с кэша на любой
+   nlgx-шаблон). Готовые куски: `cache_tracks.py`/`inject_trace.py`/`track_multi.py`.
+**ПОТОМ:** значения/уровни перевыносов для реальных чисел LAS (трекер даёт ФОРМУ);
+детектор калибровки #2 (`detect_calibration.py`) для автономии на новых сканах.
+
 ## 7. ФАЙЛЫ ПРОЕКТА (`F:\nds\Auto\`)
 ```
 analyze_log_image.py   Блок 2: анализ скана → *_analysis.json (+debug-overlay)
