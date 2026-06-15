@@ -49,7 +49,14 @@ def color_at(rgb, y, x, win=2):
     return patch[np.argmin(patch.sum(1))].astype(np.float64)
 
 
-def track(prob, rgb, y0, y1, thr=0.4, lam=0.15, max_jump=40, coast_max=25):
+def track(prob, rgb, y0, y1, thr=0.4, lam=0.15, max_jump=100, coast_max=25,
+          wlam=0.5, band=350.0, slmax=12.0, anc_a=0.997):
+    """Ведёт N линий сверху-вниз. v2-харднинг наложенных кривых:
+       • ШИРИНА штриха как признак идентичности (жирная/тонкая кривая в одном треке);
+       • полоса-ЯКОРЬ (медленный EMA позиции) гейтит перескок ЗА пределы трека;
+       • КЛАМП наклона на coast — против разгона линии в пустых строках.
+       wlam — вес ширины; band — полупоса якоря (px, < межтрекового зазора);
+       slmax — макс |наклон|; anc_a — инерция якоря."""
     rows = list(range(y0, y1))
     rr = [row_runs(prob[y], thr) for y in rows]
     counts = np.array([len(r) for r in rr])
@@ -59,9 +66,11 @@ def track(prob, rgb, y0, y1, thr=0.4, lam=0.15, max_jump=40, coast_max=25):
     N = max(1, int(np.percentile(nz, 85)))
     # seed: первая строка сверху с >=N прогонами (там кривые разделены)
     seed = next((i for i, r in enumerate(rr) if len(r) >= N), int(np.argmax(counts)))
-    seeds = sorted([r[0] for r in rr[seed]])[:N]
-    lines = [{"x": x, "sl": 0.0, "col": color_at(rgb, rows[seed], x),
-              "tr": {rows[seed]: x}, "gap": 0} for x in seeds]
+    seedruns = sorted(rr[seed], key=lambda r: r[0])[:N]
+    lines = [{"x": r[0], "sl": 0.0, "w": float(r[2]-r[1]),
+              "col": color_at(rgb, rows[seed], r[0]),
+              "anc": float(r[0]), "tr": {rows[seed]: r[0]}, "gap": 0}
+             for r in seedruns]
 
     def march(order):
         for i in order:
@@ -69,18 +78,22 @@ def track(prob, rgb, y0, y1, thr=0.4, lam=0.15, max_jump=40, coast_max=25):
             preds = np.array([L["x"] + L["sl"] for L in lines])
             if not runs:
                 for L in lines:
-                    L["x"] += L["sl"]; L["gap"] += 1
+                    L["x"] += float(np.clip(L["sl"], -slmax, slmax)); L["gap"] += 1
                     if L["gap"] > coast_max:
                         L["sl"] = 0.0
                 continue
-            rx = np.array([r[0] for r in runs])
+            rx = np.array([r[0] for r in runs], float)
+            rw = np.array([r[2]-r[1] for r in runs], float)
             rcol = np.array([color_at(rgb, y, r[0]) for r in runs])
             lcol = np.array([L["col"] for L in lines])
-            # стоимость: |pred-x| + lam*цвет-расстояние (continuity по предсказанной позиции)
-            cost = np.abs(preds[:, None] - rx[None, :])
+            lw = np.array([L["w"] for L in lines])
+            lanc = np.array([L["anc"] for L in lines])
+            jump = np.abs(preds[:, None] - rx[None, :])
             cdist = np.linalg.norm(lcol[:, None, :] - rcol[None, :, :], axis=2)
-            cost = cost + lam * cdist
-            cost[cost > max_jump + lam*442] = 1e6  # гейт по прыжку
+            # стоимость: непрерывность(pred) + цвет + рассогласование ШИРИНЫ штриха
+            cost = jump + lam*cdist + wlam*np.abs(lw[:, None] - rw[None, :])
+            # гейты: большой прыжок ИЛИ выход за полосу-якорь (анти-перескок между треками)
+            cost[(jump > max_jump) | (np.abs(lanc[:, None] - rx[None, :]) > band)] = 1e6
             n, m = len(lines), len(runs)
             sz = max(n, m)
             pad = np.full((sz, sz), 1e6)
@@ -91,17 +104,21 @@ def track(prob, rgb, y0, y1, thr=0.4, lam=0.15, max_jump=40, coast_max=25):
                 if li < n and rj < m and pad[li, rj] < 1e6:
                     nx = rx[rj]
                     L = lines[li]
-                    L["sl"] = 0.7*L["sl"] + 0.3*(nx - L["x"])
+                    L["sl"] = float(np.clip(0.7*L["sl"] + 0.3*(nx - L["x"]), -slmax, slmax))
                     L["x"] = nx; L["tr"][y] = nx; L["gap"] = 0
                     L["col"] = 0.8*L["col"] + 0.2*rcol[rj]
+                    L["w"] = 0.8*L["w"] + 0.2*rw[rj]
+                    L["anc"] = anc_a*L["anc"] + (1-anc_a)*nx
                     assigned.add(li)
             for li, L in enumerate(lines):
                 if li not in assigned:
-                    L["x"] += L["sl"]; L["gap"] += 1
+                    L["x"] += float(np.clip(L["sl"], -slmax, slmax)); L["gap"] += 1
                     if L["gap"] > coast_max:
                         L["sl"] = 0.0
-    march(range(seed, len(rows)))   # вниз
-    march(range(seed, -1, -1))      # вверх
+    march(range(seed, len(rows)))            # вниз от seed
+    for L, r in zip(lines, seedruns):        # сброс к seed-состоянию для прохода вверх
+        L["x"] = float(r[0]); L["sl"] = 0.0; L["anc"] = float(r[0]); L["gap"] = 0
+    march(range(seed-1, -1, -1))             # вверх
     return lines, N
 
 
