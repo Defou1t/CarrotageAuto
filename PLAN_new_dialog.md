@@ -741,6 +741,15 @@ NEXT: масштаб на весь well + MK/BK; адресовать ~1/3 тр�
 - **Фаза C — Значения с учётом масштабов:** масштабы (A1) + структура отдельных линий → реальные Omm.
 РЕКОМЕНДАЦИЯ старта: Фаза A (тректабельна, чинит конкретные баги калибровки, предзадаёт перевыносы).
 
+**A1 v1 ГОТОВ (`detect_scales.py`, 15.06):** кроп полосы линейки (над Depth Axis top_y) → VLM (LM Studio
+gemma-4-26b-a4b) → структура масштабов на трек. КЛЮЧ к надёжности: **constrained-decoding `response_format`
+json_schema** (префилл/свободный текст → reasoning-модель давала преамбулу/repetition-collapse; схема
+форсит валидный JSON). Читает: резистив база **0–20 ОМ·М ×5-цепочка** + число уровней (±1), caliper **см**
+(=CALI/DS). Валидировано vs nlgx (база/единицы совпадают). LM Studio API запускать: `lms server start` +
+`lms load google/gemma-4-26b-a4b -y` (порт 1234; «открыт» ≠ сервер запущен). ОСТАЛОСЬ A1: точные
+v_left/v_right (детект X-позиций тиков для экстраполяции к краям трека), SP-шкала (маркер «ПС ⊢мВ⊣», не
+строка чисел), ретрай на пустой ответ, группировка мультитрека. ДАЛЕЕ Фазы: A2 сетка/угол, A3 маски.
+
 ## 7. ФАЙЛЫ ПРОЕКТА (`F:\nds\Auto\`)
 ```
 analyze_log_image.py   Блок 2: анализ скана → *_analysis.json (+debug-overlay)
@@ -796,6 +805,7 @@ digitizer\             STANDALONE-оцифровщик (вне NeuraLOG, §6.6)
   decode_levels.py     ДЕКОДЕР уровней перевыносов (DP/Viterbi) + валидация vs GT/LAS
   decode_e2e.py        сквозной тест: U-Net трасса → декод уровней → value vs LAS
   batch_digitize.py    БАТЧ template-пайплайна по скважине (digitize_one + grid + патч) + CSV
+  detect_scales.py     A1: кроп линейки → VLM (constrained JSON) → структура масштабов vs nlgx
   render_labels.py     (СТАРОЕ) рендер из LAS+Блок2 — заменён трассой из nlgx
   manifest_all.csv     манифест датасета (все 38 скважин, 2010 usable кривых)
 F:\nds\output\unet_data\  тайлы (train/val npz), index.json, unet_best.pt, eval_*.png
