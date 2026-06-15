@@ -8,7 +8,8 @@ digitize_b3.py — СКВОЗНАЯ СБОРКА нового пайплайна
 write nlgx(+bck) + верификация. Шаблон даёт калибровку/уровни/значения; трекер даёт ФОРМУ; трасса
 шаблона нужна только для маппинга линий к кривым (как digitize.py).
 
-  python digitize_b3.py <файл.nlgx | папка> [--image f.jpg] [--out DIR] [--grid4m] [--patch-scan]
+  python digitize_b3.py <файл.nlgx | папка> [--image f.jpg] [--out DIR] [--regrid] [--patch-scan]
+  (--regrid: пересобрать Depth Grid на НАТИВНОМ шаге шаблона; по умолчанию сетку шаблона НЕ трогаем)
 
 Папка → батч по всем *.nlgx (кроме *_auto) + CSV-сводка. Результат открывается в NeuraLOG для QC.
 """
@@ -57,7 +58,7 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12):
     return new_xs, len(agg), own
 
 
-def digitize_one(nlgx, image=None, out=None, grid_step=None, patch_scan=False, verbose=True):
+def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, verbose=True):
     nlgx = str(nlgx)
     out = Path(out) if out else Path(r"F:\nds\output")
     out.mkdir(parents=True, exist_ok=True)
@@ -97,8 +98,11 @@ def digitize_one(nlgx, image=None, out=None, grid_step=None, patch_scan=False, v
         res["written"] = len(written)
         res["own_px"] = round(float(np.median(owns)), 1) if owns else None
         res["cover_pct"] = round(float(np.median(covs)), 0) if covs else None
-        if grid_step:
-            regrid(ifds, m, grid_step)
+        if do_regrid:
+            # шаг — НАТИВНЫЙ из шаблона (BKZ=4м, BK=10м, 1:500=10м), НЕ хардкод 4м.
+            # По умолчанию сетку шаблона не трогаем (она уже верна — экспертная).
+            step = m.get("depth_grid", {}).get("step_m") or 4.0
+            regrid(ifds, m, float(step))
         if patch_scan:
             for i in find_ifd(ifds, lambda tags: 34878 in tags):
                 set_tag(ifds, i, 34878, 2, str(img))
@@ -134,7 +138,7 @@ def main():
     target = a[0]
     image = a[a.index("--image") + 1] if "--image" in a else None
     out = a[a.index("--out") + 1] if "--out" in a else None
-    grid_step = 4.0 if "--grid4m" in a else None
+    do_regrid = "--regrid" in a          # пересобрать сетку (нативный шаг); по умолч. НЕ трогаем
     patch_scan = "--patch-scan" in a
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
@@ -144,7 +148,7 @@ def main():
         print(f"БАТЧ: {len(files)} файлов в {p}")
         rows = []
         for f in files:
-            rows.append(digitize_one(f, None, out, grid_step, patch_scan))
+            rows.append(digitize_one(f, None, out, do_regrid, patch_scan))
         okn = sum(1 for r in rows if r["dst"])
         cov = [r["cover_pct"] for r in rows if r["cover_pct"] is not None]
         print(f"\nГОТОВО: {okn}/{len(files)} файлов; медиана покрытия "
@@ -155,7 +159,7 @@ def main():
             w.writeheader(); w.writerows(rows)
         print(f"CSV -> {csvp}")
     else:
-        r = digitize_one(target, image, out, grid_step, patch_scan)
+        r = digitize_one(target, image, out, do_regrid, patch_scan)
         print(f"-> {r.get('dst')}")
 
 
