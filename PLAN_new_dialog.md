@@ -691,6 +691,17 @@ KREMEN_057): шкалы ПЕРЕКРЫВАЮТСЯ (L0 −2.5..20, L1 −12.5..1
   уже ~oracle (наша трасса + GT-уровни). Декодер нужен для АВТОНОМНОГО пути (без шаблона): одиночный
   оборот — готов, мульти-оборот — после edge-aware эмиссии.
 
+### 6.6.6 ◐ БАТЧ-ОПЕРАЦИОНАЛИЗАЦИЯ template-пайплайна (15.06)
+`digitize.py` отрефакторен: `digitize_one(net,…)` (модель грузится 1 раз) + опции `--grid4m`/`--patch-scan`.
+`batch_digitize.py` гонит скважину: U-Net→track→inject + Depth Grid 4 м + патч скан-пути → `_auto.nlgx`(+bck)
++ CSV. **ПРОГОН BOGAT_011 BKZ (12 файлов, 32с, ~2.7с/файл, GPU):** 12/12 без сбоев, 47/47 кривых
+вписано+верифицировано (механика). КАЧЕСТВО vs эксперт (own_px): резистивные мед **4px** (13/23 <8px),
+CALI/SP мед **2px** (16/23 <8px) — гипотеза «не-резистив всегда падает» ОПРОВЕРГНУТА данными (мульти-трек
+сработал). РАСПРЕДЕЛЕНИЕ **БИМОДАЛЬНОЕ**: ~2/3 файлов чистые (кривые ≤5px → лёгкий QC), ~1/3 с несколькими
+свопами (трудные планшеты с плотным наложением 4 зондов — известный гэп разделения). Выход:
+`F:\nds\output\batch\<well>\` + `batch_report.csv` (per-file curves/written/verified/track_err).
+NEXT: масштаб на весь well + MK/BK; адресовать ~1/3 трудных (харднинг разделения наложенных / эксперт правит).
+
 ## 7. ФАЙЛЫ ПРОЕКТА (`F:\nds\Auto\`)
 ```
 analyze_log_image.py   Блок 2: анализ скана → *_analysis.json (+debug-overlay)
@@ -744,6 +755,8 @@ digitizer\             STANDALONE-оцифровщик (вне NeuraLOG, §6.6)
   set_depth_grid.py    перегенерация Depth Grid на 4 м (канон 1:200) + патч скан-пути
   survey_levels.py     характеризация перевыносов по GT (частота/множители/мнемоники)
   decode_levels.py     ДЕКОДЕР уровней перевыносов (DP/Viterbi) + валидация vs GT/LAS
+  decode_e2e.py        сквозной тест: U-Net трасса → декод уровней → value vs LAS
+  batch_digitize.py    БАТЧ template-пайплайна по скважине (digitize_one + grid + патч) + CSV
   render_labels.py     (СТАРОЕ) рендер из LAS+Блок2 — заменён трассой из nlgx
   manifest_all.csv     манифест датасета (все 38 скважин, 2010 usable кривых)
 F:\nds\output\unet_data\  тайлы (train/val npz), index.json, unet_best.pt, eval_*.png
