@@ -38,10 +38,13 @@ def curve_pred(short):
     return is_this
 
 
-def aggregate_xs(lines, gd, gtc, n, top_y, tol=12):
+def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25):
     """Собрать X-трассу кривой из одноцветных B3-линий, трассирующих её (медиана |Δx|<tol).
     Перевынос = несколько линий-уровней → берём ближайшую к шаблонной трассе на каждой строке.
-    Возвращает (new_xs[n] с NULL в разрывах, n_заполнено, медиана own_px)."""
+    PER-ROW ГЕЙТ (row_tol): точку пишем ТОЛЬКО если она близка к эталону на ЭТОЙ строке —
+    иначе на границе перевыноса штрих, совпавший по медиане, давал ЧУЖУЮ линию (x=529 вместо
+    25×-линии слева, баг QC). Отсечённое = РАЗРЫВ (NULL), а не чужая линия (заодно анти-мост:
+    NeuraLOG не рисует прямую через разрыв). Возвращает (new_xs[n], n_заполнено, own_px)."""
     agg = {}
     for L in lines:
         if L["color"] != gtc:
@@ -51,6 +54,8 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12):
             continue
         if np.median([abs(a - b) for _, a, b in ov]) < tol:
             for y, gx, bx in ov:
+                if abs(bx - gx) > row_tol:           # грубое расхождение на строке → разрыв
+                    continue
                 if y not in agg or abs(bx - gx) < abs(agg[y] - gx):
                     agg[y] = bx
     new_xs = [int(round(agg[top_y + i])) if (top_y + i) in agg else NULL for i in range(n)]
