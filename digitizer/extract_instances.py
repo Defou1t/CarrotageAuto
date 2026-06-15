@@ -87,6 +87,8 @@ def _behavior_from_xs(m, xs_row, row0):
     grid = np.arange(ys.min(), ys.max() + 1)
     xi = np.interp(grid, ys, xs)
     W = max(5, int(round(1.5 * pxm)) | 1)
+    if len(xi) <= W:                 # штрих короче окна → rough_n не определён
+        return None
     sm = np.convolve(xi, np.ones(W) / W, mode="same")
     hf = (xi - sm)[W:-W] if len(xi) > 2 * W else (xi - sm)
     span = float(np.percentile(xs, 97) - np.percentile(xs, 3)) or 1.0

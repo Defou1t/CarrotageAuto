@@ -54,6 +54,8 @@ def curve_behavior(m, curve, smooth_m=1.5, rev_m=0.3):
     grid = np.arange(ys.min(), ys.max() + 1)            # равномерная сетка строк (1px)
     xi = np.interp(grid, ys, xs)
     W = max(5, int(round(smooth_m * pxm)) | 1)          # окно сглаживания (нечётное)
+    if len(xi) <= W:                                    # трасса короче окна
+        return None
     sm = np.convolve(xi, np.ones(W) / W, mode="same")
     hf = (xi - sm)[W:-W] if len(xi) > 2 * W else (xi - sm)
     span = float(np.percentile(xs, 97) - np.percentile(xs, 3)) or 1.0
