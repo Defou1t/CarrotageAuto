@@ -8,6 +8,7 @@ python set_depth_grid.py --nlgx <in.nlgx> [--step 4] [--scan <jpg>] [--out <out.
 """
 import sys, struct
 from pathlib import Path
+import numpy as np
 from write_nlgx import read_full, write_full, write_bck, set_tag, find_ifd
 from extract_nlgx import extract
 
@@ -20,11 +21,30 @@ def _tagval(ifd, tag, default=None):
     return default
 
 
-def regrid(ifds, m, step=4.0):
+def snap_to_lines(ys_pred, det_ys, tol):
+    """Снап (A2b): каждую предсказанную осью Y 4 м-линию двигаем к БЛИЖАЙШЕЙ детектированной
+    линии сетки, если та в пределах `tol` px (иначе оставляем предсказание — никогда не хуже).
+    Поглощает неравномерность бумаги (реальные диффы 123/120/126), угол уже задан A2."""
+    if det_ys is None or not len(det_ys):
+        return list(ys_pred), 0
+    det = np.asarray(det_ys, float)
+    out, moved = [], 0
+    for p in ys_pred:
+        j = int(np.abs(det - p).argmin())
+        if abs(det[j] - p) <= tol:
+            out.append(float(det[j])); moved += 1
+        else:
+            out.append(float(p))
+    return out, moved
+
+
+def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0):
     """Перегенерировать Depth Grid на шаг `step` (м), КОРРЕКТНО с геометрией наклонённых
     сегментов. Каждая линия = сегмент (x_start,y_start)->(x_end,y_end), наклон сохраняется из
     тега 35570. Все per-line массивы (35594/35596/35598/35600/35601) пишутся согласованной длины,
-    иначе NeuraLOG рисует неверный угол/веер (баг наивного регрида)."""
+    иначе NeuraLOG рисует неверный угол/веер (баг наивного регрида).
+    A2b: если передан `det_ys` (детектированные линии сетки из картинки) — Y каждой линии
+    снапится к ближайшей реальной линии в пределах snap_tol px (поглощает неравномерность)."""
     import math
     da = m["depth_axis"]
     ty, by = da["top_y"], da["bottom_y"]
@@ -44,17 +64,23 @@ def regrid(ifds, m, step=4.0):
     slope = _tagval(ifd, 35570, 0.0) or 0.0            # наклон горизонтали (dy/dx)
     lo, hi = min(td, bd), max(td, bd)
     d0 = math.ceil(lo / step) * step
-    depths, xs0, ys0, xs1, ys1 = [], [], [], [], []
+    depths, ys_pred = [], []
     d = d0
     while d <= hi + 1e-6:
-        xs = int(round(xt + (d - td) * xpm))           # левый X (по наклону оси)
-        ys = int(round(ty + (d - td) * pxm))           # левый Y (глубина)
         depths.append(round(d, 3))
+        ys_pred.append(ty + (d - td) * pxm)            # левый Y (глубина), float
+        d += step
+    ys_snap, moved = snap_to_lines(ys_pred, det_ys, snap_tol)
+    xs0, ys0, xs1, ys1 = [], [], [], []
+    for d, ys in zip(depths, ys_snap):
+        xs = int(round(xt + (d - td) * xpm))           # левый X (по наклону оси)
+        ys = int(round(ys))
         xs0.append(xs); ys0.append(ys)
         xs1.append(xs + int(width))                    # правый X
         ys1.append(int(round(ys + slope * width)))     # правый Y (наклон горизонтали)
-        d += step
     n = len(depths)
+    if det_ys is not None:
+        print(f"  снап A2b: сдвинуто {moved}/{n} линий к детектированным (tol {snap_tol}px)")
     set_tag(ifds, i, 35594, 4, xs0)        # X начала (левый)
     set_tag(ifds, i, 35596, 4, ys0)        # Y начала (левый, = глубина)
     set_tag(ifds, i, 35598, 4, xs1)        # X конца (правый)
@@ -67,16 +93,42 @@ def regrid(ifds, m, step=4.0):
     return depths, ys0
 
 
+def _resid(ys, ref):
+    """median/within-N резидуал ys к ближайшей линии ref (для валидации vs экспертная сетка)."""
+    if ref is None or not len(ref):
+        return None
+    ys = np.asarray(ys, float); ref = np.asarray(ref, float)
+    d = np.abs(ys[:, None] - ref[None, :]).min(1)
+    return (float(np.median(d)), float(np.mean(d <= 2) * 100),
+            float(np.mean(d <= 3) * 100), float(np.mean(d <= 5) * 100))
+
+
 def main():
     a = sys.argv[1:]
     nlgx = a[a.index("--nlgx")+1]
     step = float(a[a.index("--step")+1]) if "--step" in a else 4.0
     scan = a[a.index("--scan")+1] if "--scan" in a else None
+    snap = "--snap" in a
     out = a[a.index("--out")+1] if "--out" in a else nlgx.replace(".nlgx", "_grid.nlgx")
     sys.stdout.reconfigure(encoding="utf-8")
     m = extract(nlgx)
+    gt_ys = m.get("depth_grid", {}).get("ys", [])     # существующая (экспертная) сетка = GT
     ifds = read_full(open(nlgx, "rb").read())
-    res = regrid(ifds, m, step)
+
+    det_ys = None
+    if snap or "--scan" in a:
+        from detect_calibration import detect_hgrid
+        from dataset_build import find_image
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        img = scan or find_image(Path(nlgx))
+        if img and snap:
+            import cv2
+            g = cv2.cvtColor(np.asarray(Image.open(img).convert("RGB")), cv2.COLOR_RGB2GRAY)
+            det_ys, fine = detect_hgrid(g)
+            print(f"детект сетки: {len(det_ys)} линий, шаг тонкой ~{fine:.1f}px")
+
+    res = regrid(ifds, m, step, det_ys=det_ys if snap else None)
     if res is None:
         print("нет тип-8 Depth Grid IFD — пропуск (нужно добавить IFD)"); return
     depths, ys = res
@@ -91,6 +143,9 @@ def main():
     print(f"Depth Grid: {dg['n']} линий, шаг {dg['step_m']} м")
     print(f"  глубины {depths[0]}..{depths[-1]} (кратные {step})")
     print(f"  ys {ys[:3]} … {ys[-3:]}")
+    if gt_ys:
+        r = _resid(ys, gt_ys)
+        print(f"  vs экспертная сетка: med={r[0]:.1f}px within2={r[1]:.0f}% within3={r[2]:.0f}% within5={r[3]:.0f}%")
     print(f"-> {out} (+bck)")
 
 

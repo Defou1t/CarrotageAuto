@@ -70,6 +70,36 @@ def detect_depth_grid(gray, thr=140):
     return all_peaks, fine, bold, bold_sp
 
 
+def detect_hgrid(gray, frac_lo=0.15, frac_hi=0.90, min_cover=0.02):
+    """Субпиксельный детект ВСЕХ горизонтальных линий сетки (тонких + жирных).
+    Профиль покрытия строки чернилами в центральной x-полосе при АДАПТИВНОМ пороге
+    (медиана-фона − 22: ловит и светлую сетку ≈170-190, и тёмную). Детренд + локальные
+    максимумы + параболическое уточнение субпикселя. Возвращает (ys_subpx, fine_spacing).
+    Применение — A2b: снап 4 м-линий Depth Grid к РЕАЛЬНЫМ линиям (поглощает неравномерность
+    бумаги, угол уже учтён A2). Жирные 4 м отдельно НЕ выделяем — снап к ближайшей в узком
+    допуске не требует различать жирную/тонкую."""
+    H, W = gray.shape
+    x0, x1 = int(frac_lo * W), int(frac_hi * W)
+    band = max(1, x1 - x0)
+    bg = float(np.median(gray))
+    prof = (gray[:, x0:x1] < bg - 22).sum(1).astype(np.float64) / band
+    prof -= np.convolve(prof, np.ones(31) / 31, mode="same")
+    prof = np.clip(prof, 0, None)
+    ys = []
+    i = 1
+    while i < H - 1:
+        if prof[i] >= prof[i - 1] and prof[i] > prof[i + 1] and prof[i] > min_cover:
+            a, b, c = prof[i - 1], prof[i], prof[i + 1]
+            off = 0.5 * (a - c) / (a - 2 * b + c + 1e-9)   # вершина параболы
+            ys.append(i + max(-1.0, min(1.0, off)))
+            i += 4
+        else:
+            i += 1
+    ys = np.array(ys)
+    fine = float(np.median(np.diff(np.sort(ys)))) if len(ys) > 5 else 12.0
+    return ys, fine
+
+
 def detect_track_edges(gray, thr=140):
     """Вертикальные края трека: профиль тёмных пикселей по столбцам -> пики."""
     H, W = gray.shape
