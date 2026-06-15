@@ -37,7 +37,7 @@ def crop_ruler(rgb, top_y, band=380):
     return rgb[y0:y1]
 
 
-def vlm_read(crop, model, timeout=180):
+def vlm_read(crop, model, timeout=120):
     im = Image.fromarray(crop)
     if im.width > 1000:   # меньше vision-токенов: gemma 4096-контекст переполняется на большом изображении
         s = 1000 / im.width
@@ -59,8 +59,11 @@ def vlm_read(crop, model, timeout=180):
             "json_schema": {"name": "scales", "strict": True, "schema": schema}}}
     req = urllib.request.Request(f"{BASE}/chat/completions",
         data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        resp = json.loads(r.read().decode())
+    try:   # сеть/таймаут не должны ронять прогон — лестница идёт к следующему band
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            resp = json.loads(r.read().decode())
+    except Exception as e:
+        return None, {"error": f"{type(e).__name__}: {e}"}
     msg = resp.get("choices", [{}])[0].get("message", {})
     cont = (msg.get("content", "") or "").strip()
     try:
@@ -76,6 +79,39 @@ def vlm_read(crop, model, timeout=180):
     return None, msg
 
 
+def read_ruler(rgb, top_y, model, bands=(200, 160, 260, 320)):
+    """Лестница ретраев: тайтовый кроп сначала (band=380 включал много пустой сетки сверху —
+    модель отдавала {"rows":[]}). Возвращает (band, rows, msg) первого НЕПУСТОГО чтения;
+    при ошибке/таймауте/пустом — следующий band. A1b: «ретрай на пустой ответ»."""
+    last = (None, [], {})
+    for band in bands:
+        rows, msg = vlm_read(crop_ruler(rgb, top_y, band), model)
+        if rows:
+            return band, rows, msg
+        last = (band, rows or [], msg)
+    return last
+
+
+def fix_merged_units(nums):
+    """Чинит слипание последнего числа с единицей: VLM часто читает «8 ОНМ» как «80»
+    (×10-выброс, ломающий арифметику шкалы 0 2 4 6 8). Если число выбивается из прогрессии,
+    а n/10 в неё ложится — делим на 10. Применять к ВОЗРАСТАЮЩИМ рядам (ОМ·М, СМ)."""
+    nums = [n for n in nums if isinstance(n, (int, float))]
+    if len(nums) < 3:
+        return nums
+    diffs = [b - a for a, b in zip(nums, nums[1:])]
+    step = sorted(diffs)[len(diffs) // 2]            # медианный шаг
+    if step <= 0:
+        return nums
+    out = [nums[0]]
+    for n in nums[1:]:
+        exp = out[-1] + step
+        if abs(n - exp) > 2 * step and abs(n / 10 - exp) <= 0.51 * step + 0.5:
+            n = n / 10
+        out.append(n)
+    return [int(x) if float(x).is_integer() else x for x in out]
+
+
 def infer_scales(rows):
     """VLM-строки → структура: резистивные ЦЕПОЧКИ (база + число ×5-уровней), caliper, sp.
     Новая цепочка начинается на 'базовой' строке (много меток, напр. 0 5 10 15 20)."""
@@ -83,6 +119,8 @@ def infer_scales(rows):
     cur = None
     for r in rows:
         u = r.get("unit"); nums = [n for n in r.get("numbers", []) if isinstance(n, (int, float))]
+        if u in ("ОМ·М", "СМ"):
+            nums = fix_merged_units(nums)
         if u == "ОМ·М":
             is_base = len(nums) >= 4
             if is_base or cur is None:
@@ -115,23 +153,26 @@ def main():
     a = sys.argv[1:]
     nlgx = a[a.index("--nlgx") + 1]
     model = a[a.index("--model") + 1] if "--model" in a else "google/gemma-4-26b-a4b"
-    band = int(a[a.index("--band") + 1]) if "--band" in a else 380
     sys.stdout.reconfigure(encoding="utf-8")
     m = extract(nlgx)
     img = find_image(Path(nlgx))
     rgb = np.asarray(Image.open(img).convert("RGB"))
     top_y = m["depth_axis"]["top_y"]
-    crop = crop_ruler(rgb, top_y, band)
     if "--save-crop" in a:
         p = rf"F:\nds\output\ruler_crop_{Path(nlgx).stem[:30]}.png"
+        crop = crop_ruler(rgb, top_y, 200)
         Image.fromarray(crop).save(p); print(f"crop -> {p} ({crop.shape[1]}x{crop.shape[0]})")
-    rows, msg = vlm_read(crop, model)
-    print(f"\nVLM ({model}) прочитал строк линейки:")
+    if "--band" in a:                     # ручной одиночный band (диагностика)
+        band = int(a[a.index("--band") + 1])
+        rows, msg = vlm_read(crop_ruler(rgb, top_y, band), model)
+    else:
+        band, rows, msg = read_ruler(rgb, top_y, model)
+    print(f"\nVLM ({model}) прочитал строк линейки (band={band}):")
     if rows:
         for r in rows:
             print(f"   {r}")
     else:
-        print("   НЕ распарсилось. raw:", str(msg.get('content') or msg.get('reasoning_content'))[:300])
+        print("   НЕ распарсилось. raw:", str(msg.get('content') or msg.get('reasoning_content') or msg.get('error'))[:300])
     if rows:
         inf = infer_scales(rows)
         print("\nИНФЕРЕНС структуры:")
