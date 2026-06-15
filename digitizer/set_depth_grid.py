@@ -12,27 +12,59 @@ from write_nlgx import read_full, write_full, write_bck, set_tag, find_ifd
 from extract_nlgx import extract
 
 
+def _tagval(ifd, tag, default=None):
+    for t, typ, count, raw in ifd["entries"]:
+        if t == tag:
+            fmt = {3: "H", 4: "I", 12: "d"}.get(typ, "I")
+            return struct.unpack("<" + fmt, raw[:struct.calcsize(fmt)])[0]
+    return default
+
+
 def regrid(ifds, m, step=4.0):
+    """Перегенерировать Depth Grid на шаг `step` (м), КОРРЕКТНО с геометрией наклонённых
+    сегментов. Каждая линия = сегмент (x_start,y_start)->(x_end,y_end), наклон сохраняется из
+    тега 35570. Все per-line массивы (35594/35596/35598/35600/35601) пишутся согласованной длины,
+    иначе NeuraLOG рисует неверный угол/веер (баг наивного регрида)."""
+    import math
     da = m["depth_axis"]
     ty, by = da["top_y"], da["bottom_y"]
     td, bd = da["top_depth"], da["bottom_depth"]
-    lo, hi = min(td, bd), max(td, bd)
-    import math
-    d0 = math.ceil(lo / step) * step
-    depths = []
-    d = d0
-    while d <= hi + 1e-6:
-        depths.append(round(d, 3)); d += step
-    ys = [int(round(ty + (dd - td) * (by - ty) / (bd - td))) for dd in depths]
+    xt, xb = da.get("x_top") or 0, da.get("x_bot") or 0
+    if bd == td or by == ty:
+        return None
+    pxm = (by - ty) / (bd - td)        # px на метр (Y)
+    xpm = (xb - xt) / (bd - td)        # наклон оси по X (px/м)
     idxs = find_ifd(ifds, lambda tags: 34768 in tags and
                     struct.unpack("<I", tags[34768][2][:4])[0] == 8)
     if not idxs:
         return None  # тип-8 IFD отсутствует — добавление нового IFD пока не делаем
     i = idxs[0]
-    set_tag(ifds, i, 35596, 4, ys)       # Y-координаты горизонталей (LONG[])
-    set_tag(ifds, i, 35590, 4, len(ys))  # N линий
-    set_tag(ifds, i, 35578, 12, float(step))  # шаг (м, DOUBLE)
-    return depths, ys
+    ifd = ifds[i]
+    width = _tagval(ifd, 35568, 2269) or 2269          # ширина трека (px)
+    slope = _tagval(ifd, 35570, 0.0) or 0.0            # наклон горизонтали (dy/dx)
+    lo, hi = min(td, bd), max(td, bd)
+    d0 = math.ceil(lo / step) * step
+    depths, xs0, ys0, xs1, ys1 = [], [], [], [], []
+    d = d0
+    while d <= hi + 1e-6:
+        xs = int(round(xt + (d - td) * xpm))           # левый X (по наклону оси)
+        ys = int(round(ty + (d - td) * pxm))           # левый Y (глубина)
+        depths.append(round(d, 3))
+        xs0.append(xs); ys0.append(ys)
+        xs1.append(xs + int(width))                    # правый X
+        ys1.append(int(round(ys + slope * width)))     # правый Y (наклон горизонтали)
+        d += step
+    n = len(depths)
+    set_tag(ifds, i, 35594, 4, xs0)        # X начала (левый)
+    set_tag(ifds, i, 35596, 4, ys0)        # Y начала (левый, = глубина)
+    set_tag(ifds, i, 35598, 4, xs1)        # X конца (правый)
+    set_tag(ifds, i, 35600, 4, ys1)        # Y конца (правый, наклон)
+    set_tag(ifds, i, 35601, 4, [3] * n)    # стиль/вес линии
+    set_tag(ifds, i, 35590, 4, n)          # N линий
+    set_tag(ifds, i, 35586, 4, int(round(step * pxm)))  # px на шаг
+    for t in (35578, 35582, 35584):
+        set_tag(ifds, i, t, 12, float(step))            # шаг (м)
+    return depths, ys0
 
 
 def main():
