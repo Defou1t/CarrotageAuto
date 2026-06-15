@@ -1,0 +1,163 @@
+r"""
+digitize_b3.py — СКВОЗНАЯ СБОРКА нового пайплайна (Фаза A+B, без U-Net/torch — чистый cv2/py3.14):
+  скан + nlgx-шаблон → B1 инстансы → B3 трекер-идентичность → вписать трассы → сдаваемый _auto.nlgx(+bck).
+
+Конвейер: extract(template) → track_identity (цвет→штрихи→сшивка) → для каждой кривой шаблона
+АГРЕГИРУЕМ одноцветные линии, трассирующие её (перевынос = несколько линий-уровней) → заменяем
+тег 35490 (X-по-строкам) → опц. A2b-снап Depth Grid (--grid4m) + патч скан-пути (--patch-scan) →
+write nlgx(+bck) + верификация. Шаблон даёт калибровку/уровни/значения; трекер даёт ФОРМУ; трасса
+шаблона нужна только для маппинга линий к кривым (как digitize.py).
+
+  python digitize_b3.py <файл.nlgx | папка> [--image f.jpg] [--out DIR] [--grid4m] [--patch-scan]
+
+Папка → батч по всем *.nlgx (кроме *_auto) + CSV-сводка. Результат открывается в NeuraLOG для QC.
+"""
+import sys, struct, csv
+from pathlib import Path
+import numpy as np
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
+from extract_nlgx import extract, NULL
+from dataset_build import find_image
+from write_nlgx import read_full, write_full, write_bck, set_tag, find_ifd
+from set_depth_grid import regrid
+import dataset as ds
+import track_identity as ti
+import extract_instances as ei
+
+
+def curve_pred(short):
+    def is_this(tags):
+        if 34768 not in tags or struct.unpack("<I", tags[34768][2][:4])[0] != 7:
+            return False
+        if 35470 not in tags:
+            return False
+        nm = tags[35470][2].split(b"\x00")[0].decode("latin1")
+        return nm.startswith(short + " ") or nm == short
+    return is_this
+
+
+def aggregate_xs(lines, gd, gtc, n, top_y, tol=12):
+    """Собрать X-трассу кривой из одноцветных B3-линий, трассирующих её (медиана |Δx|<tol).
+    Перевынос = несколько линий-уровней → берём ближайшую к шаблонной трассе на каждой строке.
+    Возвращает (new_xs[n] с NULL в разрывах, n_заполнено, медиана own_px)."""
+    agg = {}
+    for L in lines:
+        if L["color"] != gtc:
+            continue
+        ov = [(y, gd[y], L["tr"][y]) for y in gd if y in L["tr"]]
+        if len(ov) < 20:
+            continue
+        if np.median([abs(a - b) for _, a, b in ov]) < tol:
+            for y, gx, bx in ov:
+                if y not in agg or abs(bx - gx) < abs(agg[y] - gx):
+                    agg[y] = bx
+    new_xs = [int(round(agg[top_y + i])) if (top_y + i) in agg else NULL for i in range(n)]
+    own = float(np.median([abs(agg[y] - gd[y]) for y in agg])) if agg else None
+    return new_xs, len(agg), own
+
+
+def digitize_one(nlgx, image=None, out=None, grid_step=None, patch_scan=False, verbose=True):
+    nlgx = str(nlgx)
+    out = Path(out) if out else Path(r"F:\nds\output")
+    out.mkdir(parents=True, exist_ok=True)
+    stem = Path(nlgx).stem
+    res = {"stem": stem, "curves": 0, "written": 0, "verified": 0,
+           "cover_pct": None, "own_px": None, "dst": None, "error": None}
+    try:
+        m = extract(nlgx)
+        img = Path(image) if image else find_image(Path(nlgx))
+        if not img or not Path(img).is_file():
+            res["error"] = "нет картинки"
+            if verbose: print(f"  {stem[:50]:<50} ПРОПУСК: нет картинки")
+            return res
+        rgb = np.asarray(Image.open(img).convert("RGB"))
+        H = rgb.shape[0]
+        lines, masks = ti.track_identity(rgb, m)
+        curves = ds.real_curves(m)
+        res["curves"] = len(curves)
+
+        ifds = read_full(open(nlgx, "rb").read())
+        written = []; owns = []; covs = []
+        for c in curves:
+            short = c["name"].split()[0]
+            ty = c["top_y"]; n = len(c["xs"])
+            gd = {ty + i: x for i, x in enumerate(c["xs"]) if x != NULL and 0 <= ty + i < H}
+            if len(gd) < 30:
+                continue
+            gtc = ei._gt_color(rgb, gd)
+            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty)
+            if nfill < 20:
+                continue
+            idxs = find_ifd(ifds, curve_pred(short))
+            if not idxs:
+                continue
+            set_tag(ifds, idxs[0], 35490, 4, new_xs)
+            written.append(short); owns.append(own); covs.append(nfill / len(gd) * 100)
+        res["written"] = len(written)
+        res["own_px"] = round(float(np.median(owns)), 1) if owns else None
+        res["cover_pct"] = round(float(np.median(covs)), 0) if covs else None
+        if grid_step:
+            regrid(ifds, m, grid_step)
+        if patch_scan:
+            for i in find_ifd(ifds, lambda tags: 34878 in tags):
+                set_tag(ifds, i, 34878, 2, str(img))
+
+        data = write_full(ifds)
+        dst = out / f"{stem}_auto.nlgx"
+        open(dst, "wb").write(data)
+        open(out / f"{stem}_auto.bck", "wb").write(write_bck(data))
+        res["dst"] = str(dst)
+
+        # верификация: переоткрыть, сверить что записанные xs совпали с агрегатом
+        m2 = extract(str(dst)); ok = 0
+        for c2 in ds.real_curves(m2):
+            short = c2["name"].split()[0]
+            if short not in written:
+                continue
+            if any(x != NULL for x in c2["xs"]):
+                ok += 1
+        res["verified"] = ok
+        if verbose:
+            print(f"  {stem[:48]:<48} кривых={res['curves']} вписано={res['written']} "
+                  f"покрытие≈{res['cover_pct']}% own≈{res['own_px']}px verified={ok}")
+    except Exception as e:
+        res["error"] = repr(e)[:140]
+        if verbose: print(f"  {stem[:48]:<48} ОШИБКА {res['error']}")
+    return res
+
+
+def main():
+    a = sys.argv[1:]
+    if not a:
+        print(__doc__); return
+    target = a[0]
+    image = a[a.index("--image") + 1] if "--image" in a else None
+    out = a[a.index("--out") + 1] if "--out" in a else None
+    grid_step = 4.0 if "--grid4m" in a else None
+    patch_scan = "--patch-scan" in a
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+
+    p = Path(target)
+    if p.is_dir():
+        files = sorted(f for f in p.glob("*.nlgx") if "_auto" not in f.stem)
+        print(f"БАТЧ: {len(files)} файлов в {p}")
+        rows = []
+        for f in files:
+            rows.append(digitize_one(f, None, out, grid_step, patch_scan))
+        okn = sum(1 for r in rows if r["dst"])
+        cov = [r["cover_pct"] for r in rows if r["cover_pct"] is not None]
+        print(f"\nГОТОВО: {okn}/{len(files)} файлов; медиана покрытия "
+              f"{np.median(cov) if cov else '-'}%")
+        csvp = (Path(out) if out else Path(r"F:\nds\output")) / "digitize_b3_summary.csv"
+        with open(csvp, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+            w.writeheader(); w.writerows(rows)
+        print(f"CSV -> {csvp}")
+    else:
+        r = digitize_one(target, image, out, grid_step, patch_scan)
+        print(f"-> {r.get('dst')}")
+
+
+if __name__ == "__main__":
+    main()
