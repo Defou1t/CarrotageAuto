@@ -918,6 +918,7 @@ digitizer\             STANDALONE-оцифровщик (вне NeuraLOG, §6.6)
   digitize_b3.py       СКВОЗНАЯ сборка B1→B3→nlgx (агрегация линий→кривые, set_tag 35490) — _auto.nlgx+bck
   pipeline.py          ЕДИНЫЙ вход: process <файл|папка> + learn <папка> (интейк проверенных → корпус+priors.json)
   qc_trace.py          НЕЗАВИСИМАЯ QC трассы vs ИЗОБРАЖЕНИЕ: off_ink/spike/gap/oof/overlap + score (флаги для клика)
+  export_las.py        _auto.nlgx → LAS (значения через шкалы+уровни) + валидация vs эталонный LAS (log_corr)
   render_labels.py     (СТАРОЕ) рендер из LAS+Блок2 — заменён трассой из nlgx
   manifest_all.csv     манифест датасета (все 38 скважин, 2010 usable кривых)
 F:\nds\output\unet_data\  тайлы (train/val npz), index.json, unet_best.pt, eval_*.png
