@@ -18,6 +18,7 @@ from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 from extract_nlgx import extract, NULL
 from write_nlgx import read_full, write_full, write_bck, set_tag, find_ifd
+from dataset_build import find_image
 import track_identity as ti
 import extract_instances as ei
 from digitize_b3 import curve_pred
@@ -54,6 +55,8 @@ def digitize_one(nlgx, out=None, verbose=True):
     stem = Path(nlgx).stem
     m = extract(nlgx)
     img = m.get("img_path")
+    if not img or not Path(img).is_file():
+        img = find_image(Path(nlgx))                  # fallback: мёртвый img_path в шаблоне
     if not img or not Path(img).is_file():
         if verbose: print(f"  {stem}: нет картинки"); return None
     rgb = np.asarray(Image.open(img).convert("RGB")); H, W = rgb.shape[:2]
