@@ -38,13 +38,16 @@ def curve_pred(short):
     return is_this
 
 
-def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25):
+def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_gate=18):
     """Собрать X-трассу кривой из одноцветных B3-линий, трассирующих её (медиана |Δx|<tol).
     Перевынос = несколько линий-уровней → берём ближайшую к шаблонной трассе на каждой строке.
     PER-ROW ГЕЙТ (row_tol): точку пишем ТОЛЬКО если она близка к эталону на ЭТОЙ строке —
     иначе на границе перевыноса штрих, совпавший по медиане, давал ЧУЖУЮ линию (x=529 вместо
-    25×-линии слева, баг QC). Отсечённое = РАЗРЫВ (NULL), а не чужая линия (заодно анти-мост:
-    NeuraLOG не рисует прямую через разрыв). Возвращает (new_xs[n], n_заполнено, own_px)."""
+    25×-линии слева, баг QC). Отсечённое = РАЗРЫВ (NULL), а не чужая линия (заодно анти-мост).
+    GAP-FILL (chan): где B3-линии дали разрыв (same-color пересечение слило CC), но эталон есть —
+    берём ближайшее ЧЕРНИЛО того же цвета в узком гейте у эталона (трасса из ИЗОБРАЖЕНИЯ, шаблон
+    лишь указывает какая линия; ловит входящую backup-линию ×5/×25 у перехода).
+    Возвращает (new_xs[n], n_заполнено, own_px)."""
     agg = {}
     for L in lines:
         if L["color"] != gtc:
@@ -58,6 +61,16 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25):
                     continue
                 if y not in agg or abs(bx - gx) < abs(agg[y] - gx):
                     agg[y] = bx
+    if chan is not None:                              # gap-fill из чернил у эталона
+        H, W = chan.shape
+        for y, gx in gd.items():
+            if y in agg or not (0 <= y < H):
+                continue
+            x0 = max(0, gx - fill_gate); x1 = min(W, gx + fill_gate)
+            idx = np.nonzero(chan[y, x0:x1])[0]
+            if len(idx):
+                xs = idx + x0
+                agg[y] = float(xs[np.argmin(np.abs(xs - gx))])
     new_xs = [int(round(agg[top_y + i])) if (top_y + i) in agg else NULL for i in range(n)]
     own = float(np.median([abs(agg[y] - gd[y]) for y in agg])) if agg else None
     return new_xs, len(agg), own
@@ -78,8 +91,13 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, 
             if verbose: print(f"  {stem[:50]:<50} ПРОПУСК: нет картинки")
             return res
         rgb = np.asarray(Image.open(img).convert("RGB"))
-        H = rgb.shape[0]
+        H, W = rgb.shape[:2]
         lines, masks = ti.track_identity(rgb, m)
+        # цветовые каналы для gap-fill (те же, что в B1): тело трека минус exclude-маска A3
+        g = masks["geom"]; xl = max(0, g["x_left"] - 5); xr = min(W, (g["x_right"] or W) + 30)
+        body = np.zeros((H, W), np.uint8); body[g["top_y"]:g["bottom_y"], xl:xr] = 1
+        body = ((body > 0) & (masks["exclude"] == 0)).astype(np.uint8)
+        chans = ei.classify_ink(rgb, body)
         curves = ds.real_curves(m)
         res["curves"] = len(curves)
 
@@ -92,7 +110,7 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, 
             if len(gd) < 30:
                 continue
             gtc = ei._gt_color(rgb, gd)
-            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty)
+            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty, chan=chans.get(gtc))
             if nfill < 20:
                 continue
             idxs = find_ifd(ifds, curve_pred(short))
