@@ -72,9 +72,22 @@ def qc_curve(m, c, gray, chan, exclude, dpx, dof, tol_x=5, vwin=1, spike_thr=45,
             y = int(ys[i])
             if not any(abs(y - b) < dpx * 0.5 for b in bnd):
                 spike_ys.append(y)
-    # gaps внутри [start,end]
-    gthr = int(gap_m * dpx)
-    gap_rows = int(dy[dy > gthr].sum()) if len(dy) else 0
+    # gaps внутри [start,end] — считаем ТОЛЬКО где ЧЕРНИЛО кривой ЕСТЬ (реальный пропуск),
+    # а не легитимное отсутствие кривой (эксперт там не рисовал). Проверяем чернило у линейной
+    # интерполяции через разрыв (±gapW), чтобы не считать чужую линию.
+    gthr = int(gap_m * dpx); gapW = 25
+    miss = 0
+    chk = chan if chan is not None else (gray < 150)
+    for i in range(1, n):
+        if dy[i - 1] <= gthr:
+            continue
+        ya, yb, xa, xb = ys[i - 1], ys[i], xs[i - 1], xs[i]
+        for y in range(ya + 1, yb):
+            xi = int(xa + (xb - xa) * (y - ya) / (yb - ya))
+            x0 = max(0, xi - gapW); x1 = min(W, xi + gapW)
+            if chk[y, x0:x1].any():
+                miss += 1
+    gap_rows = miss
     # out-of-frame: точка в no-line зоне (ruler/frame/text) И НЕ на черниле своего цвета.
     # «И не на черниле» отсекает ложные A3-срабатывания (кривую, помеченную как текст на 1:500):
     # если точка на реальном черниле — это кривая, а не стрэй.

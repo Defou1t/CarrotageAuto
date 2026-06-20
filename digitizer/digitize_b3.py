@@ -38,7 +38,8 @@ def curve_pred(short):
     return is_this
 
 
-def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_gate=18):
+def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_gate=18,
+                 chan2=None, fill_gate2=10):
     """Собрать X-трассу кривой из одноцветных B3-линий, трассирующих её (медиана |Δx|<tol).
     Перевынос = несколько линий-уровней → берём ближайшую к шаблонной трассе на каждой строке.
     PER-ROW ГЕЙТ (row_tol): точку пишем ТОЛЬКО если она близка к эталону на ЭТОЙ строке —
@@ -61,16 +62,20 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_g
                     continue
                 if y not in agg or abs(bx - gx) < abs(agg[y] - gx):
                     agg[y] = bx
-    if chan is not None:                              # gap-fill из чернил у эталона
-        H, W = chan.shape
+    def _fill(mask, gate):
+        H, W = mask.shape
         for y, gx in gd.items():
             if y in agg or not (0 <= y < H):
                 continue
-            x0 = max(0, gx - fill_gate); x1 = min(W, gx + fill_gate)
-            idx = np.nonzero(chan[y, x0:x1])[0]
+            x0 = max(0, gx - gate); x1 = min(W, gx + gate)
+            idx = np.nonzero(mask[y, x0:x1])[0]
             if len(idx):
                 xs = idx + x0
                 agg[y] = float(xs[np.argmin(np.abs(xs - gx))])
+    if chan is not None:                              # 1) своё чернило у эталона
+        _fill(chan, fill_gate)
+    if chan2 is not None:                             # 2) ОККЛЮЗИЯ: где своего нет — любое тёмное
+        _fill(chan2, fill_gate2)                      # чернило перекрывающей линии (узкий гейт)
     new_xs = [int(round(agg[top_y + i])) if (top_y + i) in agg else NULL for i in range(n)]
     own = float(np.median([abs(agg[y] - gd[y]) for y in agg])) if agg else None
     return new_xs, len(agg), own
