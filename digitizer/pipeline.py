@@ -1,7 +1,7 @@
 r"""
 pipeline.py — ЕДИНЫЙ вход нового пайплайна оцифровки. Ничего лишнего: 1 скрипт, 2 режима.
 
-  python pipeline.py process <файл.nlgx | папка> [--regrid] [--patch-scan] [--out DIR]
+  python pipeline.py process <файл.nlgx | папка> [--las] [--regrid] [--patch-scan] [--out DIR]
       Обработать скан(ы) → сдаваемый _auto.nlgx(+bck). Папка = батч по всем *.nlgx + CSV.
 
   python pipeline.py learn <папка с проверенными nlgx(+bck)+las>
@@ -29,18 +29,19 @@ def cmd_process(args):
     target = args[0]
     out = args[args.index("--out") + 1] if "--out" in args else None
     do_regrid = "--regrid" in args
+    las = "--las" in args
     patch_scan = "--patch-scan" in args
     p = Path(target)
     if p.is_dir():
         files = sorted(f for f in p.glob("*.nlgx") if "_auto" not in f.stem)
         print(f"БАТЧ process: {len(files)} файлов")
-        rows = [d3.digitize_one(f, None, out, do_regrid, patch_scan) for f in files]
+        rows = [d3.digitize_one(f, None, out, do_regrid, patch_scan, las) for f in files]
         okn = sum(1 for r in rows if r["dst"])
         cov = [r["cover_pct"] for r in rows if r["cover_pct"] is not None]
         print(f"\nГОТОВО: {okn}/{len(files)}; медиана покрытия {np.median(cov) if cov else '-'}%")
     else:
         image = args[args.index("--image") + 1] if "--image" in args else None
-        r = d3.digitize_one(target, image, out, do_regrid, patch_scan)
+        r = d3.digitize_one(target, image, out, do_regrid, patch_scan, las)
         print(f"-> {r.get('dst')}")
 
 

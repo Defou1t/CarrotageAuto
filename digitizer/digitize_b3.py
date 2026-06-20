@@ -16,7 +16,6 @@ write nlgx(+bck) + верификация. Шаблон даёт калибро�
 import sys, struct, csv
 from pathlib import Path
 import numpy as np
-import cv2
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 from extract_nlgx import extract, NULL
@@ -90,11 +89,14 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_g
             if v is not None:
                 agg[y] = v
     new_xs = [int(round(agg[top_y + i])) if (top_y + i) in agg else NULL for i in range(n)]
-    own = float(np.median([abs(agg[y] - gd[y]) for y in agg])) if agg else None
+    # own_px только по строкам, где есть И эталон (agg содержит и доплотнённые строки вне gd)
+    dd = [abs(agg[y] - gd[y]) for y in agg if y in gd]
+    own = float(np.median(dd)) if dd else None
     return new_xs, len(agg), own
 
 
-def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, verbose=True):
+def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False,
+                 las=False, verbose=True):
     nlgx = str(nlgx)
     out = Path(out) if out else Path(r"F:\nds\output")
     out.mkdir(parents=True, exist_ok=True)
@@ -118,9 +120,6 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, 
         body = np.zeros((H, W), np.uint8); body[g["top_y"]:g["bottom_y"], xl:xr] = 1
         chans = ei.classify_ink(rgb, body)
         chans["black"] = (chans["black"] & (masks["exclude"] == 0)).astype(np.uint8)
-        # для окклюзии (ведём по перекрывающей линии): любое тёмное чернило кривых минус грид/текст
-        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-        any_ink = (((gray < 150) & (body > 0)) & (masks["exclude"] == 0)).astype(np.uint8)
         curves = ds.real_curves(m)
         res["curves"] = len(curves)
 
@@ -133,15 +132,15 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, 
             if len(gd) < 30:
                 continue
             gtc = ei._gt_color(rgb, gd)
-            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty,
-                                              chan=chans.get(gtc), chan2=any_ink)
+            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty, chan=chans.get(gtc))
             if nfill < 20:
                 continue
             idxs = find_ifd(ifds, curve_pred(short))
             if not idxs:
                 continue
             set_tag(ifds, idxs[0], 35490, 4, new_xs)
-            written.append(short); owns.append(own); covs.append(nfill / len(gd) * 100)
+            rng = max(gd) - min(gd) + 1          # покрытие = доля ГЛУБИННОГО диапазона (fill плотный)
+            written.append(short); owns.append(own); covs.append(min(100.0, nfill / rng * 100))
         res["written"] = len(written)
         res["own_px"] = round(float(np.median(owns)), 1) if owns else None
         res["cover_pct"] = round(float(np.median(covs)), 0) if covs else None
@@ -159,6 +158,9 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, 
         open(dst, "wb").write(data)
         open(out / f"{stem}_auto.bck", "wb").write(write_bck(data))
         res["dst"] = str(dst)
+        if las:                                  # достроить сдачу: nlgx+bck+LAS
+            import export_las
+            export_las.export(str(dst), verbose=False)
 
         # верификация: переоткрыть, сверить что записанные xs совпали с агрегатом
         m2 = extract(str(dst)); ok = 0
@@ -186,6 +188,7 @@ def main():
     image = a[a.index("--image") + 1] if "--image" in a else None
     out = a[a.index("--out") + 1] if "--out" in a else None
     do_regrid = "--regrid" in a          # пересобрать сетку (нативный шаг); по умолч. НЕ трогаем
+    las = "--las" in a                   # достроить сдачу LAS (значения)
     patch_scan = "--patch-scan" in a
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
@@ -195,7 +198,7 @@ def main():
         print(f"БАТЧ: {len(files)} файлов в {p}")
         rows = []
         for f in files:
-            rows.append(digitize_one(f, None, out, do_regrid, patch_scan))
+            rows.append(digitize_one(f, None, out, do_regrid, patch_scan, las))
         okn = sum(1 for r in rows if r["dst"])
         cov = [r["cover_pct"] for r in rows if r["cover_pct"] is not None]
         print(f"\nГОТОВО: {okn}/{len(files)} файлов; медиана покрытия "
@@ -206,7 +209,7 @@ def main():
             w.writeheader(); w.writerows(rows)
         print(f"CSV -> {csvp}")
     else:
-        r = digitize_one(target, image, out, do_regrid, patch_scan)
+        r = digitize_one(target, image, out, do_regrid, patch_scan, las)
         print(f"-> {r.get('dst')}")
 
 
