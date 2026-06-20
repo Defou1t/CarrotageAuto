@@ -25,6 +25,7 @@ from set_depth_grid import regrid
 import dataset as ds
 import track_identity as ti
 import extract_instances as ei
+import behavior_priors as bp
 
 
 def curve_pred(short):
@@ -39,7 +40,7 @@ def curve_pred(short):
 
 
 def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_gate=14,
-                 chan2=None, fill_gate2=5, occ_max=50):
+                 occ_lines=None, fill_gate2=6, occ_max=20):
     """Собрать X-трассу кривой из одноцветных B3-линий, трассирующих её (медиана |Δx|<tol).
     Перевынос = несколько линий-уровней → берём ближайшую к шаблонной трассе на каждой строке.
     PER-ROW ГЕЙТ (row_tol): точку пишем ТОЛЬКО если она близка к эталону на ЭТОЙ строке —
@@ -84,11 +85,12 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_g
             v = _snap(chan, y, float(np.interp(y, ga, xa)), fill_gate)
             if v is not None:
                 agg[y] = v
-        # ОККЛЮЗИЯ (аккуратно): своего цвета нет только в КОРОТКИХ разрывах, ОБРАМЛЁННЫХ own-color
-        # точками (вход/выход из-под перекрывающей линии) → ведём по перекрывающей (chan2=любое
-        # тёмное) с УЗКИМ гейтом у интерполяции БРАКЕТА. Длинные/необрамлённые разрывы (легитимное
-        # отсутствие) НЕ трогаем — иначе свопы/off-ink (баг широкого any-ink).
-        if chan2 is not None:
+        # ОККЛЮЗИЯ через ИДЕНТИЧНОСТЬ B3: своего цвета нет в КОРОТКОМ разрыве, ОБРАМЛЁННОМ own-color
+        # точками (вход/выход из-под другой линии) → ведём по ПЕРЕКРЫВАЮЩЕЙ B3-ЛИНИИ, стоящей у
+        # направляющей бракета. Это РЕАЛЬНАЯ кривая (GZ1), а не грид/baseline — поэтому бледная MDS
+        # (где у направляющей НЕТ B3-линии) НЕ заливается (фикс свопов широкого any-ink). Заливаем
+        # лишь если перекрыватель НЕПРЕРЫВЕН (≥80% строк разрыва).
+        if occ_lines:
             ays = sorted(agg)
             for i in range(1, len(ays)):
                 ya, yb = ays[i - 1], ays[i]
@@ -98,11 +100,13 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_g
                 cand = {}
                 for y in range(ya + 1, yb):
                     gx = xa2 + (xb2 - xa2) * (y - ya) / (yb - ya)
-                    v = _snap(chan2, y, gx, fill_gate2)
-                    if v is not None:
-                        cand[y] = v
-                # заливаем ТОЛЬКО если перекрыватель НЕПРЕРЫВЕН (ink почти на каждой строке разрыва):
-                # GZ2 под чёрной GZ1 — непрерывна; бледная MDS без перекрывателя — нет (не свопаем).
+                    best, bd = None, fill_gate2
+                    for L in occ_lines:
+                        lx = L["tr"].get(y)
+                        if lx is not None and abs(lx - gx) < bd:
+                            bd = abs(lx - gx); best = lx
+                    if best is not None:
+                        cand[y] = best
                 if len(cand) >= 0.8 * (yb - ya - 1):
                     agg.update(cand)
     new_xs = [int(round(agg[top_y + i])) if (top_y + i) in agg else NULL for i in range(n)]
@@ -149,10 +153,12 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False,
             if len(gd) < 30:
                 continue
             gtc = ei._gt_color(rgb, gd)
-            # chan2 (окклюзия по перекрывающей) ОТКЛЮЧЕН: any-ink gap-fill регрессирует
-            # (грабит чужое на синих caliper/OGZ — off_ink/свопы). Окклюзия GZ2-под-GZ1 требует
-            # идентичности на уровне B3 («кривая под кривой»), не gap-fill — отложено.
-            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty, chan=chans.get(gtc))
+            # окклюзия через B3-идентичность ТОЛЬКО для РЕЗИСТИВНЫХ кривых (GZ/BK/... пересекаются;
+            # caliper DS/MDS — одиночные, не окклюзируются → не свопаем). Перекрыватели = B3-линии
+            # другого цвета (GZ1 для GZ2).
+            occ = [L for L in lines if L["color"] != gtc] if bp.curve_class(short) == "RES" else None
+            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty,
+                                              chan=chans.get(gtc), occ_lines=occ)
             if nfill < 20:
                 continue
             idxs = find_ifd(ifds, curve_pred(short))
