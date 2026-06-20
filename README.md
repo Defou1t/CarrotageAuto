@@ -48,6 +48,36 @@ The current pipeline is **identity-aware and image-understanding-first**, organi
 Validation is always against expert ground-truth (`.nlgx` traces): per-curve pixel error,
 coverage, and **swap rate** (does a line stay on its own identity).
 
+## Pipeline at a glance
+
+```mermaid
+flowchart TD
+    SCAN[/"Scan&nbsp;(JPEG/TIFF)"/] --> PIPE
+    TPL[/"nlgx template<br/>calibration + curve defs"/] --> PIPE
+    PIPE["pipeline.py process"] --> D3["digitize_b3.digitize_one"]
+
+    D3 --> TI["track_identity (B3)"]
+    subgraph PB["Phase B — identity & behaviour"]
+        TI --> EI["extract_instances (B1)<br/>colour → line strokes + props"]
+        EI --> DM["detect_masks (A3)<br/>exclude grid/text/ruler"]
+        EI --> BP["behavior_priors (B2)<br/>rough_n smooth/peaky"]
+        TI --> LINK["link_strokes<br/>colour + trajectory → identity lines"]
+    end
+
+    LINK --> AGG["aggregate_xs<br/>lines → curve, per-row gate"]
+    TPL -. "level segments + scale family" .-> AGG
+    GRID["set_depth_grid / detect_calibration<br/>(A2/A2b, optional --regrid)"] --> WRITE
+    DS["detect_scales (A1)<br/>ruler → scales via VLM"] -. "scale ranges" .-> AGG
+    AGG --> WRITE["write_nlgx<br/>set_tag 35490 + bck"]
+    WRITE --> OUT[/"_auto.nlgx (+ .bck)"/]
+    OUT --> QC{{"NeuraLOG QC<br/>(expert edits)"}}
+    QC -. "verified nlgx+las" .-> LEARN["pipeline.py learn<br/>→ corpus + priors.json"]
+    LEARN -. priors .-> BP
+```
+
+`process` is pure OpenCV/NumPy (Phase A/B); `detect_scales` (A1) is optional and uses a local
+vision LLM. The dashed arrows are reference/feedback inputs, not the main data path.
+
 ## Quick start
 
 The whole pipeline has one entry point — `digitizer/pipeline.py`:
