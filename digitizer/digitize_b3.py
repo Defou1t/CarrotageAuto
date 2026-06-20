@@ -39,7 +39,7 @@ def curve_pred(short):
 
 
 def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_gate=14,
-                 chan2=None, fill_gate2=8):
+                 chan2=None, fill_gate2=5, occ_max=50):
     """Собрать X-трассу кривой из одноцветных B3-линий, трассирующих её (медиана |Δx|<tol).
     Перевынос = несколько линий-уровней → берём ближайшую к шаблонной трассе на каждой строке.
     PER-ROW ГЕЙТ (row_tol): точку пишем ТОЛЬКО если она близка к эталону на ЭТОЙ строке —
@@ -62,10 +62,9 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_g
                     continue
                 if y not in agg or abs(bx - gx) < abs(agg[y] - gx):
                     agg[y] = bx
-    # ПЛОТНЫЙ ink-follow: на КАЖДОЙ строке диапазона снапим к ближайшему чернилу у направляющей
-    # (интерполяция эталона). Это ловит КОНЧИКИ ПИКОВ (на строке пика чернило = вершина), а не
-    # срезает их прямой между разреженными точками эталона. Окклюзия: нет своего цвета → ведём
-    # по ПЕРЕКРЫВАЮЩЕЙ линии (chan2=любое тёмное чернило, узкий гейт).
+    # ПЛОТНЫЙ ink-follow: на КАЖДОЙ строке диапазона снапим к ближайшему чернилу СВОЕГО ЦВЕТА у
+    # направляющей (интерполяция эталона). Ловит КОНЧИКИ ПИКОВ (на строке пика чернило = вершина),
+    # а не срезает их прямой между разреженными точками эталона.
     def _snap(mask, y, gx, gate):
         H, W = mask.shape
         if not (0 <= y < H):
@@ -82,12 +81,30 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_g
         for y in range(gys[0], gys[-1] + 1):
             if y in agg:
                 continue
-            gx = float(np.interp(y, ga, xa))
-            v = _snap(chan, y, gx, fill_gate)
-            if v is None and chan2 is not None:           # окклюзия → по перекрывающей
-                v = _snap(chan2, y, gx, fill_gate2)
+            v = _snap(chan, y, float(np.interp(y, ga, xa)), fill_gate)
             if v is not None:
                 agg[y] = v
+        # ОККЛЮЗИЯ (аккуратно): своего цвета нет только в КОРОТКИХ разрывах, ОБРАМЛЁННЫХ own-color
+        # точками (вход/выход из-под перекрывающей линии) → ведём по перекрывающей (chan2=любое
+        # тёмное) с УЗКИМ гейтом у интерполяции БРАКЕТА. Длинные/необрамлённые разрывы (легитимное
+        # отсутствие) НЕ трогаем — иначе свопы/off-ink (баг широкого any-ink).
+        if chan2 is not None:
+            ays = sorted(agg)
+            for i in range(1, len(ays)):
+                ya, yb = ays[i - 1], ays[i]
+                if not (1 < yb - ya <= occ_max):
+                    continue
+                xa2, xb2 = agg[ya], agg[yb]
+                cand = {}
+                for y in range(ya + 1, yb):
+                    gx = xa2 + (xb2 - xa2) * (y - ya) / (yb - ya)
+                    v = _snap(chan2, y, gx, fill_gate2)
+                    if v is not None:
+                        cand[y] = v
+                # заливаем ТОЛЬКО если перекрыватель НЕПРЕРЫВЕН (ink почти на каждой строке разрыва):
+                # GZ2 под чёрной GZ1 — непрерывна; бледная MDS без перекрывателя — нет (не свопаем).
+                if len(cand) >= 0.8 * (yb - ya - 1):
+                    agg.update(cand)
     new_xs = [int(round(agg[top_y + i])) if (top_y + i) in agg else NULL for i in range(n)]
     # own_px только по строкам, где есть И эталон (agg содержит и доплотнённые строки вне gd)
     dd = [abs(agg[y] - gd[y]) for y in agg if y in gd]
@@ -132,6 +149,9 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False,
             if len(gd) < 30:
                 continue
             gtc = ei._gt_color(rgb, gd)
+            # chan2 (окклюзия по перекрывающей) ОТКЛЮЧЕН: any-ink gap-fill регрессирует
+            # (грабит чужое на синих caliper/OGZ — off_ink/свопы). Окклюзия GZ2-под-GZ1 требует
+            # идентичности на уровне B3 («кривая под кривой»), не gap-fill — отложено.
             new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty, chan=chans.get(gtc))
             if nfill < 20:
                 continue
