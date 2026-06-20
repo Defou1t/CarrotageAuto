@@ -16,6 +16,7 @@ write nlgx(+bck) + верификация. Шаблон даёт калибро�
 import sys, struct, csv
 from pathlib import Path
 import numpy as np
+import cv2
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 from extract_nlgx import extract, NULL
@@ -38,8 +39,8 @@ def curve_pred(short):
     return is_this
 
 
-def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_gate=18,
-                 chan2=None, fill_gate2=10):
+def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_gate=14,
+                 chan2=None, fill_gate2=8):
     """Собрать X-трассу кривой из одноцветных B3-линий, трассирующих её (медиана |Δx|<tol).
     Перевынос = несколько линий-уровней → берём ближайшую к шаблонной трассе на каждой строке.
     PER-ROW ГЕЙТ (row_tol): точку пишем ТОЛЬКО если она близка к эталону на ЭТОЙ строке —
@@ -62,20 +63,32 @@ def aggregate_xs(lines, gd, gtc, n, top_y, tol=12, row_tol=25, chan=None, fill_g
                     continue
                 if y not in agg or abs(bx - gx) < abs(agg[y] - gx):
                     agg[y] = bx
-    def _fill(mask, gate):
+    # ПЛОТНЫЙ ink-follow: на КАЖДОЙ строке диапазона снапим к ближайшему чернилу у направляющей
+    # (интерполяция эталона). Это ловит КОНЧИКИ ПИКОВ (на строке пика чернило = вершина), а не
+    # срезает их прямой между разреженными точками эталона. Окклюзия: нет своего цвета → ведём
+    # по ПЕРЕКРЫВАЮЩЕЙ линии (chan2=любое тёмное чернило, узкий гейт).
+    def _snap(mask, y, gx, gate):
         H, W = mask.shape
-        for y, gx in gd.items():
-            if y in agg or not (0 <= y < H):
+        if not (0 <= y < H):
+            return None
+        x0 = max(0, int(gx) - gate); x1 = min(W, int(gx) + gate)
+        idx = np.nonzero(mask[y, x0:x1])[0]
+        if len(idx):
+            xs = idx + x0
+            return float(xs[np.argmin(np.abs(xs - gx))])
+        return None
+    gys = sorted(gd)
+    if len(gys) >= 2 and chan is not None:
+        ga = np.array(gys, float); xa = np.array([gd[y] for y in gys], float)
+        for y in range(gys[0], gys[-1] + 1):
+            if y in agg:
                 continue
-            x0 = max(0, gx - gate); x1 = min(W, gx + gate)
-            idx = np.nonzero(mask[y, x0:x1])[0]
-            if len(idx):
-                xs = idx + x0
-                agg[y] = float(xs[np.argmin(np.abs(xs - gx))])
-    if chan is not None:                              # 1) своё чернило у эталона
-        _fill(chan, fill_gate)
-    if chan2 is not None:                             # 2) ОККЛЮЗИЯ: где своего нет — любое тёмное
-        _fill(chan2, fill_gate2)                      # чернило перекрывающей линии (узкий гейт)
+            gx = float(np.interp(y, ga, xa))
+            v = _snap(chan, y, gx, fill_gate)
+            if v is None and chan2 is not None:           # окклюзия → по перекрывающей
+                v = _snap(chan2, y, gx, fill_gate2)
+            if v is not None:
+                agg[y] = v
     new_xs = [int(round(agg[top_y + i])) if (top_y + i) in agg else NULL for i in range(n)]
     own = float(np.median([abs(agg[y] - gd[y]) for y in agg])) if agg else None
     return new_xs, len(agg), own
@@ -105,6 +118,9 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, 
         body = np.zeros((H, W), np.uint8); body[g["top_y"]:g["bottom_y"], xl:xr] = 1
         chans = ei.classify_ink(rgb, body)
         chans["black"] = (chans["black"] & (masks["exclude"] == 0)).astype(np.uint8)
+        # для окклюзии (ведём по перекрывающей линии): любое тёмное чернило кривых минус грид/текст
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        any_ink = (((gray < 150) & (body > 0)) & (masks["exclude"] == 0)).astype(np.uint8)
         curves = ds.real_curves(m)
         res["curves"] = len(curves)
 
@@ -117,7 +133,8 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, 
             if len(gd) < 30:
                 continue
             gtc = ei._gt_color(rgb, gd)
-            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty, chan=chans.get(gtc))
+            new_xs, nfill, own = aggregate_xs(lines, gd, gtc, n, ty,
+                                              chan=chans.get(gtc), chan2=any_ink)
             if nfill < 20:
                 continue
             idxs = find_ifd(ifds, curve_pred(short))
