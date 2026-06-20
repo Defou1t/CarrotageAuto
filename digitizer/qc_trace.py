@@ -75,8 +75,11 @@ def qc_curve(m, c, gray, chan, exclude, dpx, dof, tol_x=5, vwin=1, spike_thr=45,
     # gaps внутри [start,end]
     gthr = int(gap_m * dpx)
     gap_rows = int(dy[dy > gthr].sum()) if len(dy) else 0
-    # out-of-frame: точка трассы в exclude-зоне A3
-    oof = int((exclude[np.clip(ys, 0, H - 1), np.clip(xs, 0, W - 1)] > 0).sum())
+    # out-of-frame: точка в no-line зоне (ruler/frame/text) И НЕ на черниле своего цвета.
+    # «И не на черниле» отсекает ложные A3-срабатывания (кривую, помеченную как текст на 1:500):
+    # если точка на реальном черниле — это кривая, а не стрэй.
+    in_noline = exclude[np.clip(ys, 0, H - 1), np.clip(xs, 0, W - 1)] > 0
+    oof = int((in_noline & ~on).sum())
     return {"name": c["name"].split()[0], "n": n,
             "off_ink_pct": round(off / n * 100, 1), "spikes": len(spike_ys),
             "gap_m": round(gap_rows / dpx, 1), "oof_pct": round(oof / n * 100, 1),
@@ -137,12 +140,13 @@ def qc_file(nlgx, image=None, overlay=False, verbose=True):
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     masks = dm.compute_masks(rgb, m)
     g = masks["geom"]; xl = max(0, g["x_left"] - 5); xr = min(W, (g["x_right"] or W) + 30)
-    body = np.zeros((H, W), np.uint8); body[g["top_y"]:g["bottom_y"], xl:xr] = 1
-    body = ((body > 0) & (masks["exclude"] == 0)).astype(np.uint8)
-    chans = ei.classify_ink(rgb, body)
-    # oof — только зоны, где линии БЫТЬ НЕ ДОЛЖНО (полоса/рамка/текст), НЕ грид
-    # (кривая законно пересекает грид-линии — это не ошибка).
+    # oof / off_ink — только зоны, где линии БЫТЬ НЕ ДОЛЖНО (полоса/рамка/текст), НЕ грид
+    # (кривая законно пересекает грид-линии). Цветные маски считаем по тому же body (грид
+    # оставлен) — согласованно с gap-fill digitize_b3; чёрный — минус весь exclude (грид чёрный).
     noline = ((masks["ruler"] | masks["frame"] | masks["text"]) > 0).astype(np.uint8)
+    body = np.zeros((H, W), np.uint8); body[g["top_y"]:g["bottom_y"], xl:xr] = 1
+    chans = ei.classify_ink(rgb, body)                       # ПОЛНОЕ body (как в gap-fill)
+    chans["black"] = (chans["black"] & (masks["exclude"] == 0)).astype(np.uint8)
     out = []
     for c in ds.real_curves(m):
         gtc = ei._gt_color(rgb, _trace(c, H))

@@ -93,11 +93,13 @@ def digitize_one(nlgx, image=None, out=None, do_regrid=False, patch_scan=False, 
         rgb = np.asarray(Image.open(img).convert("RGB"))
         H, W = rgb.shape[:2]
         lines, masks = ti.track_identity(rgb, m)
-        # цветовые каналы для gap-fill (те же, что в B1): тело трека минус exclude-маска A3
+        # цветовые каналы для gap-fill на ПОЛНОМ теле трека (без вычитания масок): A3 на 1:500
+        # съедала кривую — и грид (exclude ~46%), и саму сжатую пиковую кривую как «текст».
+        # Цветной грид/текст редок (red/blue/green безопасны); ЧЁРНЫЙ — минус весь exclude (грид чёрный).
         g = masks["geom"]; xl = max(0, g["x_left"] - 5); xr = min(W, (g["x_right"] or W) + 30)
         body = np.zeros((H, W), np.uint8); body[g["top_y"]:g["bottom_y"], xl:xr] = 1
-        body = ((body > 0) & (masks["exclude"] == 0)).astype(np.uint8)
         chans = ei.classify_ink(rgb, body)
+        chans["black"] = (chans["black"] & (masks["exclude"] == 0)).astype(np.uint8)
         curves = ds.real_curves(m)
         res["curves"] = len(curves)
 
