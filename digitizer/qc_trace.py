@@ -37,6 +37,24 @@ def _trace(c, H):
     return {ty + i: x for i, x in enumerate(c["xs"]) if x != NULL and 0 <= ty + i < H}
 
 
+def _pick_color(tr, dchans, H, W):
+    """Цвет кривой для QC = канал с МАКС on-ink покрытием трассы (а не median-hue).
+    Устойчив к флипу у ЧЁРНОЙ кривой рядом с цветными: NARIZHN GZ2 физически чёрный
+    (покрытие чёрного 100% vs красного 45%), median-hue ловил красный от соседних GZ3/GZ4
+    → off_ink мерялся против ЧУЖОГО канала (ложные 55%, трасса при этом = эксперт, 0px).
+    Истинные свопы цвето-независимо ловит overlap-метрика. dchans — пред-дилат. маски каналов."""
+    if not tr:
+        return "black"
+    ys = np.fromiter(tr.keys(), dtype=int); xs = np.fromiter(tr.values(), dtype=int)
+    yc = np.clip(ys, 0, H - 1); xc = np.clip(xs, 0, W - 1)
+    best, bestcov = "black", -1.0
+    for col, d in dchans.items():
+        cov = float((d[yc, xc] > 0).mean())
+        if cov > bestcov:
+            bestcov, best = cov, col
+    return best
+
+
 def _level_bnds(c):
     """y-границы смены уровня (перевынос) — там скачок x ОЖИДАЕМ."""
     bs = []
@@ -164,9 +182,13 @@ def qc_file(nlgx, image=None, overlay=False, verbose=True):
     body = np.zeros((H, W), np.uint8); body[g["top_y"]:g["bottom_y"], xl:xr] = 1
     chans = ei.classify_ink(rgb, body)                       # ПОЛНОЕ body (как в gap-fill)
     chans["black"] = (chans["black"] & (masks["exclude"] == 0)).astype(np.uint8)
+    # цвет кривой для off_ink берём по МАКС покрытию (а не median-hue): см. _pick_color
+    k_ink = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 3))  # ±5x,±1y как off_ink в qc_curve
+    dchans = {col: cv2.dilate((ch > 0).astype(np.uint8), k_ink)
+              for col, ch in chans.items() if ch is not None}
     out = []
     for c in ds.real_curves(m):
-        gtc = ei._gt_color(rgb, _trace(c, H))
+        gtc = _pick_color(_trace(c, H), dchans, H, W)
         q = qc_curve(m, c, gray, chans.get(gtc), noline, dpx, dof)
         if q:
             q["color"] = gtc; q["file"] = Path(nlgx).stem
@@ -192,11 +214,14 @@ def qc_file(nlgx, image=None, overlay=False, verbose=True):
 def _overlay(rgb, m, qc, gray, chans, masks, stem):
     """Подсветка подозрительных точек: off-ink (красный), oof (жёлтый), spike (синий круг)."""
     H, W = rgb.shape[:2]; ov = rgb.copy()
+    k_ink = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 3))
+    dchans = {col: cv2.dilate((ch > 0).astype(np.uint8), k_ink)
+              for col, ch in chans.items() if ch is not None}
     for c in ds.real_curves(m):
         tr = _trace(c, H)
         if len(tr) < 30:
             continue
-        gtc = ei._gt_color(rgb, tr); chan = chans.get(gtc)
+        gtc = _pick_color(tr, dchans, H, W); chan = chans.get(gtc)
         ink = ((chan > 0) if chan is not None else (gray < 150)).astype(np.uint8)
         dil = cv2.dilate(ink, cv2.getStructuringElement(cv2.MORPH_RECT, (11, 3)))
         for y, x in tr.items():

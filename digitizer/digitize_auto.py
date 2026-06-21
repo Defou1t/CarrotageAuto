@@ -88,6 +88,12 @@ def digitize_one(nlgx, out=None, verbose=True):
         if not idxs:
             continue
         set_tag(ifds, idxs[0], 35490, 4, new_xs)
+        # сегмент на весь диапазон, level 0 — без 35492/94/96/98 NeuraLOG НЕ рисует кривую
+        # (рамка-заглушка имела 35492=0). NB: одношкальный выход; перевыносы (стадия 3) впишут уровни.
+        set_tag(ifds, idxs[0], 35492, 4, [1])
+        set_tag(ifds, idxs[0], 35494, 4, [int(top_y)])
+        set_tag(ifds, idxs[0], 35496, 4, [int(top_y + n - 1)])
+        set_tag(ifds, idxs[0], 35498, 4, [0])
         written.append((short, color, sum(1 for x in new_xs if x != NULL)))
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
