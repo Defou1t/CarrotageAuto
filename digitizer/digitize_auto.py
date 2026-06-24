@@ -48,7 +48,9 @@ def trace_color(chan, ty, by, slmax=25):
     return tr
 
 
-def digitize_one(nlgx, out=None, verbose=True):
+def digitize_one(nlgx, out=None, verbose=True, force_color=None):
+    # force_color: жёстко задать цвет кривой (BKZ/IK = 'blue'; чёрное на бланке = СЕТКА,
+    # авто-выбор по доминанте на них срывается). None = старое авто (одно-кривный MBK/AK).
     nlgx = str(nlgx)
     out = Path(out) if out else Path(r"F:\nds\output")
     out.mkdir(parents=True, exist_ok=True)
@@ -74,11 +76,14 @@ def digitize_one(nlgx, out=None, verbose=True):
     written = []
     for c in curves:
         short = c["name"].split()[0]
-        # доминирующий цвет линий (по сумме длин)
-        bycol = {}
-        for L in lines:
-            bycol[L["color"]] = bycol.get(L["color"], 0) + len(L["tr"])
-        color = max(bycol, key=bycol.get) if bycol else "black"
+        if force_color:
+            color = force_color
+        else:
+            # доминирующий цвет линий (по сумме длин)
+            bycol = {}
+            for L in lines:
+                bycol[L["color"]] = bycol.get(L["color"], 0) + len(L["tr"])
+            color = max(bycol, key=bycol.get) if bycol else "black"
         tr = trace_color(chans[color], ty, by)
         if len(tr) < 30:
             continue
@@ -94,6 +99,15 @@ def digitize_one(nlgx, out=None, verbose=True):
         set_tag(ifds, idxs[0], 35494, 4, [int(top_y)])
         set_tag(ifds, idxs[0], 35496, 4, [int(top_y + n - 1)])
         set_tag(ifds, idxs[0], 35498, 4, [0])
+        # bbox трассы 35478/80/82/84 — NeuraLOG доверяет этим кэш-тегам (их не пишет НИКАКОЙ
+        # код, в рабочем пути они наследуются из эталон-рамки); рассинхрон с реальной трассой = краш.
+        vx = [(i, x) for i, x in enumerate(new_xs) if x != NULL]
+        if vx:
+            rws = [top_y + i for i, _ in vx]; xsv = [x for _, x in vx]
+            set_tag(ifds, idxs[0], 35478, 4, [min(xsv)])
+            set_tag(ifds, idxs[0], 35480, 4, [min(rws)])
+            set_tag(ifds, idxs[0], 35482, 4, [max(xsv)])
+            set_tag(ifds, idxs[0], 35484, 4, [max(rws)])
         written.append((short, color, sum(1 for x in new_xs if x != NULL)))
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
@@ -111,8 +125,9 @@ def main():
     if not a:
         print(__doc__); return
     out = a[a.index("--out") + 1] if "--out" in a else None
+    color = a[a.index("--color") + 1] if "--color" in a else None
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
-    digitize_one(a[0], out)
+    digitize_one(a[0], out, force_color=color)
 
 
 if __name__ == "__main__":

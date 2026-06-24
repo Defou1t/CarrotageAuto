@@ -1,0 +1,377 @@
+{
+  "F:\\nds\\Auto\\.claude\\settings.local.json": {
+    "mtime": 1781340583.4259224,
+    "ast_hash": "85cdfff34043dd928919eb117b77e791",
+    "semantic_hash": "85cdfff34043dd928919eb117b77e791"
+  },
+  "F:\\nds\\Auto\\analyze_log_image.py": {
+    "mtime": 1781188941.7555761,
+    "ast_hash": "33105dfea742d26084eb2044c1e32610",
+    "semantic_hash": "33105dfea742d26084eb2044c1e32610"
+  },
+  "F:\\nds\\Auto\\apply_patches.py": {
+    "mtime": 1780954706.3877034,
+    "ast_hash": "45554f744c8dafce08003d70f83c107d",
+    "semantic_hash": "45554f744c8dafce08003d70f83c107d"
+  },
+  "F:\\nds\\Auto\\auto_click_value.py": {
+    "mtime": 1781338379.166151,
+    "ast_hash": "10da35f2534b05ca9ddfc7b3beef6de7",
+    "semantic_hash": "10da35f2534b05ca9ddfc7b3beef6de7"
+  },
+  "F:\\nds\\Auto\\b4_calibrate.py": {
+    "mtime": 1781189413.5022776,
+    "ast_hash": "61f7b789d8ea42f1bb6abdfa74586d7e",
+    "semantic_hash": "61f7b789d8ea42f1bb6abdfa74586d7e"
+  },
+  "F:\\nds\\Auto\\b4_digitize.py": {
+    "mtime": 1781202422.4875348,
+    "ast_hash": "9765ed248888e5ae0b87617a1244e9c0",
+    "semantic_hash": "9765ed248888e5ae0b87617a1244e9c0"
+  },
+  "F:\\nds\\Auto\\b4_trace.py": {
+    "mtime": 1781341405.849405,
+    "ast_hash": "69012f4b32b53a5c864eae50834f8772",
+    "semantic_hash": "69012f4b32b53a5c864eae50834f8772"
+  },
+  "F:\\nds\\Auto\\batch_pipeline.py": {
+    "mtime": 1781095095.7201087,
+    "ast_hash": "33122c0cd686674c8de25d1cd449155c",
+    "semantic_hash": "33122c0cd686674c8de25d1cd449155c"
+  },
+  "F:\\nds\\Auto\\batch_qc.py": {
+    "mtime": 1781136232.067092,
+    "ast_hash": "83387af394f911d6f4f5f016e0e849cf",
+    "semantic_hash": "83387af394f911d6f4f5f016e0e849cf"
+  },
+  "F:\\nds\\Auto\\compare_trace_las.py": {
+    "mtime": 1781135109.9132557,
+    "ast_hash": "b1ee13119009913f948843768abfb140",
+    "semantic_hash": "b1ee13119009913f948843768abfb140"
+  },
+  "F:\\nds\\Auto\\detect_armed_tool.py": {
+    "mtime": 1781192374.6360886,
+    "ast_hash": "7dea22d0e6fbfb351f3bca099a291bbd",
+    "semantic_hash": "7dea22d0e6fbfb351f3bca099a291bbd"
+  },
+  "F:\\nds\\Auto\\digitizer\\analyze_behavior.py": {
+    "mtime": 1781447130.7436986,
+    "ast_hash": "5f1cb9e1298f75f56d86c622df879261",
+    "semantic_hash": "5f1cb9e1298f75f56d86c622df879261"
+  },
+  "F:\\nds\\Auto\\digitizer\\analyze_colors.py": {
+    "mtime": 1781445904.7908602,
+    "ast_hash": "91322e830061ce7de0a85cbd29a22f45",
+    "semantic_hash": "91322e830061ce7de0a85cbd29a22f45"
+  },
+  "F:\\nds\\Auto\\digitizer\\baseline_trace.py": {
+    "mtime": 1781378772.5100963,
+    "ast_hash": "34fdaee70b292554fe46aedc9cb16d2d",
+    "semantic_hash": "34fdaee70b292554fe46aedc9cb16d2d"
+  },
+  "F:\\nds\\Auto\\digitizer\\batch_digitize.py": {
+    "mtime": 1781529824.0310028,
+    "ast_hash": "567f4bbc9332e665ffd2452f4f32cbd1",
+    "semantic_hash": "567f4bbc9332e665ffd2452f4f32cbd1"
+  },
+  "F:\\nds\\Auto\\digitizer\\batch_eval.py": {
+    "mtime": 1781445136.7835271,
+    "ast_hash": "efd01a1b1fcd1eeda1fb6714e490633c",
+    "semantic_hash": "efd01a1b1fcd1eeda1fb6714e490633c"
+  },
+  "F:\\nds\\Auto\\digitizer\\batch_track_eval.py": {
+    "mtime": 1781480403.4491332,
+    "ast_hash": "e879f7abd102182383cffafd0787ce77",
+    "semantic_hash": "e879f7abd102182383cffafd0787ce77"
+  },
+  "F:\\nds\\Auto\\digitizer\\batch_validate.py": {
+    "mtime": 1781377128.3386135,
+    "ast_hash": "c9d5191271b7c4afe1c8d9b30908d053",
+    "semantic_hash": "c9d5191271b7c4afe1c8d9b30908d053"
+  },
+  "F:\\nds\\Auto\\digitizer\\behavior_priors.py": {
+    "mtime": 1781552936.7033749,
+    "ast_hash": "9e6417e669490ebf2932965640d830a8",
+    "semantic_hash": "9e6417e669490ebf2932965640d830a8"
+  },
+  "F:\\nds\\Auto\\digitizer\\cache_tracks.py": {
+    "mtime": 1781448441.7481403,
+    "ast_hash": "d918de77ff9e1385a0e0bb7b66bb3c02",
+    "semantic_hash": "d918de77ff9e1385a0e0bb7b66bb3c02"
+  },
+  "F:\\nds\\Auto\\digitizer\\dataset.py": {
+    "mtime": 1781377644.046816,
+    "ast_hash": "265bbc6188a81a4f2f9116ef09641c86",
+    "semantic_hash": "265bbc6188a81a4f2f9116ef09641c86"
+  },
+  "F:\\nds\\Auto\\digitizer\\dataset_build.py": {
+    "mtime": 1781377711.349729,
+    "ast_hash": "93e565c3c8c0cee21a231fae8ab77355",
+    "semantic_hash": "93e565c3c8c0cee21a231fae8ab77355"
+  },
+  "F:\\nds\\Auto\\digitizer\\decode_e2e.py": {
+    "mtime": 1781526966.8595626,
+    "ast_hash": "de950ebd97a17ae62763fe5223363050",
+    "semantic_hash": "de950ebd97a17ae62763fe5223363050"
+  },
+  "F:\\nds\\Auto\\digitizer\\decode_levels.py": {
+    "mtime": 1781528253.5899148,
+    "ast_hash": "2b36c6b734b5209066b11db8c78141f4",
+    "semantic_hash": "2b36c6b734b5209066b11db8c78141f4"
+  },
+  "F:\\nds\\Auto\\digitizer\\demo_masks.py": {
+    "mtime": 1781377460.157559,
+    "ast_hash": "b199e9c2557e1e0e2d9d3c05f04f6c3f",
+    "semantic_hash": "b199e9c2557e1e0e2d9d3c05f04f6c3f"
+  },
+  "F:\\nds\\Auto\\digitizer\\detect_calibration.py": {
+    "mtime": 1781546534.1870081,
+    "ast_hash": "b214c33760237571e29e27339f176404",
+    "semantic_hash": "b214c33760237571e29e27339f176404"
+  },
+  "F:\\nds\\Auto\\digitizer\\detect_masks.py": {
+    "mtime": 1781544296.5715888,
+    "ast_hash": "ac2947823c894580c6a576fb06cffb31",
+    "semantic_hash": "ac2947823c894580c6a576fb06cffb31"
+  },
+  "F:\\nds\\Auto\\digitizer\\detect_scales.py": {
+    "mtime": 1781548895.4552274,
+    "ast_hash": "ca9d0946efbee24bd9b182fc3139ce0e",
+    "semantic_hash": "ca9d0946efbee24bd9b182fc3139ce0e"
+  },
+  "F:\\nds\\Auto\\digitizer\\digitize.py": {
+    "mtime": 1781529801.8203566,
+    "ast_hash": "515b9d9f8201a644be9aa02d0c67dfb8",
+    "semantic_hash": "515b9d9f8201a644be9aa02d0c67dfb8"
+  },
+  "F:\\nds\\Auto\\digitizer\\digitize_auto.py": {
+    "mtime": 1782050419.7183766,
+    "ast_hash": "a37d08a61f3d88422d1f0f72fbcadad8",
+    "semantic_hash": "a37d08a61f3d88422d1f0f72fbcadad8"
+  },
+  "F:\\nds\\Auto\\digitizer\\digitize_b3.py": {
+    "mtime": 1781981183.9709642,
+    "ast_hash": "153c6530ddadd7f542c343994bcecd0e",
+    "semantic_hash": "153c6530ddadd7f542c343994bcecd0e"
+  },
+  "F:\\nds\\Auto\\digitizer\\eval_swaps.py": {
+    "mtime": 1781479739.069251,
+    "ast_hash": "e5ad84d62794ec7433d9ef6be3d4ef81",
+    "semantic_hash": "e5ad84d62794ec7433d9ef6be3d4ef81"
+  },
+  "F:\\nds\\Auto\\digitizer\\eval_viz.py": {
+    "mtime": 1781437704.1476877,
+    "ast_hash": "6f915ea197b93013ce88dc38641dc2e5",
+    "semantic_hash": "6f915ea197b93013ce88dc38641dc2e5"
+  },
+  "F:\\nds\\Auto\\digitizer\\export_las.py": {
+    "mtime": 1781975952.1877325,
+    "ast_hash": "4ce0ee2a3092bc437b16e8f3f7841eda",
+    "semantic_hash": "4ce0ee2a3092bc437b16e8f3f7841eda"
+  },
+  "F:\\nds\\Auto\\digitizer\\extract_instances.py": {
+    "mtime": 1781552928.8118868,
+    "ast_hash": "dc8876dd8c3d3c64d0f8bca004328a8d",
+    "semantic_hash": "dc8876dd8c3d3c64d0f8bca004328a8d"
+  },
+  "F:\\nds\\Auto\\digitizer\\extract_nlgx.py": {
+    "mtime": 1781377632.4701774,
+    "ast_hash": "617439eb054fb1a601272c6e02edf393",
+    "semantic_hash": "617439eb054fb1a601272c6e02edf393"
+  },
+  "F:\\nds\\Auto\\digitizer\\infer.py": {
+    "mtime": 1781437419.7916787,
+    "ast_hash": "3851c4bd29aafee5ea6b66f80076ff53",
+    "semantic_hash": "3851c4bd29aafee5ea6b66f80076ff53"
+  },
+  "F:\\nds\\Auto\\digitizer\\inject_trace.py": {
+    "mtime": 1781456725.6874998,
+    "ast_hash": "e249ac43656d03dc852b1b14cb68ea0d",
+    "semantic_hash": "e249ac43656d03dc852b1b14cb68ea0d"
+  },
+  "F:\\nds\\Auto\\digitizer\\overlay_diff.py": {
+    "mtime": 1781479503.1424668,
+    "ast_hash": "88f6cec15552d68d06d68fd690457619",
+    "semantic_hash": "88f6cec15552d68d06d68fd690457619"
+  },
+  "F:\\nds\\Auto\\digitizer\\overlay_nlgx.py": {
+    "mtime": 1781376303.3725493,
+    "ast_hash": "1cac7f6b965d498758b33fd557828b87",
+    "semantic_hash": "1cac7f6b965d498758b33fd557828b87"
+  },
+  "F:\\nds\\Auto\\digitizer\\parse_nlgx.py": {
+    "mtime": 1781375957.520244,
+    "ast_hash": "3470271d7e8863ee4d5f48a2999686f6",
+    "semantic_hash": "3470271d7e8863ee4d5f48a2999686f6"
+  },
+  "F:\\nds\\Auto\\digitizer\\pipeline.py": {
+    "mtime": 1781976075.6492488,
+    "ast_hash": "4c43e6a7e3c0a15c9f065820d66bf1fa",
+    "semantic_hash": "4c43e6a7e3c0a15c9f065820d66bf1fa"
+  },
+  "F:\\nds\\Auto\\digitizer\\prep_dataset.py": {
+    "mtime": 1781420720.5718884,
+    "ast_hash": "9d0bc1158ad3b4281be21ac8c1b62b1b",
+    "semantic_hash": "9d0bc1158ad3b4281be21ac8c1b62b1b"
+  },
+  "F:\\nds\\Auto\\digitizer\\qc_trace.py": {
+    "mtime": 1781995195.101751,
+    "ast_hash": "d1631a627c190135250b6b5d2f535ffa",
+    "semantic_hash": "d1631a627c190135250b6b5d2f535ffa"
+  },
+  "F:\\nds\\Auto\\digitizer\\rebuild_index.py": {
+    "mtime": 1781436802.4007201,
+    "ast_hash": "3dac37193788f8f89e1379094285e9a9",
+    "semantic_hash": "3dac37193788f8f89e1379094285e9a9"
+  },
+  "F:\\nds\\Auto\\digitizer\\render_labels.py": {
+    "mtime": 1781356240.1745107,
+    "ast_hash": "07490624b2eb47bcba7ef1555c0abba8",
+    "semantic_hash": "07490624b2eb47bcba7ef1555c0abba8"
+  },
+  "F:\\nds\\Auto\\digitizer\\resolve_swaps.py": {
+    "mtime": 1781456504.62512,
+    "ast_hash": "da9aa61148e95ee495f7447c9de2fab9",
+    "semantic_hash": "da9aa61148e95ee495f7447c9de2fab9"
+  },
+  "F:\\nds\\Auto\\digitizer\\set_depth_grid.py": {
+    "mtime": 1781546625.5485709,
+    "ast_hash": "11cad79b4ff5c330c80870ab35a2eae1",
+    "semantic_hash": "11cad79b4ff5c330c80870ab35a2eae1"
+  },
+  "F:\\nds\\Auto\\digitizer\\survey_levels.py": {
+    "mtime": 1781525972.2009485,
+    "ast_hash": "1afb33f4b270c20dacfe2dc152c4d8d8",
+    "semantic_hash": "1afb33f4b270c20dacfe2dc152c4d8d8"
+  },
+  "F:\\nds\\Auto\\digitizer\\track_identity.py": {
+    "mtime": 1781551060.1828039,
+    "ast_hash": "0610cbfd3da30a3562a9b9f7df0ec7f3",
+    "semantic_hash": "0610cbfd3da30a3562a9b9f7df0ec7f3"
+  },
+  "F:\\nds\\Auto\\digitizer\\track_multi.py": {
+    "mtime": 1781480008.266525,
+    "ast_hash": "063d0b69f17d86c24295e638aa858ea0",
+    "semantic_hash": "063d0b69f17d86c24295e638aa858ea0"
+  },
+  "F:\\nds\\Auto\\digitizer\\train.py": {
+    "mtime": 1781456622.605713,
+    "ast_hash": "a06025e2e102c57114ea8af1d1630882",
+    "semantic_hash": "a06025e2e102c57114ea8af1d1630882"
+  },
+  "F:\\nds\\Auto\\digitizer\\tune_track.py": {
+    "mtime": 1781479951.5678458,
+    "ast_hash": "ab43bbf1be86ed526071a6c05c3a70be",
+    "semantic_hash": "ab43bbf1be86ed526071a6c05c3a70be"
+  },
+  "F:\\nds\\Auto\\digitizer\\unet.py": {
+    "mtime": 1781379337.2586164,
+    "ast_hash": "e0a443b844ccdafcd61df5b4c9b66f11",
+    "semantic_hash": "e0a443b844ccdafcd61df5b4c9b66f11"
+  },
+  "F:\\nds\\Auto\\digitizer\\validate_nlgx.py": {
+    "mtime": 1781376208.8473809,
+    "ast_hash": "8131872cbe3c330b2478ffff613c27c9",
+    "semantic_hash": "8131872cbe3c330b2478ffff613c27c9"
+  },
+  "F:\\nds\\Auto\\digitizer\\write_nlgx.py": {
+    "mtime": 1781436591.7000864,
+    "ast_hash": "5059732a003defb4bf30f8b89984ec95",
+    "semantic_hash": "5059732a003defb4bf30f8b89984ec95"
+  },
+  "F:\\nds\\Auto\\dump_controls.py": {
+    "mtime": 1781195779.3876534,
+    "ast_hash": "2037f7deac6ed5c439d1b54805fd3054",
+    "semantic_hash": "2037f7deac6ed5c439d1b54805fd3054"
+  },
+  "F:\\nds\\Auto\\inspect_dialog.py": {
+    "mtime": 1781101809.75897,
+    "ast_hash": "b456b01d54eb1517dff80f06da13cf6f",
+    "semantic_hash": "b456b01d54eb1517dff80f06da13cf6f"
+  },
+  "F:\\nds\\Auto\\las_writer.py": {
+    "mtime": 1781186796.7893717,
+    "ast_hash": "4fd7d198a2ca079f0c04fb326351a885",
+    "semantic_hash": "4fd7d198a2ca079f0c04fb326351a885"
+  },
+  "F:\\nds\\Auto\\mnemonics.json": {
+    "mtime": 1781139929.6064405,
+    "ast_hash": "231a385e91a03c67426387cf6f582d75",
+    "semantic_hash": "231a385e91a03c67426387cf6f582d75"
+  },
+  "F:\\nds\\Auto\\neuralog_agent.py": {
+    "mtime": 1780940746.0,
+    "ast_hash": "354a73eb588b802149e560bb57d1551f",
+    "semantic_hash": "354a73eb588b802149e560bb57d1551f"
+  },
+  "F:\\nds\\Auto\\neuralog_win32.py": {
+    "mtime": 1781207328.2243204,
+    "ast_hash": "a7a1c4ccedb80f64b77bc901b83a2150",
+    "semantic_hash": "a7a1c4ccedb80f64b77bc901b83a2150"
+  },
+  "F:\\nds\\Auto\\parse_menu_resources.py": {
+    "mtime": 1781101339.2073493,
+    "ast_hash": "518d790d2935c8940610475673af063f",
+    "semantic_hash": "518d790d2935c8940610475673af063f"
+  },
+  "F:\\nds\\Auto\\probe_panel.py": {
+    "mtime": 1781195877.8966978,
+    "ast_hash": "c3cd25b1f6daa1b370b82f97588741e3",
+    "semantic_hash": "c3cd25b1f6daa1b370b82f97588741e3"
+  },
+  "F:\\nds\\Auto\\test_buttons.py": {
+    "mtime": 1781114469.259023,
+    "ast_hash": "f1a1520bbb2ce0c25b8a0174b1341d27",
+    "semantic_hash": "f1a1520bbb2ce0c25b8a0174b1341d27"
+  },
+  "F:\\nds\\Auto\\trace_wizard.py": {
+    "mtime": 1781103965.4239635,
+    "ast_hash": "cd8bf71bf02b47de593ae88860c0cd1e",
+    "semantic_hash": "cd8bf71bf02b47de593ae88860c0cd1e"
+  },
+  "F:\\nds\\Auto\\uia_probe.py": {
+    "mtime": 1780841765.9441478,
+    "ast_hash": "a01f42c5b5978023fdde2c635dbb49c8",
+    "semantic_hash": "a01f42c5b5978023fdde2c635dbb49c8"
+  },
+  "F:\\nds\\Auto\\PLAN_new_dialog.md": {
+    "mtime": 1782145287.3028948,
+    "ast_hash": "bb9c7c0ee9c25ffa77f608bde87126ba",
+    "semantic_hash": "bb9c7c0ee9c25ffa77f608bde87126ba"
+  },
+  "F:\\nds\\Auto\\README.md": {
+    "mtime": 1781941738.869728,
+    "ast_hash": "8858f500998b1f8e6b86d9548ac7db98",
+    "semantic_hash": "8858f500998b1f8e6b86d9548ac7db98"
+  },
+  "F:\\nds\\Auto\\architecture.html": {
+    "mtime": 1781052683.0512743,
+    "ast_hash": "a3761c6d4386b4e7bbfc11b47fe9c905",
+    "semantic_hash": "a3761c6d4386b4e7bbfc11b47fe9c905"
+  },
+  "F:\\nds\\Auto\\digitizer\\archive_report.txt": {
+    "mtime": 1781374737.98365,
+    "ast_hash": "81b3d8a98bd740c7f7821aebaef3918c",
+    "semantic_hash": "81b3d8a98bd740c7f7821aebaef3918c"
+  },
+  "F:\\nds\\Auto\\menu_map.txt": {
+    "mtime": 1781140199.3058772,
+    "ast_hash": "5da1295dbff9bb015e7a2ea1a40e8e02",
+    "semantic_hash": "5da1295dbff9bb015e7a2ea1a40e8e02"
+  },
+  "F:\\nds\\Auto\\neuralog_context.md": {
+    "mtime": 1780850955.7362044,
+    "ast_hash": "9e097a00cdbe5aeddbb02a5cae12798a",
+    "semantic_hash": "9e097a00cdbe5aeddbb02a5cae12798a"
+  },
+  "F:\\nds\\Auto\\toolbar_map.txt": {
+    "mtime": 1781139983.590551,
+    "ast_hash": "c5f71a9d578b8b48191ed7c72498cd2a",
+    "semantic_hash": "c5f71a9d578b8b48191ed7c72498cd2a"
+  },
+  "F:\\nds\\Auto\\uia_probe_report.txt": {
+    "mtime": 1780841862.7357893,
+    "ast_hash": "1f3db8851074e2614594874a16082564",
+    "semantic_hash": "1f3db8851074e2614594874a16082564"
+  }
+}
