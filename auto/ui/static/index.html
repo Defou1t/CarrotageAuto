@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CarrotageAuto — векторизация</title>
+<style>
+  :root { --bg:#0f1117; --panel:#181b24; --line:#262b38; --tx:#e6e8ee; --mut:#9aa3b2;
+          --acc:#4f8cff; --ok:#3ecf8e; --warn:#ffcf4f; --err:#ff6b6b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--tx); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
+  header b { font-size:16px; } header span { color:var(--mut); font-size:12px; }
+  .wrap { display:grid; grid-template-columns:380px 1fr; gap:0; height:calc(100vh - 52px); }
+  .controls { padding:16px 18px; overflow:auto; border-right:1px solid var(--line); }
+  .result { padding:16px 18px; overflow:auto; }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 14px; padding:10px 12px; }
+  legend { color:var(--mut); padding:0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  label { display:block; margin:8px 0 3px; color:var(--mut); font-size:12px; }
+  input[type=text], select, textarea { width:100%; background:#0c0e14; border:1px solid var(--line);
+        color:var(--tx); border-radius:6px; padding:7px 9px; font:13px monospace; }
+  .row { display:flex; gap:8px; } .row>div { flex:1; }
+  .chk { display:flex; align-items:center; gap:6px; margin:8px 0; color:var(--tx); }
+  .chk input { width:auto; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:7px; padding:10px 14px;
+        font-weight:600; cursor:pointer; width:100%; margin-top:6px; }
+  button:active { transform:translateY(1px); }
+  .hint { color:var(--mut); font-size:11px; margin-top:4px; }
+  .ops { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:10px; }
+  .ops button { background:#222838; font-weight:500; }
+  .ops button.sel { background:var(--acc); }
+  pre { background:#0c0e14; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow:auto; max-height:48vh; white-space:pre-wrap; word-break:break-word; }
+  img.ovl { max-width:100%; border:1px solid var(--line); border-radius:8px; margin-bottom:12px; }
+  .status { padding:8px 10px; border-radius:6px; margin-bottom:12px; font-weight:600; display:none; }
+  .status.ok { background:rgba(62,207,142,.12); color:var(--ok); display:block; }
+  .status.err { background:rgba(255,107,107,.12); color:var(--err); display:block; }
+  .muted { color:var(--mut); }
+  .params { display:none; }
+</style>
+</head>
+<body>
+<header><b>CarrotageAuto</b><span>автономная image-first векторизация · v2</span></header>
+<div class="wrap">
+  <div class="controls">
+    <div class="ops" id="ops">
+      <button data-op="test">Тест функции</button>
+      <button data-op="analyze" class="sel">Анализ изображения</button>
+      <button data-op="vectorize">Векторизация</button>
+      <button data-op="refine">Уточнение</button>
+      <button data-op="verify">Проверка (QC)</button>
+      <button data-op="feedback">Обратная связь</button>
+    </div>
+
+    <fieldset>
+      <legend>Пути</legend>
+      <label>Скан (image)</label><input type="text" id="image" placeholder="F:\nds\...\img\scan.jpg">
+      <label>Папка вывода (out)</label><input type="text" id="out" placeholder="output">
+      <div class="row">
+        <div><label>Рамка .nlgx (опц.)</label><input type="text" id="frame" placeholder="лёгкий каркас"></div>
+        <div><label>Папка данных (data)</label><input type="text" id="data" placeholder="CARROTAGE_DATA"></div>
+      </div>
+      <label>Готовый _auto.nlgx (для QC/обратной связи)</label><input type="text" id="nlgx">
+      <label>Исправленный экспертом .nlgx (обратная связь)</label><input type="text" id="corrected">
+    </fieldset>
+
+    <fieldset id="testbox" style="display:none">
+      <legend>Тест функции</legend>
+      <label>Что проверить</label>
+      <select id="test">
+        <option value="filename">filename — разбор имени (скважина/кривые/глубины)</option>
+        <option value="curve_info">curve_info — приоры мнемоники</option>
+        <option value="frame">frame (U0) — детект рамки [нужен numpy/cv2]</option>
+        <option value="prob">prob — карта recall-модели [нужен torch+ckpt]</option>
+      </select>
+      <label>Имя кривой (для curve_info)</label><input type="text" id="name" placeholder="SP / GZ31 / МБК">
+    </fieldset>
+
+    <fieldset>
+      <legend>Модель (опц., recall prob)</legend>
+      <label>Чекпойнт .pt</label><input type="text" id="ckpt" placeholder="F:\nds\output\unet_best.pt">
+      <div class="row">
+        <div><label>device</label><input type="text" id="device" placeholder="cuda / cpu"></div>
+        <div></div>
+      </div>
+    </fieldset>
+
+    <fieldset class="params" id="parambox">
+      <legend>Параметры (уточнение)</legend>
+      <div class="row">
+        <div><label>dark_v</label><input type="text" id="p_dark_v" placeholder="110"></div>
+        <div><label>valley_ratio</label><input type="text" id="p_valley_ratio" placeholder="0.40"></div>
+      </div>
+      <div class="row">
+        <div><label>grid_v_lo</label><input type="text" id="p_grid_v_lo" placeholder="150"></div>
+        <div><label>grid_v_hi</label><input type="text" id="p_grid_v_hi" placeholder="205"></div>
+      </div>
+      <div class="row">
+        <div><label>sat_thr</label><input type="text" id="p_sat_thr" placeholder="28"></div>
+        <div><label>struct_open_len</label><input type="text" id="p_struct_open_len" placeholder="120"></div>
+      </div>
+    </fieldset>
+
+    <div class="chk"><input type="checkbox" id="ruler"><label for="ruler" style="margin:0">--ruler (читать линейку A1/VLM, LM Studio)</label></div>
+    <div class="chk"><input type="checkbox" id="las"><label for="las" style="margin:0">--las (достроить LAS, нужна рамка)</label></div>
+    <div class="chk"><input type="checkbox" id="ingest"><label for="ingest" style="margin:0">интейк исправленного в корпус</label></div>
+
+    <button id="run">Выполнить</button>
+    <div class="hint">Запущено локально (stdlib). Тяжёлые операции требуют numpy/cv2 (и torch для prob) на этой машине.</div>
+  </div>
+
+  <div class="result">
+    <div class="status" id="status"></div>
+    <div id="ovlbox"></div>
+    <pre id="out_json" class="muted">Результат появится здесь.</pre>
+  </div>
+</div>
+
+<script>
+let OP = "analyze";
+const $ = id => document.getElementById(id);
+
+function selOp(op){
+  OP = op;
+  document.querySelectorAll("#ops button").forEach(b=>b.classList.toggle("sel", b.dataset.op===op));
+  $("testbox").style.display = op==="test" ? "" : "none";
+  $("parambox").style.display = op==="refine" ? "block" : "none";
+}
+document.querySelectorAll("#ops button").forEach(b=> b.onclick=()=>selOp(b.dataset.op));
+
+function params(){
+  const o={}; const ids=["dark_v","valley_ratio","grid_v_lo","grid_v_hi","sat_thr","struct_open_len"];
+  ids.forEach(k=>{ const v=$("p_"+k).value.trim(); if(v!=="") o[k]=v; });
+  return o;
+}
+function payload(){
+  return { op:OP, image:$("image").value.trim(), out:$("out").value.trim(),
+    data:$("data").value.trim(), frame:$("frame").value.trim(), nlgx:$("nlgx").value.trim(),
+    corrected:$("corrected").value.trim(), ckpt:$("ckpt").value.trim(),
+    device:$("device").value.trim()||null, test:$("test").value, name:$("name").value.trim(),
+    ruler:$("ruler").checked, las:$("las").checked, ingest:$("ingest").checked, params:params() };
+}
+
+async function run(){
+  $("status").className="status"; $("status").textContent="";
+  $("out_json").textContent="Выполняется…"; $("ovlbox").innerHTML="";
+  let res;
+  try {
+    const r = await fetch("/api/op", {method:"POST", headers:{"Content-Type":"application/json"},
+                                      body: JSON.stringify(payload())});
+    res = await r.json();
+  } catch(e){ res = {ok:false, error:String(e)}; }
+  const st=$("status");
+  if(res.ok){ st.className="status ok"; st.textContent="OK · "+(res.op||OP)
+                + (res.n_auto!=null?`  · AUTO ${res.n_auto} / FLAG ${res.n_flag}`:""); }
+  else { st.className="status err"; st.textContent="ОШИБКА · "+(res.error||""); }
+  const ov = res.overlay || (res.artifacts && res.artifacts.overlay);
+  if(ov){ const img=document.createElement("img"); img.className="ovl";
+          img.src="/file?path="+encodeURIComponent(ov); $("ovlbox").appendChild(img); }
+  $("out_json").className=""; $("out_json").textContent = JSON.stringify(res, null, 2);
+}
+$("run").onclick=run;
+selOp("analyze");
+</script>
+</body>
+</html>
