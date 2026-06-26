@@ -1,0 +1,198 @@
+r"""
+understand.py — U1: ГЛУБОКИЙ РАЗБОР снимка → структурное ПОНИМАНИЕ листа (первичный артефакт v2).
+Отвечает на запрос заказчика: «изначально понимать, СКОЛЬКО ЛИНИЙ и СКОЛЬКО ПЕРЕХОДОВ МАСШТАБА
+у каждой». Работает ОТ ИЗОБРАЖЕНИЯ (frame из U0), БЕЗ экспертной трассы.
+
+На каждый трек:
+  • передний план кривых (imaging: тёмное|цветное − структура [× prob-гейт recall-модели]);
+  • по каждому цвету — инстансы-штрихи (CC, линия-подобные) с центр-трассой/толщиной/поведением;
+  • счёт РАЗНЕСЁННЫХ линий по долинам столбцовой плотности (band-детект, PLAN §6.6.11);
+  • оценка числа уровней-перевыносов (передаётся в scales.py для уточнения по линейке A1).
+
+Поведение (rough_n): SP гладкая / резистив-CALI пиковая (B2). Без nlgx — px/m из frame (U0).
+Никакого torch: recall-модель опциональна (config.prob_provider). Чистый OpenCV/NumPy.
+"""
+from dataclasses import dataclass, field
+from typing import Optional
+import numpy as np
+import cv2
+from . import imaging as im
+
+
+@dataclass
+class Line:
+    track_index: int
+    color: str
+    x_center: float
+    x_lo: float
+    x_hi: float
+    y0: int
+    y1: int
+    thickness: float
+    rough_n: Optional[float]
+    behavior: str                 # 'smooth' | 'peaky' | '?'
+    n_strokes: int                # фрагментация (перевынос/окклюзия → много штрихов)
+    density: float                # средняя столбцовая плотность (для AUTO/FLAG)
+    depth_start: Optional[float] = None
+    depth_end: Optional[float] = None
+    n_levels_est: Optional[int] = None     # оценка переходов масштаба (уточняет scales.py)
+    confidence: Optional[str] = None       # 'AUTO' | 'FLAG' (заполняет confidence.classify)
+    flag_reason: Optional[str] = None
+
+    @property
+    def x_band(self):
+        return self.x_hi - self.x_lo
+
+
+@dataclass
+class Sheet:
+    meta: object
+    frame: object
+    lines: list = field(default_factory=list)
+    per_track: dict = field(default_factory=dict)     # track_index → число линий
+    diag: dict = field(default_factory=dict)
+
+    def to_dict(self):
+        m, f = self.meta, self.frame
+        return {
+            "well": getattr(m, "well", None), "curves_token": getattr(m, "curves_token", None),
+            "depth": [getattr(m, "top_depth", None), getattr(m, "bottom_depth", None)],
+            "scale": getattr(m, "scale", None),
+            "expected_curves": getattr(m, "expected_curves", []),
+            "frame": {"tracks": [[t.x_left, t.x_right] for t in f.tracks],
+                      "top_y": f.top_y, "bottom_y": f.bottom_y,
+                      "px_per_m": f.px_per_m, "grid_period_px": f.grid_period_px,
+                      "diag": f.diag},
+            "n_lines_total": len(self.lines),
+            "per_track_line_count": self.per_track,
+            "lines": [{
+                "track": L.track_index, "color": L.color,
+                "x_center": round(L.x_center, 1), "x_band": round(L.x_band, 1),
+                "depth": [None if L.depth_start is None else round(L.depth_start, 1),
+                          None if L.depth_end is None else round(L.depth_end, 1)],
+                "thickness": round(L.thickness, 1), "behavior": L.behavior,
+                "rough_n": L.rough_n, "n_strokes": L.n_strokes,
+                "n_levels_est": L.n_levels_est,
+                "confidence": L.confidence, "flag_reason": L.flag_reason,
+            } for L in self.lines],
+            "diag": self.diag,
+        }
+
+
+def _instances(mask, color, track_index, min_h, min_px=200):
+    """CC канала → линия-подобные инстансы (центр-трасса x(row), толщина). Без nlgx."""
+    m = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE,
+                         cv2.getStructuringElement(cv2.MORPH_RECT, (3, 5)))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    out = []
+    for i in range(1, n):
+        x, y, w, h, area = stats[i]
+        if h < min_h or area < min_px:
+            continue
+        sub = lab[y:y + h, x:x + w] == i
+        xs_row = np.full(h, np.nan)
+        th = []
+        ys, xsx = np.where(sub)
+        for r in range(h):
+            cols = xsx[ys == r]
+            if len(cols):
+                xs_row[r] = x + np.median(cols); th.append(len(cols))
+        if (~np.isnan(xs_row)).sum() < min_h * 0.3:
+            continue
+        out.append({"color": color, "track": track_index, "y0": int(y), "y1": int(y + h),
+                    "xs_row": xs_row, "row0": int(y), "area": int(area),
+                    "thickness": float(np.median(th)) if th else 0.0})
+    return out
+
+
+def _behavior(xs_row, row0, px_per_m):
+    """rough_n из центр-трассы инстанса (B2: SP гладкая ~0.01 / пиковая >0.03)."""
+    valid = ~np.isnan(xs_row)
+    if valid.sum() < 30 or not px_per_m:
+        return None, "?"
+    ys = np.where(valid)[0] + row0
+    xs = xs_row[valid]
+    grid = np.arange(ys.min(), ys.max() + 1)
+    xi = np.interp(grid, ys, xs)
+    W = max(5, int(round(1.5 * px_per_m)) | 1)
+    if len(xi) <= W:
+        return None, "?"
+    sm = np.convolve(xi, np.ones(W) / W, mode="same")
+    hf = (xi - sm)[W:-W] if len(xi) > 2 * W else (xi - sm)
+    span = float(np.percentile(xs, 97) - np.percentile(xs, 3)) or 1.0
+    rn = round(float(np.std(hf)) / span, 4)
+    return rn, ("smooth" if rn < 0.025 else "peaky")
+
+
+def _group_into_lines(insts, color, track_index, frame, p):
+    """Сгруппировать штрихи одного цвета в ЛИНИИ по x-полосам (band-детект, PLAN §6.6.11).
+    Разнесённые (долина плотности) → отдельные линии ~1px; сбитый одноцветный пучок → 1 'multi'
+    линия (FLAG разрешает U2). Каждая линия — агрегат своих штрихов."""
+    if not insts:
+        return []
+    # столбцовая плотность чернил всех штрихов цвета (гистограмма x) → пики/долины = линии
+    xs_all = np.concatenate([s["xs_row"][~np.isnan(s["xs_row"])] for s in insts])
+    if not len(xs_all):
+        return []
+    lo, hi = int(xs_all.min()), int(xs_all.max()) + 1
+    hist = np.zeros(hi - lo + 1, np.float64)
+    for xv in xs_all.astype(int):
+        hist[xv - lo] += 1
+    hist = np.convolve(hist, np.ones(p.density_smooth) / p.density_smooth, mode="same")
+    peaks = im.find_peaks(hist, min_dist=10, prominence=float(np.percentile(hist, 70) or 1))
+    splits = im.find_valleys(hist, peaks, p.valley_ratio) if len(peaks) > 1 else []
+    # границы x-полос = долины-сплиты; иначе одна полоса (весь диапазон)
+    cuts = sorted(lo + s[2] for s in splits)
+    edges = [lo] + cuts + [hi]
+    px_per_m = frame.px_per_m
+    lines = []
+    for a, b in zip(edges, edges[1:]):
+        members = [s for s in insts if a <= float(np.nanmedian(s["xs_row"])) < b]
+        if not members:
+            continue
+        xs_m = np.concatenate([s["xs_row"][~np.isnan(s["xs_row"])] for s in members])
+        y0 = min(s["y0"] for s in members); y1 = max(s["y1"] for s in members)
+        # центр-трасса полосы = объединение штрихов (для поведения берём самый длинный)
+        longest = max(members, key=lambda s: (~np.isnan(s["xs_row"])).sum())
+        rn, beh = _behavior(longest["xs_row"], longest["row0"], px_per_m)
+        L = Line(track_index=track_index, color=color,
+                 x_center=float(np.median(xs_m)), x_lo=float(xs_m.min()), x_hi=float(xs_m.max()),
+                 y0=int(y0), y1=int(y1),
+                 thickness=float(np.median([s["thickness"] for s in members])),
+                 rough_n=rn, behavior=beh, n_strokes=len(members),
+                 density=float(hist[max(0, int(np.median(xs_m)) - lo)]))
+        if px_per_m:
+            L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)
+        lines.append(L)
+    return lines
+
+
+def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
+    """Главная точка U1: RGB + Frame (U0) → Sheet (сколько линий, их свойства, оценка уровней)."""
+    from .config import DEFAULT
+    p = p or DEFAULT.cv
+    if prob is None and DEFAULT.prob_provider is not None:
+        prob = DEFAULT.prob_provider(rgb)
+    sheet = Sheet(meta=meta, frame=frame)
+    fg_full = im.ink_foreground(rgb, p, prob=prob)
+    for t in frame.tracks:
+        track_h = frame.bottom_y - frame.top_y
+        min_h = max(20, int(p.min_line_h_frac * track_h))
+        sub = np.zeros(rgb.shape[:2], bool)
+        sub[frame.top_y:frame.bottom_y, t.x_left:t.x_right] = True
+        # цветовые каналы + чёрный, ограниченные телом трека и передним планом
+        chans = {**{c: m & sub & (fg_full > 0) for c, m in im.color_channels(rgb, p).items()}}
+        dark = im.dark_mask(rgb, p) & sub & (fg_full > 0)
+        for cm in chans.values():
+            dark = dark & ~cm                                   # чёрный = тёмное минус цветное
+        chans["black"] = dark
+        track_lines = []
+        for color, cmask in chans.items():
+            insts = _instances(cmask, color, t.index, min_h)
+            track_lines += _group_into_lines(insts, color, t.index, frame, p)
+        track_lines.sort(key=lambda L: L.x_center)
+        sheet.per_track[t.index] = len(track_lines)
+        sheet.lines += track_lines
+    sheet.diag = {"n_tracks": len(frame.tracks), "prob_used": prob is not None,
+                  "expected_n_curves": len(getattr(meta, "expected_curves", []) or [])}
+    return sheet
