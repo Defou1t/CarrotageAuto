@@ -91,9 +91,34 @@ class _Handler(BaseHTTPRequestHandler):
         return self._send(200, res)
 
 
+def _lan_ips():
+    """IP-адреса машины в локальной сети (для подключения с другого устройства)."""
+    import socket
+    ips = set()
+    try:                                   # основной исходящий интерфейс
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80)); ips.add(s.getsockname()[0]); s.close()
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(info[4][0])
+    except Exception:
+        pass
+    return sorted(ip for ip in ips if not ip.startswith("127."))
+
+
 def serve(host="127.0.0.1", port=8765):
     httpd = ThreadingHTTPServer((host, port), _Handler)
-    print(f"auto.ui: http://{host}:{port}  (Ctrl+C — стоп)")
+    print(f"auto.ui: http://{host}:{port}")
+    if host in ("127.0.0.1", "localhost"):
+        print("   локально. Для доступа с ДРУГОГО устройства запусти: python -m auto.ui --host 0.0.0.0")
+    else:
+        for ip in _lan_ips():
+            print(f"   с другого устройства в сети: http://{ip}:{port}")
+        print("   ⚠ UI БЕЗ пароля и читает/пишет файлы — открывай только в ДОВЕРЕННОЙ сети")
+        print("     (LAN/Tailscale/VPN), НЕ пробрасывай порт в интернет напрямую.")
+    print("   Ctrl+C — стоп")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
