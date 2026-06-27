@@ -39,6 +39,30 @@ def attach(cfg, ckpt, **kw):
     return cfg
 
 
+def prob_from_npy(npy_path):
+    """Провайдер из СОХРАНЁННОЙ prob-карты (.npy). Главный мост: тяжёлый torch-инференс гоним РАЗ
+    интерпретатором venv ComfyUI (`python -m auto.prob ...` сохраняет _prob.npy), а чистый пайплайн
+    py3.14 (без torch) грузит кэш и пользует как gate. rgb→prob[HxW float32 0..1]."""
+    import numpy as np
+    arr = np.load(str(npy_path)).astype("float32")
+
+    def provider(rgb):
+        h, w = rgb.shape[:2]
+        if arr.shape == (h, w):
+            return arr
+        import cv2
+        return cv2.resize(arr, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    provider.meta = {"npy": str(npy_path), "shape": list(arr.shape)}
+    return provider
+
+
+def attach_npy(cfg, npy_path):
+    """Подключить СОХРАНЁННУЮ prob-карту к Config (без torch)."""
+    cfg.prob_provider = prob_from_npy(npy_path)
+    return cfg
+
+
 def save_prob_overlay(rgb, prob, out, stem):
     """Хитмап prob поверх скана — визуально проверить, что модель ВИДИТ бледные линии."""
     import numpy as np
@@ -70,6 +94,10 @@ def main():
     prob = prov(rgb)
     import numpy as np
     print(f"prob: shape={prob.shape} max={prob.max():.3f} >0.4 покрытие={float((prob>0.4).mean())*100:.2f}%")
+    Path(out).mkdir(parents=True, exist_ok=True)
+    npy = Path(out) / f"{Path(image).stem}_prob.npy"
+    np.save(str(npy), prob.astype("float32"))            # raw-карта для пайплайна (attach_npy)
+    print(f"raw prob -> {npy}")
     p = save_prob_overlay(rgb, prob, out, Path(image).stem[:40])
     print(f"хитмап -> {p}")
     return 0

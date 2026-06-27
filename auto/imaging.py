@@ -60,16 +60,21 @@ def structure_mask(rgb, p, min_len=None):
 
 
 def ink_foreground(rgb, p, prob=None, prob_thr=0.5, drop_structure=True):
-    """Передний план КРИВЫХ: (тёмное | цветное) − структура [× prob-гейт].
-    prob — карта recall-модели HxW float[0,1] (опц.): убивает сетку/пятна там, где модель видит
-    фон. Без неё работаем чисто по цвету/темноте (бледные цветные — потолок, ROADMAP §6)."""
+    """Передний план КРИВЫХ: (тёмное | цветное) − структура [| prob-recall].
+    prob — карта recall-модели HxW float[0,1] (опц.): ДОБАВляет бледные линии, что правила теряют
+    (recall-ретрейн, ROADMAP §6). Это UNION, НЕ гейт: на дармной пиковой кривой модель недокрывает
+    пики (обучена на бледное), и пересечение fg&prob срезало бы 53% ясного чернила (замер MK, монтаж
+    stages). Поэтому модель только ПОДНИМАЕТ recall; ясное чернило правил не режется. Структуру
+    (сетку/рамку) модель не до-бавляет — обучена с негативами, плюс маска структуры вычитается и из неё."""
     fg = dark_mask(rgb, p)
     for m in color_channels(rgb, p).values():
         fg = fg | m
+    struct = structure_mask(rgb, p) if drop_structure else None
     if drop_structure:
-        fg = fg & ~structure_mask(rgb, p)
+        fg = fg & ~struct
     if prob is not None:
-        fg = fg & (prob >= prob_thr)
+        add = (prob >= prob_thr)
+        fg = fg | (add & ~struct if drop_structure else add)
     return fg.astype(np.uint8)
 
 

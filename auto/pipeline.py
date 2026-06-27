@@ -26,8 +26,12 @@ from . import emit as emit_mod
 from .config import Config
 
 
-def run(image_path, frame_nlgx=None, cfg=None, read_ruler=False, las=False):
+def run(image_path, frame_nlgx=None, cfg=None, read_ruler=False, las=False,
+        prob_npy=None, stages=False):
     cfg = cfg or Config()
+    if prob_npy:                                    # подключить recall-модель (сохранённая prob-карта)
+        from . import prob as prob_mod
+        prob_mod.attach_npy(cfg, prob_npy)
     rgb = imaging.load_rgb(image_path)
     m = meta_mod.parse_filename(image_path, cfg.mnemonics)
     # Рамка из ШАБЛОНА, если дан --frame (калибровка точнее авто-детекта, см. frame_from_nlgx),
@@ -46,6 +50,12 @@ def run(image_path, frame_nlgx=None, cfg=None, read_ruler=False, las=False):
     res = emit_mod.emit(sheet, traces, cfg.ensure_out(), stem, rgb=rgb,
                         frame_nlgx=frame_nlgx, mnemonics_path=cfg.mnemonics,
                         image=image_path, las=las)
+    if stages is not False:                         # поэтапный монтаж «как скрипт видит»
+        from . import stages as stages_mod
+        window = None if stages in (True, "auto") else stages
+        spath, _ = stages_mod.render_stages(rgb, sheet, traces, cfg.cv,
+                                            cfg.ensure_out(), stem, window=window, prob=prob)
+        res["stages"] = spath
     return sheet, traces, res
 
 
@@ -79,6 +89,9 @@ def main():
     ap.add_argument("--frame", help="лёгкая рамка NeuraLOG (.nlgx) для nlgx-выдачи (опц.)")
     ap.add_argument("--ruler", action="store_true", help="прочитать линейку через A1/VLM (LM Studio)")
     ap.add_argument("--las", action="store_true", help="достроить .las (нужна --frame)")
+    ap.add_argument("--prob", help="prob-карта recall-модели (.npy) — анализ ИСПОЛЬЗУЕТ модель (gate бледных)")
+    ap.add_argument("--stages", nargs="?", const="auto", default=False,
+                    help="дамп поэтапного монтажа «как скрипт видит» (опц. Y0:Y1, иначе авто-окно)")
     ap.add_argument("--out", help="папка вывода (иначе CARROTAGE_OUT/ ./output)")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -88,8 +101,11 @@ def main():
     cfg = Config()
     if a.out:
         cfg.out = Path(a.out)
+    stages = a.stages
+    if isinstance(stages, str) and ":" in stages:
+        y0, y1 = stages.split(":"); stages = (int(y0), int(y1))
     sheet, traces, res = run(a.image, frame_nlgx=a.frame, cfg=cfg,
-                             read_ruler=a.ruler, las=a.las)
+                             read_ruler=a.ruler, las=a.las, prob_npy=a.prob, stages=stages)
     _print_summary(sheet, res)
     return 0
 
