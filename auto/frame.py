@@ -134,6 +134,48 @@ def _grid_period(rgb, p, top_y, bottom_y, x0, x1):
     return period, [int(top_y + y) for y in peaks]
 
 
+def frame_from_nlgx(nlgx_path, meta=None, p=None, rgb=None) -> Frame:
+    """U0 ИЗ ШАБЛОНА: построить Frame по лёгкой рамке NeuraLOG (Depth/Scale Axis), когда она дана.
+
+    ROADMAP: шаблон ОПЦИОНАЛЕН, но если эксперт дал лёгкую рамку — её калибровка ТОЧНЕЕ авто-детекта.
+    DURABLE-обоснование (замер на Yatskivska): автономный детект рамки тут проваливается — НЕТ тёмных
+    рамочных линий (грани/верх-низ нарисованы тоном СВЕТЛОЙ сетки V~166), а сетка идёт по всей высоте
+    листа за пределами данных; авто-детект откатывался на «весь лист» (top_y=0, трек = вся ширина).
+    Беря рамку из nlgx, весь конвейер (understand/trace/emit) работает в ОДНОЙ системе координат."""
+    from .config import DEFAULT
+    p = p or DEFAULT.cv
+    from extract_nlgx import extract                      # digitizer на sys.path (см. __init__)
+    model = extract(str(nlgx_path))
+    da = model.get("depth_axis") or {}
+    H, W = (rgb.shape[:2] if rgb is not None else (0, 0))
+    top_y = int(da.get("top_y") or 0)
+    bottom_y = int(da.get("bottom_y") or (H - 1 if H else 0))
+    # глубины: приоритет калибровке рамки, фолбэк — имя файла (meta)
+    td, bd = da.get("top_depth"), da.get("bottom_depth")
+    if td is None or bd is None or td == bd:
+        td, bd = getattr(meta, "top_depth", None), getattr(meta, "bottom_depth", None)
+    # треки = слитые по x пересекающиеся scale-оси (SA1/SA2 одного трека → один трек)
+    spans = sorted((int(s["x_left"]), int(s["x_right"])) for s in model.get("scale_axes", [])
+                   if s.get("x_left") is not None and s.get("x_right") is not None)
+    merged = []
+    for x0, x1 in spans:
+        if merged and x0 <= merged[-1][1] + 5:
+            merged[-1][1] = max(merged[-1][1], x1)
+        else:
+            merged.append([x0, x1])
+    if not merged:
+        merged = [[int(0.06 * W), int(0.96 * W)]] if W else [[0, 1]]
+    tracks = [Track(a, b, i) for i, (a, b) in enumerate(merged)]
+    period, gys = (None, [])
+    if rgb is not None and bottom_y > top_y:
+        period, gys = _grid_period(rgb, p, top_y, bottom_y, tracks[0].x_left, tracks[-1].x_right)
+    return Frame(img_w=W, img_h=H, top_y=top_y, bottom_y=bottom_y, tracks=tracks,
+                 top_depth=td, bottom_depth=bd, grid_period_px=period, grid_ys=gys,
+                 diag={"source": "nlgx", "n_tracks": len(tracks),
+                       "n_scale_axes": len(model.get("scale_axes", [])),
+                       "depth_from": "nlgx" if da.get("top_depth") is not None else "filename"})
+
+
 def detect_frame(rgb, meta=None, p=None) -> Frame:
     """Главная точка U0: RGB (+ meta из имени файла) → Frame (треки, верх/низ, depth-калибровка, сетка)."""
     from .config import DEFAULT

@@ -30,7 +30,12 @@ def run(image_path, frame_nlgx=None, cfg=None, read_ruler=False, las=False):
     cfg = cfg or Config()
     rgb = imaging.load_rgb(image_path)
     m = meta_mod.parse_filename(image_path, cfg.mnemonics)
-    fr = frame_mod.detect_frame(rgb, m, cfg.cv)
+    # Рамка из ШАБЛОНА, если дан --frame (калибровка точнее авто-детекта, см. frame_from_nlgx),
+    # иначе автономный U0 из картинки.
+    if frame_nlgx:
+        fr = frame_mod.frame_from_nlgx(frame_nlgx, m, cfg.cv, rgb=rgb)
+    else:
+        fr = frame_mod.detect_frame(rgb, m, cfg.cv)
     prob = cfg.prob_provider(rgb) if cfg.prob_provider else None   # recall-модель, если задана
     sheet = understand_mod.understand(rgb, fr, m, cfg.cv, prob=prob)
     if read_ruler:

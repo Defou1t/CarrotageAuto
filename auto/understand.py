@@ -36,6 +36,7 @@ class Line:
     depth_start: Optional[float] = None
     depth_end: Optional[float] = None
     n_levels_est: Optional[int] = None     # оценка переходов масштаба (уточняет scales.py)
+    n_runs_med: float = 0.0                # медиана инк-ранов на строку в полосе (U2): ~1 одиночная / ≥2 пучок
     confidence: Optional[str] = None       # 'AUTO' | 'FLAG' (заполняет confidence.classify)
     flag_reason: Optional[str] = None
 
@@ -72,6 +73,7 @@ class Sheet:
                           None if L.depth_end is None else round(L.depth_end, 1)],
                 "thickness": round(L.thickness, 1), "behavior": L.behavior,
                 "rough_n": L.rough_n, "n_strokes": L.n_strokes,
+                "n_runs_med": round(L.n_runs_med, 2),
                 "n_levels_est": L.n_levels_est,
                 "confidence": L.confidence, "flag_reason": L.flag_reason,
             } for L in self.lines],
@@ -124,7 +126,23 @@ def _behavior(xs_row, row0, px_per_m):
     return rn, ("smooth" if rn < 0.025 else "peaky")
 
 
-def _group_into_lines(insts, color, track_index, frame, p):
+def _row_multiplicity(cmask, y0, y1, x_lo, x_hi, gap=4, max_rows=800):
+    """Медиана числа ИНК-РАНОВ на строку в x-полосе линии = мультипликативность (durable §6.6.11).
+    ОДИНОЧНАЯ кривая даёт ~1 ран/строку ДАЖЕ на широком размахе (band велик, но в каждой строке —
+    один штрих); сбитый ПУЧОК пересекающихся даёт ≥2 (на пересечении нет ни цвета, ни толщины, но
+    ранов на строке считается ≥2). Различитель «одиночная широкая vs пучок» БЕЗ порога по band."""
+    H, W = cmask.shape
+    lo = max(0, int(x_lo)); hi = min(W, int(x_hi) + 1)
+    y0 = max(0, int(y0)); y1 = min(H, int(y1) + 1)
+    if hi <= lo or y1 <= y0:
+        return 0.0
+    step = max(1, (y1 - y0) // max_rows)                  # равномерный сэмпл ≤max_rows строк (скорость)
+    counts = [len(im.row_runs(cmask[y, lo:hi], gap=gap)) for y in range(y0, y1, step)]
+    counts = [c for c in counts if c]                     # только строки с чернилами
+    return float(np.median(counts)) if counts else 0.0
+
+
+def _group_into_lines(insts, cmask, color, track_index, frame, p):
     """Сгруппировать штрихи одного цвета в ЛИНИИ по x-полосам (band-детект, PLAN §6.6.11).
     Разнесённые (долина плотности) → отдельные линии ~1px; сбитый одноцветный пучок → 1 'multi'
     линия (FLAG разрешает U2). Каждая линия — агрегат своих штрихов."""
@@ -151,6 +169,12 @@ def _group_into_lines(insts, color, track_index, frame, p):
         if not members:
             continue
         xs_m = np.concatenate([s["xs_row"][~np.isnan(s["xs_row"])] for s in members])
+        # отсев одиночных специй: вертикальное покрытие полосы должно быть выше шумового пола
+        # (xs_m — по медиане x на строку, т.е. ~число покрытых строк). Реальная линия покрывает
+        # заметную долю интервала; синий 1-штриховой артефакт ~10-40px — отсекаем.
+        cov_min = max(2 * p.min_line_h_px, int(p.min_line_cov_frac * (frame.bottom_y - frame.top_y)))
+        if len(xs_m) < cov_min:
+            continue
         y0 = min(s["y0"] for s in members); y1 = max(s["y1"] for s in members)
         # центр-трасса полосы = объединение штрихов (для поведения берём самый длинный)
         longest = max(members, key=lambda s: (~np.isnan(s["xs_row"])).sum())
@@ -161,6 +185,7 @@ def _group_into_lines(insts, color, track_index, frame, p):
                  thickness=float(np.median([s["thickness"] for s in members])),
                  rough_n=rn, behavior=beh, n_strokes=len(members),
                  density=float(hist[max(0, int(np.median(xs_m)) - lo)]))
+        L.n_runs_med = _row_multiplicity(cmask, y0, y1, L.x_lo, L.x_hi)
         if px_per_m:
             L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)
         lines.append(L)
@@ -177,7 +202,9 @@ def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
     fg_full = im.ink_foreground(rgb, p, prob=prob)
     for t in frame.tracks:
         track_h = frame.bottom_y - frame.top_y
-        min_h = max(20, int(p.min_line_h_frac * track_h))
+        # ПОЛ шума, не доля огромной высоты: clip(доля, пол, потолок) — иначе на полосе ~20000px
+        # min_h≈800 отсекает ВСЕ фрагменты пиковой кривой (баг калибровки, найден на Yatskivska).
+        min_h = int(np.clip(p.min_line_h_frac * track_h, p.min_line_h_px, p.min_line_h_cap))
         sub = np.zeros(rgb.shape[:2], bool)
         sub[frame.top_y:frame.bottom_y, t.x_left:t.x_right] = True
         # цветовые каналы + чёрный, ограниченные телом трека и передним планом
@@ -189,7 +216,7 @@ def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
         track_lines = []
         for color, cmask in chans.items():
             insts = _instances(cmask, color, t.index, min_h)
-            track_lines += _group_into_lines(insts, color, t.index, frame, p)
+            track_lines += _group_into_lines(insts, cmask, color, t.index, frame, p)
         track_lines.sort(key=lambda L: L.x_center)
         sheet.per_track[t.index] = len(track_lines)
         sheet.lines += track_lines

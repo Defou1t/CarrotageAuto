@@ -24,6 +24,19 @@ from pathlib import Path as _Path
 
 __version__ = "0.1.0"
 
+# Консоль заказчика — cp1251 (Windows): любой вывод с '→'/не-кириллицей (а его в проекте много)
+# валит print с UnicodeEncodeError. Принудительно переводим вывод в UTF-8 ОДИН раз при импорте
+# пакета — покрывает все точки входа (pipeline/ui/prob/tests) и ad-hoc `python -c "import auto..."`.
+# Защищаемся: у обёрнутого/перехваченного потока (pytest, StringIO) reconfigure может не быть.
+for _stream in ("stdout", "stderr"):
+    _s = getattr(_sys, _stream, None)
+    try:
+        if _s is not None and (getattr(_s, "encoding", "") or "").lower() != "utf-8":
+            _s.reconfigure(encoding="utf-8", line_buffering=True)
+    except (AttributeError, ValueError, OSError):
+        pass
+del _stream, _s
+
 # Bootstrap: проверенный фундамент лежит в соседнем ../digitizer как ПЛОСКИЕ модули
 # (extract_nlgx, write_nlgx, dataset, decode_levels, behavior_priors, detect_masks, ...),
 # которые импортируются по имени. Кладём их каталог на путь один раз (как делает ../run.py).

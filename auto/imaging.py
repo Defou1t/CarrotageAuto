@@ -47,12 +47,14 @@ def structure_mask(rgb, p, min_len=None):
     """Длинные ПРЯМЫЕ структуры (рамка трека, вертикальные оси, деления масштаба, жирная сетка).
     Морфология: бинарь тёмного → раздельное открытие вертикалью и горизонталью длинным ядром.
     Прямая линия (рамка/ось) выживает; волнистая кривая — нет. Возвращает bool-маску структуры."""
-    L = int(min_len or p.struct_open_len)
-    dark = (value_channel(rgb) < p.grid_v_hi).astype(np.uint8)   # включая светло-серую сетку
+    H = rgb.shape[0]
+    Lh = int(min_len or p.struct_open_len)                       # горизонталь: верх/низ-правила
+    Lv = max(Lh, int(p.struct_vert_frac * H))                    # вертикаль: ТОЛЬКО полно-высотная
+    dark = (value_channel(rgb) < p.grid_v_hi).astype(np.uint8)   #   грань — не зубцы пиковой кривой
     vert = cv2.morphologyEx(dark, cv2.MORPH_OPEN,
-                            cv2.getStructuringElement(cv2.MORPH_RECT, (1, L)))
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (1, Lv)))
     horiz = cv2.morphologyEx(dark, cv2.MORPH_OPEN,
-                             cv2.getStructuringElement(cv2.MORPH_RECT, (L, 1)))
+                             cv2.getStructuringElement(cv2.MORPH_RECT, (Lh, 1)))
     s = (vert | horiz)
     return cv2.dilate(s, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))) > 0
 

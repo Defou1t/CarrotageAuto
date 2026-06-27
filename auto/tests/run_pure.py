@@ -65,12 +65,18 @@ def test_confidence():
         L(track_index=0, color="black", behavior="peaky", density=40, thickness=2, x_lo=200, x_hi=240, n_strokes=4, n_levels_est=1),
         L(track_index=0, color="black", behavior="peaky", density=38, thickness=2, x_lo=235, x_hi=275, n_strokes=4, n_levels_est=1),
         L(track_index=0, color="green", behavior="peaky", density=3, thickness=1, x_lo=300, x_hi=320, n_strokes=2, n_levels_est=1),
+        # одиночная ШИРОКАЯ пиковая (DT акустики): band велик, но ~1 ран/строку → AUTO (не пучок)
+        L(track_index=1, color="black", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=1.0),
+        # сбитый пучок по РАНАМ: ≥2 ран/строку → FLAG (хотя один инстанс)
+        L(track_index=2, color="black", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=2.0),
     ]
     CF.classify(Sheet(lines))
     check("SP smooth → AUTO", lines[0].confidence == "AUTO", lines[0].confidence)
     check("пучок A → FLAG bunched", lines[1].confidence == "FLAG" and lines[1].flag_reason == "bunched_crossing", (lines[1].confidence, lines[1].flag_reason))
     check("пучок B → FLAG bunched", lines[2].confidence == "FLAG" and lines[2].flag_reason == "bunched_crossing", (lines[2].confidence, lines[2].flag_reason))
     check("выцветшая → FLAG faint", lines[3].confidence == "FLAG" and lines[3].flag_reason == "faint", (lines[3].confidence, lines[3].flag_reason))
+    check("одиночная широкая (1 ран/стр) → AUTO", lines[4].confidence == "AUTO", (lines[4].confidence, lines[4].flag_reason))
+    check("пучок по ранам (≥2/стр) → FLAG", lines[5].confidence == "FLAG" and lines[5].flag_reason == "bunched_crossing", (lines[5].confidence, lines[5].flag_reason))
 
 
 def main():
