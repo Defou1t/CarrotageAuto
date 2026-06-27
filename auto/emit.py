@@ -40,6 +40,19 @@ def _overlay(rgb, sheet, traces, out, stem):
     from PIL import Image
     H, W = rgb.shape[:2]
     ov = rgb.copy()
+    # рамка (U0) — циан: грани треков (вертикали) + верх/низ (горизонтали). Видно «рамку» анализа.
+    fr = sheet.frame
+    FRAME_RGB = (0, 200, 220)
+    if fr.tracks and fr.bottom_y > fr.top_y:
+        ty, by = max(0, fr.top_y), min(H, fr.bottom_y)
+        for t in fr.tracks:
+            for x in (t.x_left, t.x_right):
+                if 0 <= x < W:
+                    ov[ty:by, max(0, x - 1):x + 2] = FRAME_RGB
+        x0 = max(0, fr.tracks[0].x_left); x1 = min(W, fr.tracks[-1].x_right)
+        for y in (fr.top_y, fr.bottom_y):
+            if 0 <= y < H:
+                ov[max(0, y - 1):y + 2, x0:x1] = FRAME_RGB
     tr_by_id = {id(L): tr for L, tr in traces}
     for L in sheet.lines:
         # FLAG — жёлтым контуром x-полосы; AUTO с трассой — цветом линии

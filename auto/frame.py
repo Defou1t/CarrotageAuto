@@ -194,4 +194,12 @@ def detect_frame(rgb, meta=None, p=None) -> Frame:
                grid_period_px=period, grid_ys=gys,
                diag={"n_vertical_lines": len(xs), "n_tracks": len(tracks),
                      "depth_from_filename": meta is not None and meta.top_depth is not None})
+    # ЧЕСТНАЯ уверенность: если грань-сигнала нет (сетка-бумага, как Yatskivska — грани/верх-низ тоном
+    # светлой сетки, нет тёмных линий), детект вырождается в «весь лист». Не молчим — флагаем, чтобы
+    # pipeline/UI посоветовал дать --frame (durable §6.6.9: автономный U0 тут не строится прямыми).
+    full_w = bool(tracks) and (tracks[-1].x_right - tracks[0].x_left) > 0.85 * W
+    full_h = (bottom_y - top_y) > 0.90 * H
+    fr.diag["low_confidence"] = bool(len(tracks) <= 1 and full_w and full_h)
+    if fr.diag["low_confidence"]:
+        fr.diag["advise"] = "нет грань-сигнала (сетка-бумага) — дайте --frame для точной калибровки"
     return fr

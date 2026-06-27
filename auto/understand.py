@@ -175,6 +175,12 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
         cov_min = max(2 * p.min_line_h_px, int(p.min_line_cov_frac * (frame.bottom_y - frame.top_y)))
         if len(xs_m) < cov_min:
             continue
+        # ПРЯМАЯ референс/грань-вертикаль (x почти константа над cov-порогом) ≠ кривая (та варьирует x —
+        # это измерение). Светлую вертикаль structure_mask не ловит (тон ~бумаги, рвётся на полной высоте).
+        # Различитель — сам x-размах линии: ≤straight_max_band при достаточном покрытии = прямая (Yatskivska
+        # синяя печатная вертикаль x394 band4). Реальная даже тонкая кривая виляет шире.
+        if float(xs_m.max() - xs_m.min()) <= p.straight_max_band:
+            continue
         y0 = min(s["y0"] for s in members); y1 = max(s["y1"] for s in members)
         # центр-трасса полосы = объединение штрихов (для поведения берём самый длинный)
         longest = max(members, key=lambda s: (~np.isnan(s["xs_row"])).sum())
