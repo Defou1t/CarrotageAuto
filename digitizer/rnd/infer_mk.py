@@ -75,7 +75,16 @@ def main():
     def yof(d): return int(da["top_y"] + (d - da["top_depth"]) * (da["bottom_y"] - da["top_y"]) / da["span_depth"])  # span_px=0 дефект
     prob = predict2(net, rgb, dev, y0=TY, y1=BY)
     print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}%")
-    X0, X1 = 0, W              # полная ширина: канальная селективность сама находит MGZ/MPZ (val-планшеты шире)
+    # PER-TRACK band: MK-полоса = плотнейший непрерывный кластер обоих каналов (исключает MBK/чужие треки)
+    comb = (prob[0] + prob[1])[TY:BY].sum(0)
+    if comb.max() > 0:
+        xs = np.nonzero(comb > 0.08 * comb.max())[0]
+        segs = np.split(xs, np.nonzero(np.diff(xs) > 30)[0] + 1)
+        best = max(segs, key=lambda s: comb[s].sum())
+        X0, X1 = max(0, int(best[0]) - 20), min(W, int(best[-1]) + 20)
+    else:
+        X0, X1 = 0, W
+    print(f"MK-полоса x[{X0}..{X1}]")
     mgz = trace_ch(prob[0], TY, BY, X0, X1)
     mpz = trace_ch(prob[1], TY, BY, X0, X1)
     np.save(out / "mk_prob2.npy", prob.astype(np.float16))

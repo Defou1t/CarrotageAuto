@@ -66,16 +66,17 @@ def val_dice(model, dl, dev):
 
 def main():
     a = sys.argv[1:]
-    ep = 28; bs = 16; lr = 4e-4
+    ep = 28; bs = 16; lr = 4e-4; base = 48          # base32→48: больше ёмкости для разделения
     if "--epochs" in a: ep = int(a[a.index("--epochs") + 1])
     if "--bs" in a: bs = int(a[a.index("--bs") + 1])
     if "--lr" in a: lr = float(a[a.index("--lr") + 1])
+    if "--base" in a: base = int(a[a.index("--base") + 1])
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     tr = DataLoader(MK("train", augment=True), batch_size=bs, shuffle=True, num_workers=0)
     va = DataLoader(MK("val"), batch_size=bs, num_workers=0)
     print(f"device={dev} train={len(tr.dataset)} val={len(va.dataset)} ep={ep} bs={bs}")
-    model = UNet(in_ch=3, n_classes=2, base=32).to(dev)
+    model = UNet(in_ch=3, n_classes=2, base=base).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, ep)
     best = -1
@@ -92,7 +93,7 @@ def main():
         if score > best:
             best = score
             torch.save({"model": model.state_dict(), "epoch": e + 1, "val_dice": score,
-                        "n_classes": 2, "base": 32}, OUT)
+                        "n_classes": 2, "base": base}, OUT)
             print(f"   ✓ best -> {OUT}")
     print(f"DONE best avg val_dice={best:.3f}")
 
