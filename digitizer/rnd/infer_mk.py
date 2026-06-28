@@ -72,7 +72,7 @@ def main():
     rgb = np.asarray(Image.open(image).convert("RGB")); H, W, _ = rgb.shape
     da = extract(nlgx)["depth_axis"]
     TY, BY = int(da["top_y"]), int(da.get("bottom_y") or H - 1)
-    def yof(d): return int(da["top_y"] + (d - da["top_depth"]) * da["span_px"] / da["span_depth"])
+    def yof(d): return int(da["top_y"] + (d - da["top_depth"]) * (da["bottom_y"] - da["top_y"]) / da["span_depth"])  # span_px=0 дефект
     prob = predict2(net, rgb, dev, y0=TY, y1=BY)
     print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}%")
     X0, X1 = 60, 340
