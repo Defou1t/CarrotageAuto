@@ -56,7 +56,7 @@ def cut_tiles(img, m2, T, stride, negfrac, rng, maxtiles):
 
 def main():
     args = sys.argv[1:]
-    T = 256; stride = 140; negfrac = 0.15; valfrac = 0.18; maxtiles = 90
+    T = 256; stride = 110; negfrac = 0.15; valfrac = 0.18; maxtiles = 180
     out = Path(r"F:\nds\output\mk_data")
     i = 0
     while i < len(args):
@@ -97,8 +97,8 @@ def main():
             if not mgz or not mpz:
                 continue
             ch0 = np.zeros((H, W), bool); ch1 = np.zeros((H, W), bool)
-            for c in mgz: ch0 |= ds.curve_mask(c, H, W, stroke=3)
-            for c in mpz: ch1 |= ds.curve_mask(c, H, W, stroke=3)
+            for c in mgz: ch0 |= ds.curve_mask(c, H, W, stroke=6)
+            for c in mpz: ch1 |= ds.curve_mask(c, H, W, stroke=6)
             m2 = np.stack([ch0, ch1], -1)
             imgs, masks = cut_tiles(rgb, m2, T, stride, negfrac, rng, maxtiles)
             if not imgs:
