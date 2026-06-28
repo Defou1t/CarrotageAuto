@@ -75,7 +75,7 @@ def main():
     def yof(d): return int(da["top_y"] + (d - da["top_depth"]) * (da["bottom_y"] - da["top_y"]) / da["span_depth"])  # span_px=0 дефект
     prob = predict2(net, rgb, dev, y0=TY, y1=BY)
     print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}%")
-    X0, X1 = 60, 340
+    X0, X1 = 0, W              # полная ширина: канальная селективность сама находит MGZ/MPZ (val-планшеты шире)
     mgz = trace_ch(prob[0], TY, BY, X0, X1)
     mpz = trace_ch(prob[1], TY, BY, X0, X1)
     np.save(out / "mk_prob2.npy", prob.astype(np.float16))
