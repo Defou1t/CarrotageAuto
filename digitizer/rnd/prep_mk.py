@@ -92,8 +92,8 @@ def main():
                 continue
             im = Image.open(img_path).convert("RGB"); rgb = np.asarray(im)
             gray = np.asarray(im.convert("L")); H, W = gray.shape
-            mgz = [c for c in mgz if align_frac(gray, c)[0] >= 0.80]   # ниже порог → больше планшетов
-            mpz = [c for c in mpz if align_frac(gray, c)[0] >= 0.80]
+            mgz = [c for c in mgz if align_frac(gray, c)[0] >= 0.72]   # ниже порог → все планшеты
+            mpz = [c for c in mpz if align_frac(gray, c)[0] >= 0.72]
             if not mgz or not mpz:
                 continue
             ch0 = np.zeros((H, W), bool); ch1 = np.zeros((H, W), bool)

@@ -27,15 +27,22 @@ class MK(Dataset):
         return len(self.imgs)
 
     def __getitem__(self, i):
+        import cv2
         img = self.imgs[i].astype(np.float32) / 255.0       # T×T×3
         msk = self.masks[i].astype(np.float32)              # T×T×2
         if self.aug:
-            if np.random.rand() < 0.5:                       # гориз. флип (идентичность по каналу, не позиции)
+            if np.random.rand() < 0.5:                       # гориз. флип
                 img = img[:, ::-1].copy(); msk = msk[:, ::-1].copy()
             if np.random.rand() < 0.5:                       # верт. флип
                 img = img[::-1].copy(); msk = msk[::-1].copy()
+        # DT-КАНАЛ (толщина штриха перпендикулярно) = явный различитель MGZ(тонкий)/MPZ(толстый);
+        # из тёмного, ДО intensity-джиттера. RGB модель толщину учит, DT даёт её прямо.
+        dark = (img.max(2) < 110 / 255.0).astype(np.uint8)
+        dt = np.clip(cv2.distanceTransform(dark, cv2.DIST_L2, 5) / 8.0, 0, 1).astype(np.float32)
+        if self.aug:
             img = np.clip(img * np.random.uniform(0.85, 1.15) + np.random.uniform(-0.05, 0.05), 0, 1)
-        img = torch.from_numpy(img.transpose(2, 0, 1))      # 3×T×T
+        img4 = np.concatenate([img, dt[..., None]], -1)     # T×T×4 (RGB+DT)
+        img = torch.from_numpy(img4.transpose(2, 0, 1))     # 4×T×T
         msk = torch.from_numpy(msk.transpose(2, 0, 1))      # 2×T×T
         return img, msk
 
@@ -76,7 +83,7 @@ def main():
     tr = DataLoader(MK("train", augment=True), batch_size=bs, shuffle=True, num_workers=0)
     va = DataLoader(MK("val"), batch_size=bs, num_workers=0)
     print(f"device={dev} train={len(tr.dataset)} val={len(va.dataset)} ep={ep} bs={bs}")
-    model = UNet(in_ch=3, n_classes=2, base=base).to(dev)
+    model = UNet(in_ch=4, n_classes=2, base=base).to(dev)   # RGB+DT
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, ep)
     best = -1
@@ -93,7 +100,7 @@ def main():
         if score > best:
             best = score
             torch.save({"model": model.state_dict(), "epoch": e + 1, "val_dice": score,
-                        "n_classes": 2, "base": base}, OUT)
+                        "n_classes": 2, "base": base, "in_ch": 4}, OUT)
             print(f"   ✓ best -> {OUT}")
     print(f"DONE best avg val_dice={best:.3f}")
 

@@ -16,7 +16,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 def load2(ckpt, dev):
     ck = torch.load(ckpt, map_location=dev)
-    net = UNet(in_ch=3, n_classes=ck.get("n_classes", 2), base=ck.get("base", 32))
+    net = UNet(in_ch=ck.get("in_ch", 3), n_classes=ck.get("n_classes", 2), base=ck.get("base", 32))
     net.load_state_dict(ck["model"]); net.to(dev).eval()
     return net, ck
 
@@ -30,10 +30,15 @@ def predict2(net, rgb, dev, tile=256, ov=96, bs=24, y0=0, y1=None):
     ys = sorted(set(y for y in ys if y + tile > y0 and y < y1)); xs = sorted(set(xs))
     prob = np.zeros((2, H, W), np.float32); wsum = np.zeros((H, W), np.float32)
     win = np.outer(np.hanning(tile), np.hanning(tile)).astype(np.float32) + 1e-3
+    import cv2                                                     # DT-канал (толщина) как при обучении
+    dark = (rgb.max(2) < 110).astype(np.uint8)
+    DTf = np.clip(cv2.distanceTransform(dark, cv2.DIST_L2, 5) / 8.0, 0, 1).astype(np.float32)
+    rgbf = rgb.astype(np.float32) / 255.0
+    in4 = net.d1[0].in_channels == 4                              # модель ждёт RGB+DT?
     batch, pos = [], []
     def flush():
         if not batch: return
-        t = torch.from_numpy(np.stack(batch)).permute(0, 3, 1, 2).float().div(255).to(dev)
+        t = torch.from_numpy(np.stack(batch)).permute(0, 3, 1, 2).float().to(dev)
         with torch.amp.autocast("cuda", enabled=(dev == "cuda")):
             p = torch.sigmoid(net(t)).float().cpu().numpy()        # B×2×T×T
         for (yy, xx), pm in zip(pos, p):
@@ -42,7 +47,9 @@ def predict2(net, rgb, dev, tile=256, ov=96, bs=24, y0=0, y1=None):
         batch.clear(); pos.clear()
     for yy in ys:
         for xx in xs:
-            batch.append(rgb[yy:yy+tile, xx:xx+tile]); pos.append((yy, xx))
+            t3 = rgbf[yy:yy+tile, xx:xx+tile]
+            tile_in = np.concatenate([t3, DTf[yy:yy+tile, xx:xx+tile, None]], -1) if in4 else t3
+            batch.append(tile_in); pos.append((yy, xx))
             if len(batch) >= bs: flush()
     flush()
     return prob / np.maximum(wsum, 1e-6)[None]
