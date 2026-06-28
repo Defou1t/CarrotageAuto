@@ -79,7 +79,11 @@ def main():
     mgz = trace_ch(prob[0], TY, BY, X0, X1)
     mpz = trace_ch(prob[1], TY, BY, X0, X1)
     np.save(out / "mk_prob2.npy", prob.astype(np.float16))
-    print(f"MGZ точек={len(mgz)} MPZ={len(mpz)}")
+    stem = Path(image).stem[:40]
+    np.savez(out / f"{stem}_traces.npz",                         # для объективного eval_mk vs GT
+             mgz_y=np.array(list(mgz)), mgz_x=np.array(list(mgz.values())),
+             mpz_y=np.array(list(mpz)), mpz_x=np.array(list(mpz.values())))
+    print(f"MGZ точек={len(mgz)} MPZ={len(mpz)} | трассы -> {stem}_traces.npz")
     COLM, COLP = (220, 0, 0), (0, 110, 230)
     def draw(ov, ox, oy):
         for d, col in ((mgz, COLM), (mpz, COLP)):
