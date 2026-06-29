@@ -17,6 +17,24 @@ Image.MAX_IMAGE_PIXELS = None
 ARCHIVE = Path(r"F:\nds\projects\Archive")
 
 
+def ink_faithful_masks(gray, mgz, mpz, H, W, dark_thr=120, radius=6):
+    """ch0/ch1 = тёмные пиксели, ближайшая центральная линия которых принадлежит MGZ/MPZ
+    (в радиусе `radius`). Сохраняет истинную толщину штриха и липнет к реальной туши.
+    Спорные (равноудалённые/пересечение) → ближайший канал; центральная линия гарантируется."""
+    import cv2
+    cen0 = np.zeros((H, W), bool); cen1 = np.zeros((H, W), bool)
+    for c in mgz: cen0 |= ds.curve_mask(c, H, W, stroke=2)
+    for c in mpz: cen1 |= ds.curve_mask(c, H, W, stroke=2)
+    d0 = cv2.distanceTransform((~cen0).astype(np.uint8), cv2.DIST_L2, 5)
+    d1 = cv2.distanceTransform((~cen1).astype(np.uint8), cv2.DIST_L2, 5)
+    dark = gray < dark_thr
+    near0 = dark & (d0 <= d1) & (d0 <= radius)
+    near1 = dark & (d1 <  d0) & (d1 <= radius)
+    ch0 = near0 | cen0                       # гарантируем центральную линию даже на слабой туши
+    ch1 = (near1 | cen1) & ~ch0              # к0 имеет приоритет на спорных пикселях (взаимоисключение)
+    return ch0, ch1
+
+
 def is_val(well, valfrac):
     return int(hashlib.md5(well.encode()).hexdigest(), 16) % 1000 < valfrac * 1000
 
@@ -56,7 +74,7 @@ def cut_tiles(img, m2, T, stride, negfrac, rng, maxtiles):
 
 def main():
     args = sys.argv[1:]
-    T = 256; stride = 110; negfrac = 0.15; valfrac = 0.18; maxtiles = 180
+    T = 256; stride = 110; negfrac = 0.15; valfrac = 0.18; maxtiles = 180; scale = 1
     out = Path(r"F:\nds\output\mk_data")
     i = 0
     while i < len(args):
@@ -65,6 +83,7 @@ def main():
         elif a == "--stride": stride = int(args[i+1]); i += 2
         elif a == "--negfrac": negfrac = float(args[i+1]); i += 2
         elif a == "--valfrac": valfrac = float(args[i+1]); i += 2
+        elif a == "--scale": scale = int(args[i+1]); i += 2   # апскейл планшета ×S перед нарезкой
         elif a == "--out": out = Path(args[i+1]); i += 2
         else: i += 1
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -96,11 +115,17 @@ def main():
             mpz = [c for c in mpz if align_frac(gray, c)[0] >= 0.72]
             if not mgz or not mpz:
                 continue
-            ch0 = np.zeros((H, W), bool); ch1 = np.zeros((H, W), bool)
-            for c in mgz: ch0 |= ds.curve_mask(c, H, W, stroke=6)
-            for c in mpz: ch1 |= ds.curve_mask(c, H, W, stroke=6)
+            # ink-faithful маски: тёмный штрих привязывается к БЛИЖАЙШЕЙ центральной линии своего
+            # канала (а не фикс. 6px-полоса). Цель сама несёт толщину (MGZ тоньше MPZ) + снимает
+            # рассинхрон GT↔тушь (маска липнет к реальной туши). contested-пиксель → ближний канал.
+            ch0, ch1 = ink_faithful_masks(gray, mgz, mpz, H, W)
+            if scale != 1:                                   # ×S апскейл: штрих 2× шире → толщина/локализация резче
+                import cv2
+                rgb = cv2.resize(rgb, (W * scale, H * scale), interpolation=cv2.INTER_LINEAR)
+                ch0 = cv2.resize(ch0.astype(np.uint8), (W * scale, H * scale), interpolation=cv2.INTER_NEAREST).astype(bool)
+                ch1 = cv2.resize(ch1.astype(np.uint8), (W * scale, H * scale), interpolation=cv2.INTER_NEAREST).astype(bool)
             m2 = np.stack([ch0, ch1], -1)
-            imgs, masks = cut_tiles(rgb, m2, T, stride, negfrac, rng, maxtiles)
+            imgs, masks = cut_tiles(rgb, m2, T, stride * scale, negfrac, rng, maxtiles)
             if not imgs:
                 continue
             fn = out / split / f"{wl.name}__{nlgx.stem[:46]}.npz"

@@ -57,12 +57,39 @@ def loss_fn(logits, target):
     return bce + dice / target.shape[1]
 
 
+def to_label(msk):
+    """2-канальная disjoint-маска (B×2×T×T) → метки {0=фон,1=MGZ,2=MPZ} (B×T×T long)."""
+    lab = torch.zeros(msk.shape[0], msk.shape[2], msk.shape[3], dtype=torch.long, device=msk.device)
+    lab[msk[:, 0] > 0.5] = 1
+    lab[msk[:, 1] > 0.5] = 2                                  # MPZ перекрывает на редком тай (disjoint → неважно)
+    return lab
+
+
+def loss_fn_softmax(logits, target):
+    """softmax-КОНКУРЕНЦИЯ {фон,MGZ,MPZ}: пиксель принадлежит ровно одному классу (бьёт «оба горят»).
+    weighted CE (фон дёшев) + per-fg soft-dice."""
+    lab = to_label(target)
+    w = torch.tensor([0.3, 1.0, 1.0], device=logits.device)
+    ce = torch.nn.functional.cross_entropy(logits, lab, weight=w)
+    p = torch.softmax(logits, 1); dice = 0.0
+    for c in (1, 2):                                         # foreground dice (MGZ/MPZ)
+        tc = (lab == c).float()
+        num = 2 * (p[:, c] * tc).sum((1, 2)) + 1.0
+        den = p[:, c].sum((1, 2)) + tc.sum((1, 2)) + 1.0
+        dice = dice + (1 - num / den).mean()
+    return ce + dice / 2
+
+
 @torch.no_grad()
-def val_dice(model, dl, dev):
+def val_dice(model, dl, dev, softmax=False):
     model.eval(); ds = [0.0, 0.0]; n = 0
     for img, msk in dl:
         img, msk = img.to(dev), msk.to(dev)
-        p = (torch.sigmoid(model(img)) > 0.5).float()
+        if softmax:
+            am = torch.argmax(model(img), 1)                 # B×T×T в {0,1,2}
+            p = torch.stack([(am == 1).float(), (am == 2).float()], 1)
+        else:
+            p = (torch.sigmoid(model(img)) > 0.5).float()
         for c in range(2):
             num = 2 * (p[:, c] * msk[:, c]).sum((1, 2))
             den = p[:, c].sum((1, 2)) + msk[:, c].sum((1, 2)) + 1e-6
@@ -78,12 +105,16 @@ def main():
     if "--bs" in a: bs = int(a[a.index("--bs") + 1])
     if "--lr" in a: lr = float(a[a.index("--lr") + 1])
     if "--base" in a: base = int(a[a.index("--base") + 1])
+    softmax = "--softmax" in a                       # 3-класс softmax-конкуренция vs незав. сигмоиды
+    scale = int(a[a.index("--scale") + 1]) if "--scale" in a else 1   # метка масштаба препа → в чекпойнт для infer
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     tr = DataLoader(MK("train", augment=True), batch_size=bs, shuffle=True, num_workers=0)
     va = DataLoader(MK("val"), batch_size=bs, num_workers=0)
-    print(f"device={dev} train={len(tr.dataset)} val={len(va.dataset)} ep={ep} bs={bs}")
-    model = UNet(in_ch=4, n_classes=2, base=base).to(dev)   # RGB+DT
+    print(f"device={dev} train={len(tr.dataset)} val={len(va.dataset)} ep={ep} bs={bs} softmax={softmax}")
+    ncls = 3 if softmax else 2
+    crit = loss_fn_softmax if softmax else loss_fn
+    model = UNet(in_ch=4, n_classes=ncls, base=base).to(dev)   # RGB+DT
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, ep)
     best = -1
@@ -91,16 +122,16 @@ def main():
         model.train(); t0 = time.time(); tot = 0.0
         for img, msk in tr:
             img, msk = img.to(dev), msk.to(dev)
-            opt.zero_grad(); out = model(img); l = loss_fn(out, msk)
+            opt.zero_grad(); out = model(img); l = crit(out, msk)
             l.backward(); opt.step(); tot += l.item()
         sched.step()
-        dm, dp = val_dice(model, va, dev)
+        dm, dp = val_dice(model, va, dev, softmax)
         score = (dm + dp) / 2
         print(f"ep{e+1:2d} loss={tot/len(tr):.3f} val_dice MGZ={dm:.3f} MPZ={dp:.3f} avg={score:.3f} ({time.time()-t0:.0f}s)")
         if score > best:
             best = score
             torch.save({"model": model.state_dict(), "epoch": e + 1, "val_dice": score,
-                        "n_classes": 2, "base": base, "in_ch": 4}, OUT)
+                        "n_classes": ncls, "base": base, "in_ch": 4, "softmax": softmax, "scale": scale}, OUT)
             print(f"   ✓ best -> {OUT}")
     print(f"DONE best avg val_dice={best:.3f}")
 

@@ -22,7 +22,7 @@ def load2(ckpt, dev):
 
 
 @torch.no_grad()
-def predict2(net, rgb, dev, tile=256, ov=96, bs=24, y0=0, y1=None):
+def predict2(net, rgb, dev, tile=256, ov=96, bs=24, y0=0, y1=None, softmax=False):
     """2-канальная prob (2×H×W float32) тайлово с хэннинг-стичингом."""
     H, W, _ = rgb.shape; y1 = H if y1 is None else min(H, y1); step = tile - ov
     ys = list(range(0, max(1, H - tile + 1), step)) + ([H - tile] if H > tile else [])
@@ -40,7 +40,11 @@ def predict2(net, rgb, dev, tile=256, ov=96, bs=24, y0=0, y1=None):
         if not batch: return
         t = torch.from_numpy(np.stack(batch)).permute(0, 3, 1, 2).float().to(dev)
         with torch.amp.autocast("cuda", enabled=(dev == "cuda")):
-            p = torch.sigmoid(net(t)).float().cpu().numpy()        # B×2×T×T
+            o = net(t)
+            if softmax:                                            # {фон,MGZ,MPZ} → каналы [MGZ,MPZ]
+                p = torch.softmax(o, 1)[:, 1:].float().cpu().numpy()
+            else:
+                p = torch.sigmoid(o).float().cpu().numpy()         # B×2×T×T
         for (yy, xx), pm in zip(pos, p):
             prob[:, yy:yy+tile, xx:xx+tile] += pm * win
             wsum[yy:yy+tile, xx:xx+tile] += win
@@ -55,14 +59,17 @@ def predict2(net, rgb, dev, tile=256, ov=96, bs=24, y0=0, y1=None):
     return prob / np.maximum(wsum, 1e-6)[None]
 
 
-def trace_ch(probc, y0, y1, x0, x1, thr=0.4):
-    """per-row x = вершина выноса по prob канала (взвеш. центроид сильнейшего блоба в полосе)."""
+def trace_ch(probc, y0, y1, x0, x1, thr=0.4, win=8):
+    """per-row x = ПИК канала: argmax prob + субпиксельный центроид в окне ±win вокруг него.
+    NB: центроид по ВСЕЙ полосе утягивает посторонней тушью (LEVEN: 268px при разбросной туши на
+    всю ширину планшета) — берём именно пик кривого канала, а не среднее массы полосы."""
     out = {}
-    cols = np.arange(x0, x1)
     for y in range(y0, y1):
-        seg = probc[y, x0:x1]; mloc = seg > thr
-        if mloc.any():
-            w = seg[mloc]; out[y] = float((cols[mloc] * w).sum() / w.sum())
+        seg = probc[y, x0:x1]
+        if seg.max() <= thr:
+            continue
+        a = int(np.argmax(seg)); lo, hi = max(0, a - win), min(len(seg), a + win + 1)
+        w = seg[lo:hi]; out[y] = float(((np.arange(lo, hi) + x0) * w).sum() / w.sum())
     return out
 
 
@@ -80,20 +87,32 @@ def main():
     da = extract(nlgx)["depth_axis"]
     TY, BY = int(da["top_y"]), int(da.get("bottom_y") or H - 1)
     def yof(d): return int(da["top_y"] + (d - da["top_depth"]) * (da["bottom_y"] - da["top_y"]) / da["span_depth"])  # span_px=0 дефект
-    prob = predict2(net, rgb, dev, y0=TY, y1=BY)
-    print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}%")
+    S = int(ck.get("scale", 1))                                  # модель обучена на ×S апскейле → инференс тоже на ×S
+    if S != 1:
+        import cv2
+        rgbP = cv2.resize(rgb, (W * S, H * S), interpolation=cv2.INTER_LINEAR)
+        TYp, BYp, Wp = TY * S, BY * S, W * S
+    else:
+        rgbP, TYp, BYp, Wp = rgb, TY, BY, W
+    prob = predict2(net, rgbP, dev, y0=TYp, y1=BYp, softmax=bool(ck.get("softmax")))
+    print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}% scale={S}")
     # PER-TRACK band: MK-полоса = плотнейший непрерывный кластер обоих каналов (исключает MBK/чужие треки)
-    comb = (prob[0] + prob[1])[TY:BY].sum(0)
+    comb = (prob[0] + prob[1])[TYp:BYp].sum(0)
     if comb.max() > 0:
         xs = np.nonzero(comb > 0.08 * comb.max())[0]
-        segs = np.split(xs, np.nonzero(np.diff(xs) > 30)[0] + 1)
+        segs = np.split(xs, np.nonzero(np.diff(xs) > 30 * S)[0] + 1)
         best = max(segs, key=lambda s: comb[s].sum())
-        X0, X1 = max(0, int(best[0]) - 20), min(W, int(best[-1]) + 20)
+        X0, X1 = max(0, int(best[0]) - 20 * S), min(Wp, int(best[-1]) + 20 * S)
     else:
-        X0, X1 = 0, W
-    print(f"MK-полоса x[{X0}..{X1}]")
-    mgz = trace_ch(prob[0], TY, BY, X0, X1)
-    mpz = trace_ch(prob[1], TY, BY, X0, X1)
+        X0, X1 = 0, Wp
+    print(f"MK-полоса x[{X0}..{X1}] (scale-px)")
+    def to_native(d):                                            # ×S координаты → нативные (усредняем S под-строк)
+        if S == 1: return d
+        acc = {}
+        for yP, xP in d.items(): acc.setdefault(yP // S, []).append(xP / S)
+        return {r: float(np.mean(v)) for r, v in acc.items()}
+    mgz = to_native(trace_ch(prob[0], TYp, BYp, X0, X1))
+    mpz = to_native(trace_ch(prob[1], TYp, BYp, X0, X1))
     np.save(out / "mk_prob2.npy", prob.astype(np.float16))
     stem = Path(image).stem[:40]
     np.savez(out / f"{stem}_traces.npz",                         # для объективного eval_mk vs GT
