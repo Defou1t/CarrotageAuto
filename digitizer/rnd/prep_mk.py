@@ -45,6 +45,41 @@ def ink_faithful_masks(gray, mgz, mpz, H, W, dark_thr=120, radius=6, max_dx=60):
     return ch0, ch1, ign
 
 
+def snap_to_ink(gray, curve, win=6, dark_thr=140):
+    """Снап полилинии GT к ближайшему гребню тёмного — рассинхрон скана лечится У ИСТОЧНИКА
+    (анализ 02.07: при align 0.72 до 28% GT-точек мимо туши → таргеты-галлюцинации + давление
+    собственной кривой). Сдвиг сглаживается медианой по 9 соседним точкам трассы: рассинхрон
+    глобально-плавный (варп скана), point-wise прыжок на соседнюю кривую исключается."""
+    from extract_nlgx import NULL as _N
+    H, W = gray.shape
+    ty = curve["top_y"]; xs = list(curve["xs"])
+    pts = [(i, x) for i, x in enumerate(xs) if x != _N]
+    if len(pts) < 9:
+        return curve
+    offs = {}
+    for i, x in pts:
+        y = ty + i
+        if not (0 <= y < H):
+            continue
+        lo, hi = max(0, int(x) - win), min(W, int(x) + win + 1)
+        if hi <= lo:
+            continue
+        seg = gray[y, lo:hi].astype(int)
+        j = int(np.argmin(seg))
+        if seg[j] < dark_thr:                                    # рядом реально есть тушь
+            offs[i] = lo + j - x
+    keys = sorted(offs)
+    if not keys:
+        return curve
+    arr = np.array([offs[k] for k in keys], float)
+    out = dict(curve); nxs = list(xs)
+    for k_i, k in enumerate(keys):
+        sm = float(np.median(arr[max(0, k_i - 4):k_i + 5]))
+        nxs[k] = int(round(xs[k] + sm))
+    out["xs"] = nxs
+    return out
+
+
 def hard_rows(cen0, cen1, sep_px=25):
     """Строки сближения кривых (per-row |x0−x1| < sep_px) — там живут свопы; пересэмплим."""
     H = cen0.shape[0]
@@ -105,7 +140,7 @@ def cut_tiles(img, m2, T, stride, negfrac, rng, maxtiles, hard=None, hard_boost=
 
 def main():
     args = sys.argv[1:]
-    T = 256; stride = 110; negfrac = 0.15; valfrac = 0.18; maxtiles = 180; scale = 1
+    T = 256; stride = 110; negfrac = 0.15; valfrac = 0.18; maxtiles = 180; scale = 1; snap = False
     out = Path(r"F:\nds\output\mk_data")
     i = 0
     while i < len(args):
@@ -116,6 +151,7 @@ def main():
         elif a == "--valfrac": valfrac = float(args[i+1]); i += 2
         elif a == "--scale": scale = int(args[i+1]); i += 2   # апскейл планшета ×S перед нарезкой
         elif a == "--out": out = Path(args[i+1]); i += 2
+        elif a == "--snap": snap = True; i += 1               # снап GT к туши (возвращает align-fail скважины)
         else: i += 1
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     (out / "train").mkdir(parents=True, exist_ok=True)
@@ -142,6 +178,9 @@ def main():
                 continue
             im = Image.open(img_path).convert("RGB"); rgb = np.asarray(im)
             gray = np.asarray(im.convert("L")); H, W = gray.shape
+            if snap:                                          # рассинхрон лечится до фильтра →
+                mgz = [snap_to_ink(gray, c) for c in mgz]     # align-fail скважины возвращаются
+                mpz = [snap_to_ink(gray, c) for c in mpz]
             mgz = [c for c in mgz if align_frac(gray, c)[0] >= 0.72]   # ниже порог → все планшеты
             mpz = [c for c in mpz if align_frac(gray, c)[0] >= 0.72]
             if not mgz or not mpz:
