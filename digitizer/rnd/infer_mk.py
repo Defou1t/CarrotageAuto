@@ -78,14 +78,19 @@ def main():
     ckpt, image = a[0], a[1]
     nlgx = a[a.index("--nlgx") + 1] if "--nlgx" in a else None
     out = Path(a[a.index("--out") + 1] if "--out" in a else r"F:\nds\output\mk_data")
+    save_prob = "--save-prob" in a                               # debug: 227MB prob-карта (по умолчанию выкл)
     out.mkdir(parents=True, exist_ok=True)
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     net, ck = load2(ckpt, dev)
     print(f"model epoch={ck.get('epoch')} val_dice={ck.get('val_dice'):.3f} device={dev}")
     rgb = np.asarray(Image.open(image).convert("RGB")); H, W, _ = rgb.shape
-    da = extract(nlgx)["depth_axis"]
-    TY, BY = int(da["top_y"]), int(da.get("bottom_y") or H - 1)
+    if nlgx is None:                                             # авто-поиск парной рамки <stem>.nlgx рядом
+        sib = Path(image).with_suffix(".nlgx")
+        nlgx = str(sib) if sib.exists() else None
+    da = extract(nlgx)["depth_axis"] if nlgx else None           # frameless: без рамки — только полное наложение
+    TY = int(da["top_y"]) if da else 0
+    BY = int(da.get("bottom_y") or H - 1) if da else H - 1
     def yof(d): return int(da["top_y"] + (d - da["top_depth"]) * (da["bottom_y"] - da["top_y"]) / da["span_depth"])  # span_px=0 дефект
     S = int(ck.get("scale", 1))                                  # модель обучена на ×S апскейле → инференс тоже на ×S
     if S != 1:
@@ -113,8 +118,9 @@ def main():
         return {r: float(np.mean(v)) for r, v in acc.items()}
     mgz = to_native(trace_ch(prob[0], TYp, BYp, X0, X1))
     mpz = to_native(trace_ch(prob[1], TYp, BYp, X0, X1))
-    np.save(out / "mk_prob2.npy", prob.astype(np.float16))
     stem = Path(image).stem[:40]
+    if save_prob:
+        np.save(out / "mk_prob2.npy", prob.astype(np.float16))
     np.savez(out / f"{stem}_traces.npz",                         # для объективного eval_mk vs GT
              mgz_y=np.array(list(mgz)), mgz_x=np.array(list(mgz.values())),
              mpz_y=np.array(list(mpz)), mpz_x=np.array(list(mpz.values())))
@@ -128,15 +134,19 @@ def main():
                     ov[y - oy, max(0, xi - ox - 1):xi - ox + 2] = col
     try: FONT = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", 24)
     except Exception: FONT = ImageFont.load_default()
+    bx0, bx1 = max(0, X0 // S - 15), min(W, X1 // S + 15)         # полоса MK в НАТИВНЫХ координатах
     full = rgb.copy(); draw(full, 0, 0)
-    Image.fromarray(full[TY:BY, 0:340]).save(out / "MK_nn_full.png"); print("MK_nn_full.png")
-    for d in (3134, 3192, 3308, 3368, 3482, 3688):
-        yc = yof(d); y0, y1 = yc - 130, yc + 130
-        if not (0 <= y0 and y1 < H): continue
-        crop = rgb[y0:y1, 70:300].copy(); draw(crop, 70, y0)
-        im_c = Image.fromarray(crop).resize((230 * 3, 260 * 3), Image.NEAREST)
-        ImageDraw.Draw(im_c).text((6, 4), f"{d}м NN MGZ=красн MPZ=син", fill=(0, 0, 0), font=FONT)
-        im_c.save(out / f"MK_nn_{d}.png"); print(f"  MK_nn_{d}.png")
+    Image.fromarray(full[TY:BY, bx0:bx1]).save(out / f"{stem}_overlay.png")
+    print(f"наложение -> {stem}_overlay.png")
+    if da:                                                        # кропы по глубине — только при наличии рамки
+        td = da["top_depth"]; bd = td + da["span_depth"]          # глубины равномерно по диапазону скважины
+        for d in np.linspace(td, bd, 8)[1:-1]:                    # 6 кропов внутри [top,bottom]
+            d = round(float(d)); yc = yof(d); y0, y1 = yc - 130, yc + 130
+            if not (0 <= y0 and y1 < H): continue
+            crop = rgb[y0:y1, bx0:bx1].copy(); draw(crop, bx0, y0)
+            im_c = Image.fromarray(crop).resize(((bx1 - bx0) * 3, 260 * 3), Image.NEAREST)
+            ImageDraw.Draw(im_c).text((6, 4), f"{d}м NN MGZ=красн MPZ=син", fill=(0, 0, 0), font=FONT)
+            im_c.save(out / f"{stem}_{d}m.png"); print(f"  кроп -> {stem}_{d}m.png")
 
 
 if __name__ == "__main__":
