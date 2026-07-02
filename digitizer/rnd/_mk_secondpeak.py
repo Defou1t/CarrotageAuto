@@ -69,8 +69,11 @@ def analyze(prob, pm, pp, gm, gp):
 
 def main():
     a = sys.argv[1:]
-    ckpt = a[a.index("--ckpt") + 1] if "--ckpt" in a else str(OUT / "mk_sep.pt")
+    ckpt = str(OUT / "mk_sep.pt")
+    if "--ckpt" in a:
+        i = a.index("--ckpt"); ckpt = a[i + 1]; del a[i:i + 2]
     skip = "--skip-infer" in a
+    extra = [x for x in a if x != "--skip-infer"]                # проброс (--ens список, --tta) в infer
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     for well in WELLS:
         nlgx = None
@@ -88,7 +91,7 @@ def main():
         scan = find_image(nlgx); stem = Path(scan).stem[:40]
         if not skip:                                             # прогон с prob-картой (перезаписывает mk_prob2.npy)
             r = subprocess.run([VENV, f"{RND}/infer_mk.py", ckpt, str(scan), "--nlgx", str(nlgx),
-                                "--out", str(OUT), "--save-prob"], capture_output=True, text=True)
+                                "--out", str(OUT), "--save-prob"] + extra, capture_output=True, text=True)
             if r.returncode != 0:
                 print(f"[{well}] infer FAIL: {r.stderr[-200:]}"); continue
         prob = np.load(OUT / "mk_prob2.npy").astype(np.float32)

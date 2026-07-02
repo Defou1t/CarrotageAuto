@@ -13,7 +13,9 @@ from tkinter import ttk, filedialog, scrolledtext
 HERE = Path(__file__).resolve().parent
 VENV = r"D:\ComfyUI\StabilityMatrix\Data\Packages\ComfyUI\venv\Scripts\python.exe"
 INFER = str(HERE / "infer_mk.py")
-CKPT_DEFAULT = r"F:\nds\output\mk_data\mk_sep.pt"
+CKPT_DEFAULT = r"F:\nds\output\mk_data\mk_sep_v7.pt"  # production 02.07: ансамбль v7+v4+v5
+CKPT_FAST = r"F:\nds\output\mk_data\mk_sep.pt"        # быстрый режим = v4 соло (v7 соло нестабилен
+# по MGZ на отдельных скважинах — только в ансамбле; «Качество» добавляет --ens: соседи v4/v5)
 IMG_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 
 
@@ -202,7 +204,10 @@ class App:
             self.q.put(("status", f"[{i+1}/{len(imgs)}] {img.name}"))
             self.emit(f"\n=== [{i+1}/{len(imgs)}] {img.name} ===\n")
             sib = img.with_suffix(".nlgx")
-            cmd = [VENV, INFER, self.ckpt.get(), str(img), "--out", outd]
+            ck = self.ckpt.get()
+            if not self.quality.get() and ck == CKPT_DEFAULT:
+                ck = CKPT_FAST                                   # быстрый режим = стабильный v4 соло
+            cmd = [VENV, INFER, ck, str(img), "--out", outd]
             if self.quality.get():
                 cmd += ["--ens", "--tta"]                        # ансамбль чекпойнтов + флипы
             if sib.exists():
