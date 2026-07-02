@@ -16,13 +16,23 @@ from extract_nlgx import extract, NULL
 import dataset as ds
 
 
-def gt_traces(nlgx):
+def gt_traces(nlgx, only_level0=True):
+    """GT-трассы; level>0 строки (5×-перевыносы) исключаются: домен — 1×/5× отдельные линии,
+    цифруем 1× (перевыносы = отдельный scope); иначе они загрязняют px-метрики (BOGAT:
+    62 level>0 eval-строк с ошибкой ~300px у ЛЮБОЙ модели тянули медиану)."""
     m = extract(str(nlgx))
     cm = {ds.mnemonic(c["name"]).upper(): c for c in ds.real_curves(m)}
     if "MGZ" not in cm or "MPZ" not in cm:
         return None, None
     def tr(c):
-        ty = c["top_y"]; return {ty + i: float(x) for i, x in enumerate(c["xs"]) if x != NULL}
+        ty = c["top_y"]
+        drop = set()
+        if only_level0:
+            for s, e, l in (c.get("segments") or []):
+                if l and l > 0:
+                    drop.update(range(s, e + 1))
+        return {ty + i: float(x) for i, x in enumerate(c["xs"])
+                if x != NULL and (ty + i) not in drop}
     return tr(cm["MGZ"]), tr(cm["MPZ"])
 
 
