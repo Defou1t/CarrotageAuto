@@ -73,6 +73,38 @@ def trace_ch(probc, y0, y1, x0, x1, thr=0.4, win=8):
     return out
 
 
+def trace_assign(prob, y0, y1, x0, x1, S=1, thr_cand=0.25, thr_ch=0.4, merge_pen=0.15):
+    """per-row СОВМЕСТНОЕ назначение каналов на пики combined prob. Второй-пик-тест 02.07:
+    на 89-100% строк-ошибок prob содержит пик у истинной позиции — проваливался НЕЗАВИСИМЫЙ
+    argmax каналов (оба берут один пик / канал уходит на спурионный максимум), не модель.
+    Stateless per-row, без геометрии/temporal-связей (уроки v1-continuity: geometry теряет).
+    merge_pen мягко предпочитает split при равных свидетельствах (реальные слияния всё равно
+    выигрывают: у второго пика там нет канальной поддержки)."""
+    from mk_continuity import row_candidates
+    p0, p1 = prob[0], prob[1]
+    mgz, mpz = {}, {}
+    for y in range(y0, y1):
+        cands = row_candidates(p0[y, x0:x1], p1[y, x0:x1], x0, thr=thr_cand, min_sep=int(3 * S))
+        if not cands:
+            continue
+        def ev(x, pc):
+            xi = int(round(x)); lo, hi = max(x0, xi - 2), min(x1, xi + 3)
+            return float(pc[y, lo:hi].max())
+        E = [(x, ev(x, p0), ev(x, p1)) for x, _ in cands]
+        best = None
+        for i, (xi_, e0i, _) in enumerate(E):
+            for j, (xj_, _, e1j) in enumerate(E):
+                s = e0i + e1j - (merge_pen if i == j else 0.0)
+                if best is None or s > best[0]:
+                    best = (s, xi_, xj_, e0i, e1j)
+        _, xm, xp, e0, e1 = best
+        if e0 > thr_ch:
+            mgz[y] = xm
+        if e1 > thr_ch:
+            mpz[y] = xp
+    return mgz, mpz
+
+
 def repair_outliers(probc, tr, S=1, med_win=45, out_thr=15.0, cap_win=12.0, ratio=0.85, thr=0.30,
                     mad_max=8.0):
     """Чинит транзиентные выбросы argmax (диагностика 02.07: 75-90% свопов = одиночные строки,
@@ -125,6 +157,7 @@ def main():
     save_prob = "--save-prob" in a                               # debug: 227MB prob-карта (по умолчанию выкл)
     continuity = "--continuity" in a                             # пост #1: совместный трекинг 2 прядей
     repair = "--repair" in a                                     # пост #2: constrained re-peak выбросов
+    assign = "--assign" in a                                     # пост #3: joint-назначение на пики combined
     tta = "--tta" in a                                           # ансамбль ориентаций (id+hflip+vflip)
     ens = "--ens" in a                                           # ансамбль чекпойнтов; опц. значение =
     ens_list = None                                              # список путей через запятую
@@ -221,6 +254,14 @@ def main():
         pk_m = to_native(trace_ch(prob[0], TYp, BYp, X0, X1))    # baseline из ТОЙ ЖЕ prob — честный A/B
         pk_p = to_native(trace_ch(prob[1], TYp, BYp, X0, X1))
         save_npz(out / f"{stem}_traces_peak.npz", pk_m, pk_p)
+    elif assign:                                                 # joint-назначение (A/B против peak)
+        tm = trace_ch(prob[0], TYp, BYp, X0, X1)
+        tp = trace_ch(prob[1], TYp, BYp, X0, X1)
+        save_npz(out / f"{stem}_traces_peak.npz", to_native(tm), to_native(tp))
+        am, ap = trace_assign(prob, TYp, BYp, X0, X1, S=S)
+        tm.update(am); tp.update(ap)                             # ГИБРИД: peak = база покрытия,
+        mgz, mpz = to_native(tm), to_native(tp)                  # assign переопределяет уверенные строки
+        print(f"assign: переопределено MGZ {len(am)}/{len(tm)} MPZ {len(ap)}/{len(tp)} строк")
     else:
         tm = trace_ch(prob[0], TYp, BYp, X0, X1)
         tp = trace_ch(prob[1], TYp, BYp, X0, X1)
