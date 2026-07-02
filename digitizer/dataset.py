@@ -45,11 +45,14 @@ def curve_polyline(model, curve):
     return [(x, ty + i) for i, x in trace_points(curve)]
 
 
-def curve_mask(curve, H, W, stroke=3, max_gap_rows=30):
+def curve_mask(curve, H, W, stroke=3, max_gap_rows=30, max_dx=None):
     """
     Бинарная маска кривой (H×W bool): полилиния по валидным точкам трассы,
     соседние точки соединяются, если разрыв по строкам <= max_gap_rows
     (иначе оставляем обрыв — не мостим реальные разрывы).
+    max_dx: не соединять и при скачке |Δx| больше порога — переключение level
+    (1×/5×-перевынос) идёт между соседними строками и иначе рисует горизонтальный
+    «мост» через планшет, который присваивает себе чужую тушь (анализ 02.07).
     """
     from PIL import Image, ImageDraw
     im = Image.new("L", (W, H), 0)
@@ -63,7 +66,8 @@ def curve_mask(curve, H, W, stroke=3, max_gap_rows=30):
         if not (0 <= y < H and 0 <= x < W):
             prev = None
             continue
-        if prev is not None and (i - prev[0]) <= max_gap_rows:
+        if prev is not None and (i - prev[0]) <= max_gap_rows and \
+                (max_dx is None or abs(x - prev[1]) <= max_dx):
             dr.line([prev[1], prev[2], x, y], fill=1, width=stroke)
         else:
             dr.ellipse([x-r, y-r, x+r, y+r], fill=1)

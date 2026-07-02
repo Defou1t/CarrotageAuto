@@ -1,9 +1,17 @@
-r"""Трек 2 / шаг 1 — нарезка 2-КАНАЛЬНЫХ тайлов для разделителя MK (MGZ vs MPZ).
-Канал0 = маска MGZ (толстая), канал1 = MPZ (тонкая) из РАЗДЕЛЬНЫХ трасс nlgx-GT. Модель учит
-«толстая→к0, тонкая→к1» + непрерывность → на инференсе кладёт толстую в к0, разрешая пересечения.
-Тайлы вдоль объединения кривых + негативы. Сплит train/val по скважине. Чистый numpy/PIL (без torch).
+r"""Трек 2 / шаг 1 — нарезка тайлов для разделителя MK (MGZ vs MPZ).
+Канал0 = маска MGZ (тонкая), канал1 = MPZ (толстая) из РАЗДЕЛЬНЫХ трасс nlgx-GT; канал2 = IGNORE
+(тушь вне обеих кривых — не штрафуем). Модель учит толщину+непрерывность, разрешая пересечения.
+Тайлы вдоль объединения кривых + негативы + ПЕРЕСЭМПЛИНГ сближений (свопы живут там). Сплит
+train/val по скважине. Чистый numpy/PIL (без torch).
 
-  python prep_mk.py [--tile 256 --stride 140 --negfrac 0.15 --valfrac 0.18 --out F:\nds\output\mk_data]
+v7-фиксы таргетов (анализ 02.07 — таргеты сами учили схлопывание):
+  1) спорная тушь (обе центр-линии в радиусе) → В ОБА канала (раньше только к0 → эрозия MPZ
+     на каждом сближении = учебный сигнал «рядом со второй кривой мой канал гаснет»);
+  2) тёмное-но-далёкое (> radius от обеих) → ignore-канал, НЕ жёсткий негатив (при align 0.72
+     до 28% GT-точек мимо туши — модель училась давить собственную кривую);
+  3) центр-линии без горизонтальных «мостов» 5×-перевыносов (curve_mask max_dx).
+
+  python prep_mk.py [--tile 256 --stride 110 --negfrac 0.15 --valfrac 0.18 --out F:\nds\output\mk_data]
 """
 import sys, json, hashlib
 from pathlib import Path
@@ -17,22 +25,35 @@ Image.MAX_IMAGE_PIXELS = None
 ARCHIVE = Path(r"F:\nds\projects\Archive")
 
 
-def ink_faithful_masks(gray, mgz, mpz, H, W, dark_thr=120, radius=6):
-    """ch0/ch1 = тёмные пиксели, ближайшая центральная линия которых принадлежит MGZ/MPZ
-    (в радиусе `radius`). Сохраняет истинную толщину штриха и липнет к реальной туши.
-    Спорные (равноудалённые/пересечение) → ближайший канал; центральная линия гарантируется."""
+def ink_faithful_masks(gray, mgz, mpz, H, W, dark_thr=120, radius=6, max_dx=60):
+    """ch0/ch1 = тёмные пиксели у центральной линии MGZ/MPZ (радиус `radius`); толщина штриха
+    сохраняется, маска липнет к реальной туши. СПОРНАЯ тушь (обе линии в радиусе) → в ОБА канала
+    (per-channel сигмоиды это допускают). ign = тёмное вне обеих кривых (чужие кривые, сетка,
+    рассинхрон GT) — в лоссе не штрафуется. Центр-линии рвутся при |Δx|>max_dx (5×-мосты)."""
     import cv2
     cen0 = np.zeros((H, W), bool); cen1 = np.zeros((H, W), bool)
-    for c in mgz: cen0 |= ds.curve_mask(c, H, W, stroke=2)
-    for c in mpz: cen1 |= ds.curve_mask(c, H, W, stroke=2)
+    for c in mgz: cen0 |= ds.curve_mask(c, H, W, stroke=2, max_dx=max_dx)
+    for c in mpz: cen1 |= ds.curve_mask(c, H, W, stroke=2, max_dx=max_dx)
     d0 = cv2.distanceTransform((~cen0).astype(np.uint8), cv2.DIST_L2, 5)
     d1 = cv2.distanceTransform((~cen1).astype(np.uint8), cv2.DIST_L2, 5)
     dark = gray < dark_thr
-    near0 = dark & (d0 <= d1) & (d0 <= radius)
-    near1 = dark & (d1 <  d0) & (d1 <= radius)
+    near0 = dark & (d0 <= radius)
+    near1 = dark & (d1 <= radius)
     ch0 = near0 | cen0                       # гарантируем центральную линию даже на слабой туши
-    ch1 = (near1 | cen1) & ~ch0              # к0 имеет приоритет на спорных пикселях (взаимоисключение)
-    return ch0, ch1
+    ch1 = near1 | cen1                       # спорные пиксели легально в обоих каналах
+    ign = dark & ~ch0 & ~ch1                 # чужая тушь → ignore, не негатив
+    return ch0, ch1, ign
+
+
+def hard_rows(cen0, cen1, sep_px=25):
+    """Строки сближения кривых (per-row |x0−x1| < sep_px) — там живут свопы; пересэмплим."""
+    H = cen0.shape[0]
+    sx0 = np.zeros(H); c0 = np.zeros(H); sx1 = np.zeros(H); c1 = np.zeros(H)
+    ys, xs = np.nonzero(cen0); np.add.at(sx0, ys, xs); np.add.at(c0, ys, 1)
+    ys, xs = np.nonzero(cen1); np.add.at(sx1, ys, xs); np.add.at(c1, ys, 1)
+    both = (c0 > 0) & (c1 > 0)
+    d = np.abs(sx0 / np.maximum(c0, 1) - sx1 / np.maximum(c1, 1))
+    return both & (d < sep_px)
 
 
 def is_val(well, valfrac):
@@ -43,10 +64,12 @@ def curves_mn(m, mn):
     return [c for c in ds.real_curves(m) if ds.mnemonic(c["name"]).upper() == mn]
 
 
-def cut_tiles(img, m2, T, stride, negfrac, rng, maxtiles):
-    """Тайлы вдоль ОБЪЕДИНЕНИЯ каналов + негативы. img HxWx3, m2 HxWx2 (MGZ,MPZ)."""
+def cut_tiles(img, m2, T, stride, negfrac, rng, maxtiles, hard=None, hard_boost=2):
+    """Тайлы вдоль ОБЪЕДИНЕНИЯ кривых + негативы. img HxWx3, m2 HxWxC (MGZ,MPZ[,ign]).
+    hard: bool[H] строки сближения — тайлы с ними дублируются hard_boost× с джиттером
+    (при равномерном шаге сближения тонут среди тривиальных разделённых — модель их почти не видит)."""
     H, W = m2.shape[:2]; half = T // 2
-    union = m2.any(2)
+    union = m2[..., :2].any(2)
     fg = np.argwhere(union)
     if len(fg) == 0:
         return [], []
@@ -59,6 +82,14 @@ def cut_tiles(img, m2, T, stride, negfrac, rng, maxtiles):
     if len(centers) > maxtiles:
         idx = np.linspace(0, len(centers) - 1, maxtiles).round().astype(int)
         centers = [centers[k] for k in idx]
+    if hard is not None:
+        extra = []
+        for cy, cx in centers:
+            if hard[max(0, cy - half):cy + half].any():
+                for _ in range(hard_boost):
+                    extra.append((cy + int(rng.integers(-stride // 2, stride // 2 + 1)),
+                                  cx + int(rng.integers(-40, 41))))
+        centers += extra
     for _ in range(int(len(centers) * negfrac)):
         centers.append((int(rng.integers(y0 + half, max(y0 + half + 1, y1 - half))),
                         int(rng.integers(half, max(half + 1, W - half)))))
@@ -115,22 +146,24 @@ def main():
             mpz = [c for c in mpz if align_frac(gray, c)[0] >= 0.72]
             if not mgz or not mpz:
                 continue
-            # ink-faithful маски: тёмный штрих привязывается к БЛИЖАЙШЕЙ центральной линии своего
-            # канала (а не фикс. 6px-полоса). Цель сама несёт толщину (MGZ тоньше MPZ) + снимает
-            # рассинхрон GT↔тушь (маска липнет к реальной туши). contested-пиксель → ближний канал.
-            ch0, ch1 = ink_faithful_masks(gray, mgz, mpz, H, W)
+            # ink-faithful маски v7: тёмный штрих у центр-линии своего канала; спорная тушь в ОБА
+            # канала; чужая тушь → ignore-канал (не негатив); центр-линии без 5×-мостов.
+            ch0, ch1, ign = ink_faithful_masks(gray, mgz, mpz, H, W)
+            hard = hard_rows(ch0, ch1)
             if scale != 1:                                   # ×S апскейл: штрих 2× шире → толщина/локализация резче
                 import cv2
                 rgb = cv2.resize(rgb, (W * scale, H * scale), interpolation=cv2.INTER_LINEAR)
                 ch0 = cv2.resize(ch0.astype(np.uint8), (W * scale, H * scale), interpolation=cv2.INTER_NEAREST).astype(bool)
                 ch1 = cv2.resize(ch1.astype(np.uint8), (W * scale, H * scale), interpolation=cv2.INTER_NEAREST).astype(bool)
-            m2 = np.stack([ch0, ch1], -1)
-            imgs, masks = cut_tiles(rgb, m2, T, stride * scale, negfrac, rng, maxtiles)
+                ign = cv2.resize(ign.astype(np.uint8), (W * scale, H * scale), interpolation=cv2.INTER_NEAREST).astype(bool)
+                hard = np.repeat(hard, scale)
+            m2 = np.stack([ch0, ch1, ign], -1)
+            imgs, masks = cut_tiles(rgb, m2, T, stride * scale, negfrac, rng, maxtiles, hard=hard)
             if not imgs:
                 continue
             fn = out / split / f"{wl.name}__{nlgx.stem[:46]}.npz"
             np.savez_compressed(fn, imgs=np.stack(imgs).astype(np.uint8),
-                                masks=np.stack(masks).astype(np.uint8))   # N×T×T×2
+                                masks=np.stack(masks).astype(np.uint8))   # N×T×T×3 (MGZ,MPZ,ign)
             index.append({"npz": str(fn), "well": wl.name, "split": split, "n_tiles": len(imgs)})
             n_tiles[split] += len(imgs)
             print(f"  [{split}] {wl.name}/{nlgx.stem[:30]:<30} tiles={len(imgs)}")
