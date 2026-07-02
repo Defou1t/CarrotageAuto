@@ -126,17 +126,27 @@ def main():
     continuity = "--continuity" in a                             # пост #1: совместный трекинг 2 прядей
     repair = "--repair" in a                                     # пост #2: constrained re-peak выбросов
     tta = "--tta" in a                                           # ансамбль ориентаций (id+hflip+vflip)
-    ens = "--ens" in a                                           # ансамбль чекпойнтов (v4+v5 рядом с ckpt)
+    ens = "--ens" in a                                           # ансамбль чекпойнтов; опц. значение =
+    ens_list = None                                              # список путей через запятую
+    if ens:
+        j = a.index("--ens")
+        if j + 1 < len(a) and not a[j + 1].startswith("--"):
+            ens_list = a[j + 1].split(",")
     out.mkdir(parents=True, exist_ok=True)
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     cks = [ckpt]
-    if ens:                                                      # чекпойнт-ансамбль: разные лоссы (v4 BCE /
+    if ens and ens_list:                                         # явный список (пути отн. папки ckpt или абс.)
+        for e_ in ens_list:
+            p = Path(e_) if Path(e_).is_absolute() else Path(ckpt).with_name(e_)
+            if p.exists():
+                cks.append(str(p))
+    elif ens:                                                    # чекпойнт-ансамбль: разные лоссы (v4 BCE /
         for sib in ("mk_sep_v4.pt", "mk_sep_v5.pt"):             # v5 softmax) = декоррелированные ошибки
             p = Path(ckpt).with_name(sib)
-            if p.exists() and str(p) != str(Path(ckpt)):
+            if p.exists():
                 cks.append(str(p))
-        cks = list(dict.fromkeys(cks))
+    cks = list(dict.fromkeys(str(Path(c)) for c in cks))
     nets = [load2(c, dev) for c in cks]
     net, ck = nets[0]
     print(f"model epoch={ck.get('epoch')} val_dice={ck.get('val_dice'):.3f} device={dev}"
@@ -164,8 +174,13 @@ def main():
     if comb.max() > 0:
         xs = np.nonzero(comb > 0.08 * comb.max())[0]
         segs = np.split(xs, np.nonzero(np.diff(xs) > 30 * S)[0] + 1)
-        best = max(segs, key=lambda s: comb[s].sum())
+        masses = sorted(((float(comb[s].sum()), s) for s in segs), key=lambda t: -t[0])
+        best = masses[0][1]
         X0, X1 = max(0, int(best[0]) - 20 * S), min(Wp, int(best[-1]) + 20 * S)
+        for msum, s in masses[1:3]:                              # honesty-репорт scope-пробела 5×
+            if msum > 0.2 * masses[0][0]:
+                print(f"⚠ вторая полоса туши x[{int(s[0])}..{int(s[-1])}] масса {100*msum/masses[0][0]:.0f}% "
+                      f"от основной — возможно 5×-ветвь/перевынос (НЕ цифруется — известный scope-пробел)")
     else:
         X0, X1 = 0, Wp
     print(f"MK-полоса x[{X0}..{X1}] (scale-px)")

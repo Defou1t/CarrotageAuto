@@ -5,7 +5,7 @@ r"""GUI-обёртка разделителя MK (Трек 2): вход — из
 
   python mk_gui.py            # запуск интерфейса (основной py3.14 с tkinter)
 """
-import sys, threading, subprocess, queue
+import sys, threading, subprocess, queue, re, csv
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext
@@ -172,22 +172,32 @@ class App:
         except Exception as e:
             self.q.put(("done", f"Ошибка импорта mk_export: {e}")); return
         self.emit(f"\nВыгрузка {'LAS' if las else 'nlgx+bck'}: {len(jobs)} файл(ов) -> {outd}\n")
-        ok = 0
+        ok = 0; rows = []
         for npz, tpl, img in jobs:
             self.emit(f"=== {img.name} ===\n")
+            rec = {"файл": img.name, "верификация": "ошибка", "rt_MGZ_px": "", "rt_MPZ_px": ""}
             try:
                 rep = export_bundle(npz, tpl, scan_path=img, out_dir=outd,
                                     write_las=las, log=lambda m: self.emit(m + "\n"))
+                if rep:
+                    rec["верификация"] = rep.get("verify", "?")
+                    rec["rt_MGZ_px"] = rep.get("rt_MGZ", ""); rec["rt_MPZ_px"] = rep.get("rt_MPZ", "")
                 if rep and rep.get("verify") == "OK":
                     ok += 1
             except Exception as e:
                 self.emit(f"  ! ошибка: {e}\n")
+            rows.append(rec)
+        if rows:
+            csvp = Path(outd) / "export_summary.csv"
+            with open(csvp, "w", newline="", encoding="utf-8-sig") as fh:
+                w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+            self.emit(f"Сводка выгрузки -> {csvp}\n")
         self.q.put(("done", f"Выгружено {ok}/{len(jobs)} в {outd}"))
 
     def _work(self, imgs, outd):
         self.emit(f"Изображений: {len(imgs)} | выход: {outd}\n")
         self.q.put(("prog", 0))
-        ok = 0
+        ok = 0; rows = []                                        # QC-сводка батча
         for i, img in enumerate(imgs):
             self.q.put(("status", f"[{i+1}/{len(imgs)}] {img.name}"))
             self.emit(f"\n=== [{i+1}/{len(imgs)}] {img.name} ===\n")
@@ -199,19 +209,32 @@ class App:
                 cmd += ["--nlgx", str(sib)]
             else:
                 self.emit("  (нет парного .nlgx — frameless: только полное наложение)\n")
+            rec = {"файл": img.name, "nlgx": "да" if sib.exists() else "нет",
+                   "MGZ_точек": "", "MPZ_точек": "", "вторая_полоса": "", "статус": "ошибка"}
             try:
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True, encoding="utf-8", errors="replace")
                 for line in proc.stdout:
                     self.emit("  " + line)
+                    mm = re.search(r"MGZ точек=(\d+) MPZ=(\d+)", line)
+                    if mm:
+                        rec["MGZ_точек"], rec["MPZ_точек"] = mm.group(1), mm.group(2)
+                    if "вторая полоса" in line:
+                        rec["вторая_полоса"] = "⚠ есть (5×?)"
                 proc.wait()
                 if proc.returncode == 0:
-                    ok += 1
+                    ok += 1; rec["статус"] = "ок"
                 else:
                     self.emit(f"  ! код выхода {proc.returncode}\n")
             except Exception as e:
                 self.emit(f"  ! ошибка: {e}\n")
+            rows.append(rec)
             self.q.put(("prog", (i + 1) * 100 / len(imgs)))
+        if rows:
+            csvp = Path(outd) / "qc_summary.csv"
+            with open(csvp, "w", newline="", encoding="utf-8-sig") as fh:  # sig: Excel читает кириллицу
+                w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+            self.emit(f"\nQC-сводка батча -> {csvp}\n")
         self.q.put(("done", f"Готово: {ok}/{len(imgs)} наложений в {outd}"))
 
 

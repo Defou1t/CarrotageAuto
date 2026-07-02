@@ -14,7 +14,7 @@ CKPT=r"F:\nds\output\mk_data\mk_sep.pt"
 args=sys.argv[1:]
 if "--ckpt" in args:
     i=args.index("--ckpt"); CKPT=args[i+1]; del args[i:i+2]
-EXTRA=[x for x in args if x.startswith("--")]
+EXTRA=args  # verbatim: значения флагов (--ens list) не начинаются с "--"
 for well in ["BEZLUD_051","BOGAT_011","LEVEN_023"]:
     nlgx=None
     for f in sorted((AR/well/"wlg").glob("*.nlgx")):
