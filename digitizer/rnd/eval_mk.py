@@ -27,23 +27,49 @@ def gt_traces(nlgx):
 
 
 def evaluate(pred_mgz, pred_mpz, gt_mgz, gt_mpz):
+    """Декомпозиция ошибки (анализ 02.07): swap_rate сливал три явления — переворот меток,
+    СХЛОПЫВАНИЕ (pm≈pp, знак решает шум) и шум у истинных пересечений (|gm-gp| мал, своп
+    терпим по домену). Поэтому отдельно: collapse_rate, swap_rate_clean (без коллапса и без
+    пересечений), change_points/seg_med (число смен идентичности и медианная длина сегмента
+    = прокси стоимости правки в NeuraLOG: один 100-строчный блок-своп чинится секундами,
+    100 однострочных — нет)."""
     rows = sorted(set(gt_mgz) & set(gt_mpz))
     swaps = 0; n = 0; eA_m = []; eA_p = []; eL_m = []; eL_p = []
+    collapse = 0; sw_clean = 0; n_clean = 0
+    seq = []                                                          # (y, swapped?) для change_points
     for y in rows:
         if y not in pred_mgz or y not in pred_mpz:
             continue
         pm, pp = pred_mgz[y], pred_mpz[y]; gm, gp = gt_mgz[y], gt_mpz[y]
         eL_m.append(abs(pm - gm)); eL_p.append(abs(pp - gp))          # как размечено (с идентичностью)
         straight = abs(pm - gm) + abs(pp - gp); swapped = abs(pm - gp) + abs(pp - gm)
-        if swapped < straight:                                        # pred-пара ближе в СВОПнутом виде
+        sw = swapped < straight
+        if sw:                                                        # pred-пара ближе в СВОПнутом виде
             swaps += 1; eA_m.append(abs(pm - gp)); eA_p.append(abs(pp - gm))
         else:
             eA_m.append(abs(pm - gm)); eA_p.append(abs(pp - gp))
+        gsep = abs(gm - gp)
+        if abs(pm - pp) < max(3.0, 0.3 * gsep) and gsep > 10:
+            collapse += 1                                             # схлопывание: не своп и не следование
+        elif gsep > 3:
+            n_clean += 1; sw_clean += sw
+            seq.append((y, sw))
         n += 1
     if not n:
         return {"n": 0}
+    cp = sum(1 for a, b in zip(seq, seq[1:]) if a[1] != b[1])
+    segs = []
+    if seq:
+        run = 1
+        for a, b in zip(seq, seq[1:]):
+            if a[1] == b[1]: run += 1
+            else: segs.append(run); run = 1
+        segs.append(run)
     return {"n": n, "coverage": round(n / max(1, len(rows)), 3),
             "swap_rate": round(swaps / n, 3),
+            "collapse_rate": round(collapse / n, 3),
+            "swap_rate_clean": round(sw_clean / max(1, n_clean), 3),
+            "change_points": cp, "seg_med": int(np.median(segs)) if segs else 0,
             "mgz_px_aligned": round(float(np.median(eA_m)), 1), "mpz_px_aligned": round(float(np.median(eA_p)), 1),
             "mgz_px_labeled": round(float(np.median(eL_m)), 1), "mpz_px_labeled": round(float(np.median(eL_p)), 1),
             "aligned_le2px": round(float(np.mean(np.array(eA_m) <= 2)), 2)}

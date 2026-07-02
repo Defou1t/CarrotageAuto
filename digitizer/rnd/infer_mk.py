@@ -73,17 +73,74 @@ def trace_ch(probc, y0, y1, x0, x1, thr=0.4, win=8):
     return out
 
 
+def repair_outliers(probc, tr, S=1, med_win=45, out_thr=15.0, cap_win=12.0, ratio=0.85, thr=0.30,
+                    mad_max=8.0):
+    """Чинит транзиентные выбросы argmax (диагностика 02.07: 75-90% свопов = одиночные строки,
+    точка мимо ОБЕИХ кривых): строка-выброс = |x - локальная медиана канала| > out_thr; замена на
+    пик канала В ОКНЕ вокруг медианы — только если там есть сопоставимый prob (ratio от prob
+    выброса). Реальный спайк сохраняется: возле медианы prob слабый → замены нет.
+    mad_max: где трасса локально нестабильна (MAD окна велик — модель «гуляет», BOGAT),
+    медиане верить нельзя — не чиним (иначе ложные починки портят следование)."""
+    ys = np.array(sorted(tr)); xs = np.array([tr[y] for y in ys], float)
+    if len(ys) < 20:
+        return tr, 0
+    W = probc.shape[1]
+    fixed = 0; new = dict(tr)
+    for i, y in enumerate(ys):
+        lo, hi = np.searchsorted(ys, y - med_win), np.searchsorted(ys, y + med_win + 1)
+        med = float(np.median(xs[lo:hi]))
+        if abs(xs[i] - med) <= out_thr * S:
+            continue
+        if float(np.median(np.abs(xs[lo:hi] - med))) > mad_max * S:
+            continue                                             # окно нестабильно — медиана ненадёжна
+        w0, w1 = max(0, int(med - cap_win * S)), min(W, int(med + cap_win * S) + 1)
+        seg = probc[y, w0:w1]
+        if not seg.size:
+            continue
+        cur_p = float(probc[y, min(W - 1, max(0, int(round(xs[i]))))])
+        if seg.max() < max(thr, ratio * cur_p):
+            continue                                             # у траектории нет туши — спайк реален
+        a = int(np.argmax(seg)); l2, h2 = max(0, a - 8), min(len(seg), a + 9)
+        w = seg[l2:h2]
+        new[int(y)] = float(((np.arange(l2, h2) + w0) * w).sum() / w.sum())
+        fixed += 1
+    return new, fixed
+
+
+def predict_tta(net, rgb, dev, y0, y1, softmax, tta):
+    """prob с TTA-ансамблем ориентаций (h/v-флипы не портят толщину-различитель)."""
+    ps = [predict2(net, rgb, dev, y0=y0, y1=y1, softmax=softmax)]
+    if tta:
+        H = rgb.shape[0]
+        ps.append(predict2(net, rgb[:, ::-1].copy(), dev, y0=y0, y1=y1, softmax=softmax)[:, :, ::-1])
+        ps.append(predict2(net, rgb[::-1].copy(), dev, y0=H - y1, y1=H - y0, softmax=softmax)[:, ::-1, :])
+    return np.mean(ps, 0) if len(ps) > 1 else ps[0]
+
+
 def main():
     a = sys.argv[1:]
     ckpt, image = a[0], a[1]
     nlgx = a[a.index("--nlgx") + 1] if "--nlgx" in a else None
     out = Path(a[a.index("--out") + 1] if "--out" in a else r"F:\nds\output\mk_data")
     save_prob = "--save-prob" in a                               # debug: 227MB prob-карта (по умолчанию выкл)
+    continuity = "--continuity" in a                             # пост #1: совместный трекинг 2 прядей
+    repair = "--repair" in a                                     # пост #2: constrained re-peak выбросов
+    tta = "--tta" in a                                           # ансамбль ориентаций (id+hflip+vflip)
+    ens = "--ens" in a                                           # ансамбль чекпойнтов (v4+v5 рядом с ckpt)
     out.mkdir(parents=True, exist_ok=True)
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    net, ck = load2(ckpt, dev)
-    print(f"model epoch={ck.get('epoch')} val_dice={ck.get('val_dice'):.3f} device={dev}")
+    cks = [ckpt]
+    if ens:                                                      # чекпойнт-ансамбль: разные лоссы (v4 BCE /
+        for sib in ("mk_sep_v4.pt", "mk_sep_v5.pt"):             # v5 softmax) = декоррелированные ошибки
+            p = Path(ckpt).with_name(sib)
+            if p.exists() and str(p) != str(Path(ckpt)):
+                cks.append(str(p))
+        cks = list(dict.fromkeys(cks))
+    nets = [load2(c, dev) for c in cks]
+    net, ck = nets[0]
+    print(f"model epoch={ck.get('epoch')} val_dice={ck.get('val_dice'):.3f} device={dev}"
+          + (f" ens={len(nets)}" if len(nets) > 1 else "") + (" tta" if tta else ""))
     rgb = np.asarray(Image.open(image).convert("RGB")); H, W, _ = rgb.shape
     if nlgx is None:                                             # авто-поиск парной рамки <stem>.nlgx рядом
         sib = Path(image).with_suffix(".nlgx")
@@ -99,7 +156,8 @@ def main():
         TYp, BYp, Wp = TY * S, BY * S, W * S
     else:
         rgbP, TYp, BYp, Wp = rgb, TY, BY, W
-    prob = predict2(net, rgbP, dev, y0=TYp, y1=BYp, softmax=bool(ck.get("softmax")))
+    prob = np.mean([predict_tta(n_, rgbP, dev, TYp, BYp, bool(c_.get("softmax")), tta)
+                    for n_, c_ in nets], 0)
     print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}% scale={S}")
     # PER-TRACK band: MK-полоса = плотнейший непрерывный кластер обоих каналов (исключает MBK/чужие треки)
     comb = (prob[0] + prob[1])[TYp:BYp].sum(0)
@@ -116,14 +174,31 @@ def main():
         acc = {}
         for yP, xP in d.items(): acc.setdefault(yP // S, []).append(xP / S)
         return {r: float(np.mean(v)) for r, v in acc.items()}
-    mgz = to_native(trace_ch(prob[0], TYp, BYp, X0, X1))
-    mpz = to_native(trace_ch(prob[1], TYp, BYp, X0, X1))
     stem = Path(image).stem[:40]
+    def save_npz(path, dm, dp):
+        np.savez(path, mgz_y=np.array(list(dm)), mgz_x=np.array(list(dm.values())),
+                 mpz_y=np.array(list(dp)), mpz_x=np.array(list(dp.values())))
+    if continuity:                                               # пост #1: DP-пары + линкер скоростью + голос
+        from mk_continuity import continuity_traces
+        cm, cp, info = continuity_traces(prob, TYp, BYp, X0, X1, S=S)
+        mgz, mpz = to_native(cm), to_native(cp)
+        print(f"continuity: rows={info.get('rows')} merged={info.get('merged_frac')} "
+              f"vote_rows={info.get('vote_rows')} margin={info.get('vote_margin')}")
+        pk_m = to_native(trace_ch(prob[0], TYp, BYp, X0, X1))    # baseline из ТОЙ ЖЕ prob — честный A/B
+        pk_p = to_native(trace_ch(prob[1], TYp, BYp, X0, X1))
+        save_npz(out / f"{stem}_traces_peak.npz", pk_m, pk_p)
+    else:
+        tm = trace_ch(prob[0], TYp, BYp, X0, X1)
+        tp = trace_ch(prob[1], TYp, BYp, X0, X1)
+        if repair:
+            save_npz(out / f"{stem}_traces_peak.npz", to_native(tm), to_native(tp))  # база для A/B
+            tm, fm = repair_outliers(prob[0], tm, S=S)
+            tp, fp = repair_outliers(prob[1], tp, S=S)
+            print(f"repair: MGZ исправлено {fm} строк, MPZ {fp}")
+        mgz, mpz = to_native(tm), to_native(tp)
     if save_prob:
         np.save(out / "mk_prob2.npy", prob.astype(np.float16))
-    np.savez(out / f"{stem}_traces.npz",                         # для объективного eval_mk vs GT
-             mgz_y=np.array(list(mgz)), mgz_x=np.array(list(mgz.values())),
-             mpz_y=np.array(list(mpz)), mpz_x=np.array(list(mpz.values())))
+    save_npz(out / f"{stem}_traces.npz", mgz, mpz)               # для объективного eval_mk vs GT
     print(f"MGZ точек={len(mgz)} MPZ={len(mpz)} | трассы -> {stem}_traces.npz")
     COLM, COLP = (220, 0, 0), (0, 110, 230)
     def draw(ov, ox, oy):
