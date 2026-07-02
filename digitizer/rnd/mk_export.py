@@ -53,6 +53,54 @@ def _curve_ifd(ifds, model, mnem):
     return None, None
 
 
+def qc_render(nlgx_path, out_dir, n=4, half_h=130):
+    """QC-кропы ИЗ ЗАПИСАННОГО nlgx поверх скана (проверяем сдаваемый файл, не трассы в памяти).
+    Глубина робастно по top_y/bottom_y (span_px в свежих рамках = 0)."""
+    from PIL import Image, ImageDraw, ImageFont
+    Image.MAX_IMAGE_PIXELS = None
+    m = extract(str(nlgx_path))
+    da = m.get("depth_axis")
+    ip = m.get("img_path")
+    if not da or not ip or not Path(ip).is_file():
+        return []
+    img = np.asarray(Image.open(ip).convert("RGB")).copy()
+    H, W = img.shape[:2]
+    cols = {}; xs_all = []
+    for c in m["curves"]:
+        mn = ds.mnemonic(c["name"]).upper()
+        if mn not in ("MGZ", "MPZ"):
+            continue
+        col = (220, 0, 0) if mn == "MGZ" else (0, 110, 230)
+        ty = c["top_y"]
+        for i, x in enumerate(c["xs"]):
+            if x == NULL:
+                continue
+            y = ty + i
+            if 0 <= y < H and 0 <= x < W:
+                img[y, max(0, x - 1):x + 2] = col
+                xs_all.append(x)
+    if not xs_all:
+        return []
+    x0, x1 = max(0, int(np.percentile(xs_all, 2)) - 60), min(W, int(np.percentile(xs_all, 98)) + 90)
+    try:
+        font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", 24)
+    except Exception:
+        font = ImageFont.load_default()
+    ty, by, td, bd = da["top_y"], da["bottom_y"], da["top_depth"], da["bottom_depth"]
+    outs = []
+    for d in np.linspace(td, bd, n + 2)[1:-1]:
+        d = round(float(d))
+        yc = int(ty + (d - td) * (by - ty) / max(bd - td, 1e-6))
+        if not (half_h <= yc < H - half_h):
+            continue
+        crop = img[yc - half_h:yc + half_h, x0:x1]
+        im_c = Image.fromarray(crop).resize(((x1 - x0) * 3, half_h * 6), Image.NEAREST)
+        ImageDraw.Draw(im_c).text((6, 4), f"{d}м из _auto.nlgx  MGZ=красн MPZ=син", fill=(0, 0, 0), font=font)
+        p = Path(out_dir) / f"{Path(nlgx_path).stem}_qc_{d}m.png"
+        im_c.save(p); outs.append(str(p))
+    return outs
+
+
 def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write_las=True, log=print):
     """Главный вход (и для GUI): пишет <stem>_auto.nlgx/.bck/.las. Возврат: dict-отчёт или None."""
     traces_npz, template_nlgx = str(traces_npz), str(template_nlgx)
@@ -123,6 +171,12 @@ def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write
         except Exception as e:
             rep["las"] = None
             log(f"  ! LAS ошибка: {e}")
+    try:
+        qc = qc_render(dst, out)
+        if qc:
+            log(f"  QC-кропы из nlgx: {len(qc)} шт -> {out}")
+    except Exception as e:
+        log(f"  ! QC-рендер: {e}")
     return rep
 
 
