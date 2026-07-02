@@ -65,11 +65,12 @@ class App:
         act = ttk.Frame(frm); act.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(10, 4))
         self.run_btn = ttk.Button(act, text="▶ Распознать → наложения", command=self.start)
         self.run_btn.pack(side="left", padx=4)
+        self.quality = tk.BooleanVar(value=True)                 # ансамбль v4+v5 + TTA: −3пп свопов (eval 02.07)
+        ttk.Checkbutton(act, text="Качество (медленнее)", variable=self.quality).pack(side="left", padx=6)
         ttk.Button(act, text="Открыть выход", command=self.open_out).pack(side="left", padx=4)
-        # заглушки следующего этапа
-        self.nlgx_btn = ttk.Button(act, text="Выгрузить nlgx (скоро)", state="disabled")
+        self.nlgx_btn = ttk.Button(act, text="Выгрузить nlgx+bck", command=lambda: self.export(las=False))
         self.nlgx_btn.pack(side="right", padx=4)
-        self.las_btn = ttk.Button(act, text="Выгрузить LAS (скоро)", state="disabled")
+        self.las_btn = ttk.Button(act, text="Выгрузить LAS", command=lambda: self.export(las=True))
         self.las_btn.pack(side="right", padx=4)
 
         self.prog = ttk.Progressbar(frm, mode="determinate")
@@ -146,6 +147,43 @@ class App:
         self.log.delete("1.0", "end")
         threading.Thread(target=self._work, args=(imgs, outd), daemon=True).start()
 
+    # --- выгрузка nlgx+bck (+LAS): трассы из выходной папки + парный шаблон <stem>.nlgx у скана ---
+    def export(self, las=False):
+        if self.busy: return
+        imgs = list_images(self.inp.get())
+        outd = self.out.get().strip()
+        if not imgs or not outd:
+            self.status.set("Для выгрузки укажите вход и выходную папку (после распознавания)."); return
+        jobs = []                                                # (traces.npz, template.nlgx, scan)
+        for img in imgs:
+            sib = img.with_suffix(".nlgx")
+            npz = Path(outd) / f"{img.stem[:40]}_traces.npz"
+            if sib.exists() and npz.exists():
+                jobs.append((npz, sib, img))
+        if not jobs:
+            self.status.set("Нет пар трассы+шаблон: сначала «Распознать», и рядом со сканом нужен <имя>.nlgx."); return
+        self.busy = True; self.run_btn["state"] = "disabled"
+        threading.Thread(target=self._export_work, args=(jobs, outd, las), daemon=True).start()
+
+    def _export_work(self, jobs, outd, las):
+        sys.path.insert(0, str(HERE))
+        try:
+            from mk_export import export_bundle
+        except Exception as e:
+            self.q.put(("done", f"Ошибка импорта mk_export: {e}")); return
+        self.emit(f"\nВыгрузка {'LAS' if las else 'nlgx+bck'}: {len(jobs)} файл(ов) -> {outd}\n")
+        ok = 0
+        for npz, tpl, img in jobs:
+            self.emit(f"=== {img.name} ===\n")
+            try:
+                rep = export_bundle(npz, tpl, scan_path=img, out_dir=outd,
+                                    write_las=las, log=lambda m: self.emit(m + "\n"))
+                if rep and rep.get("verify") == "OK":
+                    ok += 1
+            except Exception as e:
+                self.emit(f"  ! ошибка: {e}\n")
+        self.q.put(("done", f"Выгружено {ok}/{len(jobs)} в {outd}"))
+
     def _work(self, imgs, outd):
         self.emit(f"Изображений: {len(imgs)} | выход: {outd}\n")
         self.q.put(("prog", 0))
@@ -155,6 +193,8 @@ class App:
             self.emit(f"\n=== [{i+1}/{len(imgs)}] {img.name} ===\n")
             sib = img.with_suffix(".nlgx")
             cmd = [VENV, INFER, self.ckpt.get(), str(img), "--out", outd]
+            if self.quality.get():
+                cmd += ["--ens", "--tta"]                        # ансамбль чекпойнтов + флипы
             if sib.exists():
                 cmd += ["--nlgx", str(sib)]
             else:

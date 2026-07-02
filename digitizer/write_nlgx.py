@@ -152,7 +152,9 @@ def set_tag(ifds, ifd_idx, tag, typ, values):
 
 
 def write_bck(nlgx_bytes, off=5489, byte=0x12):
-    """bck = nlgx с выставленным байтом-флагом (наблюдалось off=5489, 0x00->0x12)."""
+    """УСТАРЕЛО — НЕ ИСПОЛЬЗОВАТЬ (анализ 02.07): «флаг off=5489» был артефактом одного файла;
+    в других nlgx этот offset попадает ВНУТРЬ данных тега 35490 (молча портит трассу).
+    Реальный .bck NeuraLOG = предыдущее сохранение → пишите точную копию nlgx."""
     b = bytearray(nlgx_bytes)
     if off < len(b):
         b[off] = byte

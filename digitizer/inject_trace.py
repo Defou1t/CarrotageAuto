@@ -11,7 +11,7 @@ python inject_trace.py <cache.pkl> [--out DIR]
 import sys, pickle, glob, struct
 from pathlib import Path
 import numpy as np
-from write_nlgx import read_full, write_full, write_bck, set_tag, find_ifd
+from write_nlgx import read_full, write_full, set_tag, find_ifd
 from extract_nlgx import extract, NULL
 import dataset as ds
 
@@ -83,7 +83,9 @@ def main():
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
     open(dst, "wb").write(data)
-    open(out / f"{stem}_auto.bck", "wb").write(write_bck(data))
+    # bck = точная копия nlgx: write_bck(off=5489) патчил байт ВНУТРИ данных тега 35490
+    # (портил трассу молча); реальный .bck NeuraLOG — предыдущее сохранение (анализ 02.07)
+    open(out / f"{stem}_auto.bck", "wb").write(data)
     print(f"\nвписано трасс трекера: {len(written)}")
     for short, err, npts in written:
         print(f"  {short:<9} (track err≈{err:.1f}px, {npts} точек)")
