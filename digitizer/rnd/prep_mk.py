@@ -25,11 +25,15 @@ Image.MAX_IMAGE_PIXELS = None
 ARCHIVE = Path(r"F:\nds\projects\Archive")
 
 
-def ink_faithful_masks(gray, mgz, mpz, H, W, dark_thr=120, radius=6, max_dx=60):
+def ink_faithful_masks(gray, mgz, mpz, H, W, dark_thr=120, radius=6, max_dx=60, ring=14):
     """ch0/ch1 = тёмные пиксели у центральной линии MGZ/MPZ (радиус `radius`); толщина штриха
     сохраняется, маска липнет к реальной туши. СПОРНАЯ тушь (обе линии в радиусе) → в ОБА канала
-    (per-channel сигмоиды это допускают). ign = тёмное вне обеих кривых (чужие кривые, сетка,
-    рассинхрон GT) — в лоссе не штрафуется. Центр-линии рвутся при |Δx|>max_dx (5×-мосты)."""
+    (per-channel сигмоиды это допускают). ign = тёмное в КОЛЬЦЕ radius<d<=ring вокруг своих
+    кривых (зона рассинхрона GT) — в лоссе не штрафуется. Центр-линии рвутся при |Δx|>max_dx.
+
+    УРОК v7 (гейт 02.07): ignore на ВСЮ чужую тушь снимает у модели навык подавлять соседние
+    треки → на сканах MBK+MK полоса prob уезжает на чужой трек (BEZLUD px 1656). Поэтому кольцо:
+    рассинхрон прощаем, далёкая чужая тушь остаётся жёстким негативом."""
     import cv2
     cen0 = np.zeros((H, W), bool); cen1 = np.zeros((H, W), bool)
     for c in mgz: cen0 |= ds.curve_mask(c, H, W, stroke=2, max_dx=max_dx)
@@ -41,7 +45,7 @@ def ink_faithful_masks(gray, mgz, mpz, H, W, dark_thr=120, radius=6, max_dx=60):
     near1 = dark & (d1 <= radius)
     ch0 = near0 | cen0                       # гарантируем центральную линию даже на слабой туши
     ch1 = near1 | cen1                       # спорные пиксели легально в обоих каналах
-    ign = dark & ~ch0 & ~ch1                 # чужая тушь → ignore, не негатив
+    ign = dark & ~ch0 & ~ch1 & (np.minimum(d0, d1) <= ring)   # только кольцо рассинхрона
     return ch0, ch1, ign
 
 
@@ -89,6 +93,24 @@ def hard_rows(cen0, cen1, sep_px=25):
     both = (c0 > 0) & (c1 > 0)
     d = np.abs(sx0 / np.maximum(c0, 1) - sx1 / np.maximum(c1, 1))
     return both & (d < sep_px)
+
+
+def strip_levels(curve):
+    """Копия кривой БЕЗ перевыносов: строки level>0-сегментов → NULL. Домен: 1×/5× = отдельные
+    линии; 5×-ветвь в таргете канала учила модель бить по ней на инференсе (BOGAT MGZ ~129px
+    мимо в правильной полосе, гейт v7 02.07). После отсечения её тушь (за ring) = негатив —
+    модель учится подавлять 5×-ветвь, что и нужно 1×-оцифровке (5× — отдельный scope)."""
+    from extract_nlgx import NULL as _N
+    segs = [(s, e) for s, e, lvl in (curve.get("segments") or []) if lvl and lvl > 0]
+    if not segs:
+        return curve
+    ty = curve["top_y"]
+    xs = list(curve["xs"])
+    for s, e in segs:
+        for i in range(max(0, s - ty), min(len(xs), e - ty + 1)):
+            xs[i] = _N
+    out = dict(curve); out["xs"] = xs
+    return out
 
 
 def is_val(well, valfrac):
@@ -170,7 +192,8 @@ def main():
                 m = extract(str(nlgx))
             except Exception:
                 continue
-            mgz, mpz = curves_mn(m, "MGZ"), curves_mn(m, "MPZ")
+            mgz = [strip_levels(c) for c in curves_mn(m, "MGZ")]   # без 5×-перевыносов (level>0)
+            mpz = [strip_levels(c) for c in curves_mn(m, "MPZ")]
             if not mgz or not mpz:
                 continue
             img_path = find_image(nlgx)

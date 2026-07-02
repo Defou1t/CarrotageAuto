@@ -155,7 +155,23 @@ def main():
     if nlgx is None:                                             # авто-поиск парной рамки <stem>.nlgx рядом
         sib = Path(image).with_suffix(".nlgx")
         nlgx = str(sib) if sib.exists() else None
-    da = extract(nlgx)["depth_axis"] if nlgx else None           # frameless: без рамки — только полное наложение
+    mfull = extract(nlgx) if nlgx else {}
+    da = mfull.get("depth_axis")                                 # frameless: без рамки — только полное наложение
+    # x-диапазон полосы MK из КАЛИБРОВКИ шаблона (шкалы кривых MGZ/MPZ): band по одной массе prob
+    # уезжает на чужой трек, если модель не подавляет постороннюю тушь (v7 ignore; скан MBK+MK)
+    sa_rng = None
+    axes = {ax["name"]: ax for ax in mfull.get("scale_axes", [])}
+    xr = []
+    for c in mfull.get("curves", []):
+        toks = (c.get("name") or "").split()
+        if not toks or toks[0].rstrip("0123456789").upper() not in ("MGZ", "MPZ"):
+            continue
+        ax = axes.get(" ".join(toks[1:]))
+        if ax and ax.get("x_left") is not None and ax.get("x_right") is not None:
+            xr += [ax["x_left"], ax["x_right"]]
+    if xr:
+        sa_rng = (min(xr), max(xr))
+        print(f"полоса по шкалам шаблона: x[{sa_rng[0]}..{sa_rng[1]}]")
     TY = int(da["top_y"]) if da else 0
     BY = int(da.get("bottom_y") or H - 1) if da else H - 1
     def yof(d): return int(da["top_y"] + (d - da["top_depth"]) * (da["bottom_y"] - da["top_y"]) / da["span_depth"])  # span_px=0 дефект
@@ -171,6 +187,9 @@ def main():
     print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}% scale={S}")
     # PER-TRACK band: MK-полоса = плотнейший непрерывный кластер обоих каналов (исключает MBK/чужие треки)
     comb = (prob[0] + prob[1])[TYp:BYp].sum(0)
+    if sa_rng:                                                   # вне шкал MK prob не участвует в выборе полосы
+        lo, hi = max(0, (sa_rng[0] - 25) * S), min(Wp, (sa_rng[1] + 45) * S)
+        gate = np.zeros_like(comb); gate[lo:hi] = comb[lo:hi]; comb = gate
     if comb.max() > 0:
         xs = np.nonzero(comb > 0.08 * comb.max())[0]
         segs = np.split(xs, np.nonzero(np.diff(xs) > 30 * S)[0] + 1)
