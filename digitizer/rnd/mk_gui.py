@@ -13,9 +13,10 @@ from tkinter import ttk, filedialog, scrolledtext
 HERE = Path(__file__).resolve().parent
 VENV = r"D:\ComfyUI\StabilityMatrix\Data\Packages\ComfyUI\venv\Scripts\python.exe"
 INFER = str(HERE / "infer_mk.py")
-CKPT_DEFAULT = r"F:\nds\output\mk_data\mk_sep_v7.pt"  # production 02.07: ансамбль v7+v4+v5
-CKPT_FAST = r"F:\nds\output\mk_data\mk_sep.pt"        # быстрый режим = v4 соло (v7 соло нестабилен
-# по MGZ на отдельных скважинах — только в ансамбле; «Качество» добавляет --ens: соседи v4/v5)
+CKPT_DEFAULT = r"F:\nds\output\mk_data\mk_sep_v8.pt"  # production 03.07: ансамбль v8+v7+v4+v5
+ENS_LIST = "mk_sep_v7.pt,mk_sep_v4.pt,mk_sep_v5.pt"   # (следование ~2× лучше ens3 — критерий QC
+CKPT_FAST = r"F:\nds\output\mk_data\mk_sep.pt"        # эксперта «качество линий»; идентичность ~равна)
+# быстрый режим = v4 соло (v7/v8 соло консервативнее/нестабильнее — только в ансамбле)
 IMG_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 
 
@@ -209,7 +210,7 @@ class App:
                 ck = CKPT_FAST                                   # быстрый режим = стабильный v4 соло
             cmd = [VENV, INFER, ck, str(img), "--out", outd]
             if self.quality.get():
-                cmd += ["--ens", "--tta"]                        # ансамбль чекпойнтов + флипы
+                cmd += ["--ens", ENS_LIST, "--tta"]              # ансамбль чекпойнтов + флипы
             if sib.exists():
                 cmd += ["--nlgx", str(sib)]
             else:
