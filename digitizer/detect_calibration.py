@@ -70,6 +70,57 @@ def detect_depth_grid(gray, thr=140):
     return all_peaks, fine, bold, bold_sp
 
 
+def detect_bold_hgrid(gray, frac_lo=0.15, frac_hi=0.90):
+    """ЖИРНЫЕ горизонтали (каждые 10 клеток): цепочка с шагом ~10×fine по МАГНИТУДЕ отклика.
+    Снап «к ближайшей из всех» цеплял тонкие соседки (~12px), когда изгиб уводит жирную
+    дальше полушага тонкой (QC эксперта 03.07: сетка мимо жирных). Здесь жирные выбираются
+    явно: seed = сильнейший пик; цепочка вверх/вниз с окном ±0.25 шага, в окне — линия с max
+    магнитудой; нет линии — шаг экстраполяцией (стёртая/бледная). Возвращает
+    (ys_bold, step_px, miss_frac)."""
+    H, W = gray.shape
+    x0, x1 = int(frac_lo * W), int(frac_hi * W)
+    band = max(1, x1 - x0)
+    bg = float(np.median(gray))
+    prof = (gray[:, x0:x1] < bg - 22).sum(1).astype(np.float64) / band
+    prof -= np.convolve(prof, np.ones(31) / 31, mode="same")
+    prof = np.clip(prof, 0, None)
+    ys, mag = [], []
+    i = 1
+    while i < H - 1:
+        if prof[i] >= prof[i - 1] and prof[i] > prof[i + 1] and prof[i] > 0.02:
+            a, b, c = prof[i - 1], prof[i], prof[i + 1]
+            off = 0.5 * (a - c) / (a - 2 * b + c + 1e-9)
+            ys.append(i + max(-1.0, min(1.0, off))); mag.append(float(b))
+            i += 4
+        else:
+            i += 1
+    ys = np.array(ys); mag = np.array(mag)
+    if len(ys) < 5:
+        return ys, 0.0, 1.0
+    fine = float(np.median(np.diff(np.sort(ys))))
+    step = 10.0 * fine                                   # жирная каждые 10 клеток
+    seed = int(np.argmax(mag))
+    win = 0.25 * step
+    bold = [float(ys[seed])]
+    miss = 0; total = 0
+    for direction in (+1, -1):
+        cur = float(ys[seed])
+        while True:
+            pred = cur + direction * step
+            if pred < ys.min() - win or pred > ys.max() + win:
+                break
+            total += 1
+            sel = np.nonzero(np.abs(ys - pred) <= win)[0]
+            if len(sel):
+                j = sel[int(np.argmax(mag[sel]))]        # в окне — самая жирная
+                cur = float(ys[j])
+            else:
+                cur = pred; miss += 1                    # экстраполяция
+            bold.append(cur)
+    bold = np.array(sorted(bold))
+    return bold, step, (miss / max(1, total))
+
+
 def detect_hgrid(gray, frac_lo=0.15, frac_hi=0.90, min_cover=0.02):
     """Субпиксельный детект ВСЕХ горизонтальных линий сетки (тонких + жирных).
     Профиль покрытия строки чернилами в центральной x-полосе при АДАПТИВНОМ пороге

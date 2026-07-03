@@ -24,7 +24,9 @@ def _tagval(ifd, tag, default=None):
 def snap_to_lines(ys_pred, det_ys, tol):
     """Снап (A2b): каждую предсказанную осью Y 4 м-линию двигаем к БЛИЖАЙШЕЙ детектированной
     линии сетки, если та в пределах `tol` px (иначе оставляем предсказание — никогда не хуже).
-    Поглощает неравномерность бумаги (реальные диффы 123/120/126), угол уже задан A2."""
+    Поглощает неравномерность бумаги (реальные диффы 123/120/126), угол уже задан A2.
+    ⚠ НЕ давать сюда ВСЕ линии (тонкие ~12px): при изгибе > полушага тонкой снап цепляет
+    тонкую соседку мимо жирной (QC 03.07) — для жирных использовать snap_bold_monotone."""
     if det_ys is None or not len(det_ys):
         return list(ys_pred), 0
     det = np.asarray(det_ys, float)
@@ -38,7 +40,28 @@ def snap_to_lines(ys_pred, det_ys, tol):
     return out, moved
 
 
-def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0):
+def snap_bold_monotone(ys_pred, bold_ys, step_px):
+    """Монотонный матчинг предсказанных 4 м-линий на ЦЕПОЧКУ ЖИРНЫХ (detect_bold_hgrid):
+    идём по предсказаниям по порядку, каждой берём ближайшую жирную в окне ±0.45 шага,
+    СТРОГО ПОСЛЕ предыдущей выбранной (+0.5 шага) — две линии не сядут на одну жирную,
+    большой изгиб (больше полушага тонкой) поглощается. Возврат (ys, snapped, max_shift)."""
+    if bold_ys is None or not len(bold_ys):
+        return list(ys_pred), 0, 0.0
+    bold = np.asarray(sorted(bold_ys), float)
+    tol = 0.45 * step_px
+    out, moved, mx = [], 0, 0.0
+    prev = -1e9
+    for p in ys_pred:
+        cand = bold[(np.abs(bold - p) <= tol) & (bold > prev + 0.5 * step_px)]
+        if len(cand):
+            y = float(cand[int(np.abs(cand - p).argmin())])
+            out.append(y); moved += 1; mx = max(mx, abs(y - p)); prev = y
+        else:
+            out.append(float(p)); prev = float(p)
+    return out, moved, mx
+
+
+def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step=None):
     """Перегенерировать Depth Grid на шаг `step` (м), КОРРЕКТНО с геометрией наклонённых
     сегментов. Каждая линия = сегмент (x_start,y_start)->(x_end,y_end), наклон сохраняется из
     тега 35570. Все per-line массивы (35594/35596/35598/35600/35601) пишутся согласованной длины,
@@ -70,7 +93,11 @@ def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0):
         depths.append(round(d, 3))
         ys_pred.append(ty + (d - td) * pxm)            # левый Y (глубина), float
         d += step
-    ys_snap, moved = snap_to_lines(ys_pred, det_ys, snap_tol)
+    if bold_ys is not None and len(bold_ys):
+        ys_snap, moved, mx = snap_bold_monotone(ys_pred, bold_ys, bold_step or step * pxm)
+        print(f"  снап к ЖИРНЫМ: {moved}/{len(ys_pred)} линий, max сдвиг {mx:.0f}px")
+    else:
+        ys_snap, moved = snap_to_lines(ys_pred, det_ys, snap_tol)
     xs0, ys0, xs1, ys1 = [], [], [], []
     for d, ys in zip(depths, ys_snap):
         xs = int(round(xt + (d - td) * xpm))           # левый X (по наклону оси)
