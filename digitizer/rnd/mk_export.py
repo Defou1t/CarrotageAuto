@@ -82,6 +82,9 @@ def qc_render(nlgx_path, out_dir, n=4, half_h=130):
     if not xs_all:
         return []
     x0, x1 = max(0, int(np.percentile(xs_all, 2)) - 60), min(W, int(np.percentile(xs_all, 98)) + 90)
+    for gy in (m.get("depth_grid") or {}).get("ys", []):         # записанная сетка — видно снап к линиям
+        if 0 <= gy < H:
+            img[gy, x0:x1] = (0, 150, 60)
     try:
         font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", 24)
     except Exception:
@@ -101,8 +104,10 @@ def qc_render(nlgx_path, out_dir, n=4, half_h=130):
     return outs
 
 
-def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write_las=True, log=print):
-    """Главный вход (и для GUI): пишет <stem>_auto.nlgx/.bck/.las. Возврат: dict-отчёт или None."""
+def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write_las=True, log=print,
+                  grid_step=4.0):
+    """Главный вход (и для GUI): пишет <stem>_auto.nlgx/.bck/.las. Возврат: dict-отчёт или None.
+    grid_step: шаг Depth Grid в метрах (4 = каждые 10 клеток при 1:200); 0/None — не трогать сетку."""
     traces_npz, template_nlgx = str(traces_npz), str(template_nlgx)
     stem = Path(template_nlgx).stem
     out = Path(out_dir) if out_dir else Path(traces_npz).parent
@@ -140,6 +145,27 @@ def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write
         doc = find_ifd(ifds, lambda t: 34878 in t)
         if doc:
             set_tag(ifds, doc[0], 34878, 2, str(scan_path).encode("cp1251") + b"\x00")
+    # Depth Grid: горизонтали каждые 10 клеток (4 м при 1:200) со СНАПОМ к реальным линиям
+    # скана — опорные точки между крестиками, учёт изгиба/растяжки бумаги (QC эксперта 03.07)
+    img_for_grid = scan_path or model.get("img_path")
+    if grid_step and img_for_grid and Path(str(img_for_grid)).is_file():
+        try:
+            from set_depth_grid import regrid
+            from detect_calibration import detect_hgrid
+            from PIL import Image
+            Image.MAX_IMAGE_PIXELS = None
+            import numpy as _np
+            g = _np.asarray(Image.open(str(img_for_grid)).convert("L"))
+            det_ys, fine = detect_hgrid(g)
+            res = regrid(ifds, model, step=grid_step, det_ys=det_ys)
+            if res:
+                rep["grid_lines"] = len(res[0])
+                log(f"  Depth Grid: {len(res[0])} линий шаг {grid_step}м (детект {len(det_ys)} линий, "
+                    f"тонкая ~{fine:.1f}px)")
+            else:
+                log("  ! Depth Grid: нет тип-8 IFD в шаблоне — пропуск")
+        except Exception as e:
+            log(f"  ! Depth Grid: {e}")
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
     dst.write_bytes(data)

@@ -9,7 +9,7 @@ python set_depth_grid.py --nlgx <in.nlgx> [--step 4] [--scan <jpg>] [--out <out.
 import sys, struct
 from pathlib import Path
 import numpy as np
-from write_nlgx import read_full, write_full, write_bck, set_tag, find_ifd
+from write_nlgx import read_full, write_full, set_tag, find_ifd
 from extract_nlgx import extract
 
 
@@ -137,7 +137,8 @@ def main():
             set_tag(ifds, i, 34878, 2, scan)
     data = write_full(ifds)
     open(out, "wb").write(data)
-    open(Path(out).with_suffix(".bck"), "wb").write(write_bck(data))
+    # bck = точная копия (write_bck патчил байт внутри данных — анализ 02.07)
+    open(Path(out).with_suffix(".bck"), "wb").write(data)
     m2 = extract(out)
     dg = m2["depth_grid"]
     print(f"Depth Grid: {dg['n']} линий, шаг {dg['step_m']} м")
