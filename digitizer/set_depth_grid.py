@@ -61,7 +61,8 @@ def snap_bold_monotone(ys_pred, bold_ys, step_px):
     return out, moved, mx
 
 
-def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step=None):
+def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step=None,
+           bold_geo=None):
     """Перегенерировать Depth Grid на шаг `step` (м), КОРРЕКТНО с геометрией наклонённых
     сегментов. Каждая линия = сегмент (x_start,y_start)->(x_end,y_end), наклон сохраняется из
     тега 35570. Все per-line массивы (35594/35596/35598/35600/35601) пишутся согласованной длины,
@@ -93,18 +94,37 @@ def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step
         depths.append(round(d, 3))
         ys_pred.append(ty + (d - td) * pxm)            # левый Y (глубина), float
         d += step
-    if bold_ys is not None and len(bold_ys):
+    line_slopes = None
+    if bold_geo:                                       # per-line наклон из 2-полосного детекта
+        pairs, xLc, xRc, bstep = bold_geo
+        yLs = [p[0] for p in pairs]
+        ys_snap, moved, mx = snap_bold_monotone(ys_pred, yLs, bstep or step * pxm)
+        by_yl = {round(p[0], 1): p for p in pairs}
+        line_slopes, det_flag = [], []
+        for ys in ys_snap:
+            p = by_yl.get(round(ys, 1))
+            det_flag.append(p is not None)
+            line_slopes.append(((p[1] - p[0]) / max(xRc - xLc, 1)) if p else None)
+        got = sum(det_flag)
+        med_sl = float(np.median([s for s in line_slopes if s is not None])) if got else slope
+        line_slopes = [s if s is not None else med_sl for s in line_slopes]
+        print(f"  снап к ЖИРНЫМ (2-полосный): {moved}/{len(ys_pred)} линий, max сдвиг {mx:.0f}px, "
+              f"наклон med {med_sl*1000:.2f}px/1000px ({got} измерено)")
+    elif bold_ys is not None and len(bold_ys):
         ys_snap, moved, mx = snap_bold_monotone(ys_pred, bold_ys, bold_step or step * pxm)
         print(f"  снап к ЖИРНЫМ: {moved}/{len(ys_pred)} линий, max сдвиг {mx:.0f}px")
     else:
         ys_snap, moved = snap_to_lines(ys_pred, det_ys, snap_tol)
     xs0, ys0, xs1, ys1 = [], [], [], []
-    for d, ys in zip(depths, ys_snap):
-        xs = int(round(xt + (d - td) * xpm))           # левый X (по наклону оси)
+    for k, (d, ys) in enumerate(zip(depths, ys_snap)):
+        xs = int(round(xt + (d - td) * xpm))           # левый X = ось глубин (левая граница)
+        sl = line_slopes[k] if line_slopes else slope
+        if line_slopes and det_flag[k]:                # детект в центре полосы → экстраполяция к якорю
+            ys = ys + sl * (xs - xLc)                  # y НА ОСИ (привязка к левой границе)
         ys = int(round(ys))
         xs0.append(xs); ys0.append(ys)
         xs1.append(xs + int(width))                    # правый X
-        ys1.append(int(round(ys + slope * width)))     # правый Y (наклон горизонтали)
+        ys1.append(int(round(ys + sl * width)))        # правый Y (наклон per-line)
     n = len(depths)
     if det_ys is not None:
         print(f"  снап A2b: сдвинуто {moved}/{n} линий к детектированным (tol {snap_tol}px)")

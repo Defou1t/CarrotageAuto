@@ -70,6 +70,8 @@ class App:
         self.run_btn.pack(side="left", padx=4)
         self.quality = tk.BooleanVar(value=True)                 # ансамбль v4+v5 + TTA: −3пп свопов (eval 02.07)
         ttk.Checkbutton(act, text="Качество (медленнее)", variable=self.quality).pack(side="left", padx=6)
+        self.refine = tk.BooleanVar(value=True)                  # дотяжка пиков по чернилам (QC 03.07)
+        ttk.Checkbutton(act, text="Дотяжка пиков", variable=self.refine).pack(side="left", padx=2)
         ttk.Button(act, text="Открыть выход", command=self.open_out).pack(side="left", padx=4)
         self.nlgx_btn = ttk.Button(act, text="Выгрузить nlgx+bck", command=lambda: self.export(las=False))
         self.nlgx_btn.pack(side="right", padx=4)
@@ -211,6 +213,8 @@ class App:
             cmd = [VENV, INFER, ck, str(img), "--out", outd]
             if self.quality.get():
                 cmd += ["--ens", ENS_LIST, "--tta"]              # ансамбль чекпойнтов + флипы
+            if self.refine.get():
+                cmd += ["--refine"]                              # дотяжка пиков + сглаживание
             if sib.exists():
                 cmd += ["--nlgx", str(sib)]
             else:

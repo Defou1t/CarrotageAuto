@@ -151,17 +151,17 @@ def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write
     if grid_step and img_for_grid and Path(str(img_for_grid)).is_file():
         try:
             from set_depth_grid import regrid
-            from detect_calibration import detect_bold_hgrid
+            from detect_calibration import detect_bold_hgrid_2band
             from PIL import Image
             Image.MAX_IMAGE_PIXELS = None
             import numpy as _np
             g = _np.asarray(Image.open(str(img_for_grid)).convert("L"))
-            bold, step_px, miss = detect_bold_hgrid(g)      # ЖИРНЫЕ каждые 10 клеток (QC 03.07)
-            res = regrid(ifds, model, step=grid_step, bold_ys=bold, bold_step=step_px)
+            geo = detect_bold_hgrid_2band(g)                # ЖИРНЫЕ с per-line НАКЛОНОМ (QC №2)
+            res = regrid(ifds, model, step=grid_step, bold_geo=geo if geo[0] else None)
             if res:
                 rep["grid_lines"] = len(res[0])
-                log(f"  Depth Grid: {len(res[0])} линий шаг {grid_step}м (жирных детект {len(bold)}, "
-                    f"шаг ~{step_px:.0f}px, пропусков {miss:.0%})")
+                log(f"  Depth Grid: {len(res[0])} линий шаг {grid_step}м (жирных пар {len(geo[0])}, "
+                    f"шаг ~{geo[3]:.0f}px, наклон per-line + якорь в ось)")
             else:
                 log("  ! Depth Grid: нет тип-8 IFD в шаблоне — пропуск")
         except Exception as e:

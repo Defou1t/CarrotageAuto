@@ -121,6 +121,28 @@ def detect_bold_hgrid(gray, frac_lo=0.15, frac_hi=0.90):
     return bold, step, (miss / max(1, total))
 
 
+def detect_bold_hgrid_2band(gray, left=(0.04, 0.35), right=(0.60, 0.92)):
+    """Жирные горизонтали С НАКЛОНОМ: detect_bold_hgrid отдельно в ЛЕВОЙ и ПРАВОЙ x-полосах,
+    пары по ближайшему y (в пределах 0.3 шага). QC эксперта 03.07: один профиль на всю ширину
+    даёт «средний» y — при наклоне линии оба конца врут на полнаклона, правый край уплывает.
+    Возвращает (pairs [(yL,yR)...], xLc, xRc, step_px): y на ЦЕНТРАХ полос — наклон per-line
+    экстраполируется на любой x."""
+    H, W = gray.shape
+    bl, sl, ml = detect_bold_hgrid(gray, frac_lo=left[0], frac_hi=left[1])
+    br, sr, mr = detect_bold_hgrid(gray, frac_lo=right[0], frac_hi=right[1])
+    step = sl or sr
+    if not len(bl) or not len(br) or not step:
+        return [], 0, 0, step or 0.0
+    xLc = 0.5 * (left[0] + left[1]) * W
+    xRc = 0.5 * (right[0] + right[1]) * W
+    pairs = []
+    for yl in bl:
+        j = int(np.abs(br - yl).argmin())
+        if abs(br[j] - yl) <= 0.3 * step:
+            pairs.append((float(yl), float(br[j])))
+    return pairs, xLc, xRc, float(step)
+
+
 def detect_hgrid(gray, frac_lo=0.15, frac_hi=0.90, min_cover=0.02):
     """Субпиксельный детект ВСЕХ горизонтальных линий сетки (тонких + жирных).
     Профиль покрытия строки чернилами в центральной x-полосе при АДАПТИВНОМ пороге

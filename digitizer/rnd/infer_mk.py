@@ -158,6 +158,7 @@ def main():
     continuity = "--continuity" in a                             # пост #1: совместный трекинг 2 прядей
     repair = "--repair" in a                                     # пост #2: constrained re-peak выбросов
     assign = "--assign" in a                                     # пост #3: joint-назначение на пики combined
+    refine = "--refine" in a                                     # пост #4: дотяжка пиков по чернилам + сглаживание
     tta = "--tta" in a                                           # ансамбль ориентаций (id+hflip+vflip)
     ens = "--ens" in a                                           # ансамбль чекпойнтов; опц. значение =
     ens_list = None                                              # список путей через запятую
@@ -271,6 +272,12 @@ def main():
             tp, fp = repair_outliers(prob[1], tp, S=S)
             print(f"repair: MGZ исправлено {fm} строк, MPZ {fp}")
         mgz, mpz = to_native(tm), to_native(tp)
+    if refine:                                                   # итеративная доводка по чернилам (native)
+        from mk_refine import refine_traces
+        save_npz(out / f"{stem}_traces_peak.npz", mgz, mpz)      # база до refine — честный A/B
+        mgz, mpz, rinfo = refine_traces(rgb, mgz, mpz, prob=(prob if S == 1 else None))
+        print(f"refine: штрих MGZ~{rinfo['w0_mgz']}px MPZ~{rinfo['w0_mpz']}px | "
+              f"дотянуто строк MGZ={rinfo['ext_mgz']} MPZ={rinfo['ext_mpz']}")
     if save_prob:
         np.save(out / "mk_prob2.npy", prob.astype(np.float16))
     save_npz(out / f"{stem}_traces.npz", mgz, mpz)               # для объективного eval_mk vs GT
