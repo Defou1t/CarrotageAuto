@@ -143,6 +143,55 @@ def detect_bold_hgrid_2band(gray, left=(0.04, 0.35), right=(0.60, 0.92)):
     return pairs, xLc, xRc, float(step)
 
 
+def detect_bold_hgrid_multiband(gray, bands=((0.08, 0.20), (0.20, 0.34), (0.36, 0.58),
+                                             (0.60, 0.74), (0.76, 0.90))):
+    """Жирные горизонтали, робастно к РУКОПИСНЫМ ПОДПИСЯМ глубин (QC №4: подпись «3180» над
+    линией в левой полосе дала ложный пик — линия уехала вверх и испортила наклон пары).
+    Опора = цепочка в ЦЕНТРЕ трека (подписей нет), затем y каждой линии меряется в 5 полосах
+    (локальный пик профиля полосы в ±0.15 шага от опоры) и фитится прямой y(x) по медианному
+    наклону с выбросом аутлаеров >5px (подпись портит максимум одну полосу).
+    Возвращает (lines [(y_c, slope, x_c)...], step_px): y_c на центре трека x_c."""
+    H, W = gray.shape
+    bg = float(np.median(gray))
+    profs = []
+    for lo, hi in bands:
+        x0, x1 = int(lo * W), int(hi * W)
+        p = (gray[:, x0:x1] < bg - 22).sum(1).astype(np.float64) / max(1, x1 - x0)
+        p -= np.convolve(p, np.ones(31) / 31, mode="same")
+        profs.append((np.clip(p, 0, None), 0.5 * (x0 + x1)))
+    ci = len(bands) // 2                                 # центральная полоса — опора
+    lo, hi = bands[ci]
+    anchor, step, _ = detect_bold_hgrid(gray, frac_lo=lo, frac_hi=hi)
+    if not len(anchor) or not step:
+        return [], 0.0
+    x_c = profs[ci][1]
+    win = 0.15 * step
+    lines = []
+    for ya in anchor:
+        pts = []
+        for prof, xc in profs:
+            a, b = max(1, int(ya - win)), min(H - 1, int(ya + win))
+            if b <= a:
+                continue
+            j = a + int(np.argmax(prof[a:b]))
+            if prof[j] > 0.02:
+                pts.append((xc, float(j)))
+        if len(pts) < 3:
+            lines.append((float(ya), None, x_c)); continue
+        xs = np.array([p[0] for p in pts]); ys = np.array([p[1] for p in pts])
+        sl = np.median([(ys[j] - ys[i]) / (xs[j] - xs[i])
+                        for i in range(len(pts)) for j in range(i + 1, len(pts))])
+        y0 = float(np.median(ys - sl * (xs - x_c)))      # y на центре по всем полосам
+        good = np.abs(ys - (y0 + sl * (xs - x_c))) <= 5.0
+        if good.sum() >= 3 and good.sum() < len(pts):    # рефит без аутлаеров (подписи)
+            xs, ys = xs[good], ys[good]
+            sl = np.median([(ys[j] - ys[i]) / (xs[j] - xs[i])
+                            for i in range(len(xs)) for j in range(i + 1, len(xs))])
+            y0 = float(np.median(ys - sl * (xs - x_c)))
+        lines.append((y0, float(sl), x_c))
+    return lines, float(step)
+
+
 def detect_hgrid(gray, frac_lo=0.15, frac_hi=0.90, min_cover=0.02):
     """Субпиксельный детект ВСЕХ горизонтальных линий сетки (тонких + жирных).
     Профиль покрытия строки чернилами в центральной x-полосе при АДАПТИВНОМ пороге

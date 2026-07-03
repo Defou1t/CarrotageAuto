@@ -107,6 +107,34 @@ def smooth_pass(tr, tol=3.0, alpha=0.5, max_gap=6):
     return out
 
 
+def fill_from_partner(tr, partner, probc, win=12, thr_lo=0.12, edge=8):
+    """Заполнение дыр трассы от ПАРТНЁРА в зонах слипания (QC №4: после 3500м кривые
+    сплетаются в один жгут — канал MGZ не пробивает порог 0.4 и строки выпадают, MGZ
+    «игнорирует»). Домен: в зоне наложения обе кривые идут по одной туши. Строка есть
+    у партнёра, нет у нас → пик СВОЕГО канала в ±win от партнёра (≥thr_lo), иначе —
+    позиция партнёра как есть."""
+    W = probc.shape[1]
+    out = dict(tr)
+    filled = 0
+    for y, xp in partner.items():
+        if y in out:
+            continue
+        xi = int(round(xp))
+        lo, hi = max(0, xi - win), min(W, xi + win + 1)
+        if hi <= lo:
+            continue
+        seg = probc[y, lo:hi]
+        if seg.max() >= thr_lo:
+            a = int(np.argmax(seg))
+            l2, h2 = max(0, a - edge), min(len(seg), a + edge + 1)
+            w = seg[l2:h2]
+            out[y] = float(((np.arange(l2, h2) + lo) * w).sum() / max(w.sum(), 1e-6))
+        else:
+            out[y] = float(xp)                          # канал молчит — слипание, идём по партнёру
+        filled += 1
+    return out, filled
+
+
 def refine_traces(rgb, mgz, mpz, iters=3, dark_thr=110, prob=None):
     """Главный вход: native rgb + трассы (+prob 2×H×W native) → дотянутые/сглаженные + stats."""
     dark = rgb.max(2) < dark_thr
@@ -114,6 +142,10 @@ def refine_traces(rgb, mgz, mpz, iters=3, dark_thr=110, prob=None):
     w0m, w0p = _stroke_width(dark, m), _stroke_width(dark, p)
     p0 = prob[0] if prob is not None else None
     p1 = prob[1] if prob is not None else None
+    fill_m = fill_p = 0
+    if p0 is not None:                                  # дыры в зонах слипания — ДО дотяжки
+        m, fill_m = fill_from_partner(m, p, p0)
+        p, fill_p = fill_from_partner(p, m, p1)
     total_m = total_p = 0
     for _ in range(iters):
         m, fm = refine_pass(dark, m, p, w0m, probc=p0)
@@ -123,4 +155,5 @@ def refine_traces(rgb, mgz, mpz, iters=3, dark_thr=110, prob=None):
         if fm + fp == 0:
             break
     return m, p, {"w0_mgz": round(w0m, 1), "w0_mpz": round(w0p, 1),
-                  "ext_mgz": total_m, "ext_mpz": total_p}
+                  "ext_mgz": total_m, "ext_mpz": total_p,
+                  "fill_mgz": fill_m, "fill_mpz": fill_p}

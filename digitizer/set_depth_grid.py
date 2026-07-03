@@ -95,21 +95,26 @@ def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step
         ys_pred.append(ty + (d - td) * pxm)            # левый Y (глубина), float
         d += step
     line_slopes = None
-    if bold_geo:                                       # per-line наклон из 2-полосного детекта
-        pairs, xLc, xRc, bstep = bold_geo
-        yLs = [p[0] for p in pairs]
-        ys_snap, moved, mx = snap_bold_monotone(ys_pred, yLs, bstep or step * pxm)
-        by_yl = {round(p[0], 1): p for p in pairs}
-        line_slopes, det_flag = [], []
-        for ys in ys_snap:
-            p = by_yl.get(round(ys, 1))
-            det_flag.append(p is not None)
-            line_slopes.append(((p[1] - p[0]) / max(xRc - xLc, 1)) if p else None)
+    if bold_geo:                                       # мультиполосный детект: (y_c, slope, x_c)
+        lines, bstep = bold_geo
+        x_c = lines[0][2] if lines else 0.5 * width
+        med_sl = float(np.median([l[1] for l in lines if l[1] is not None])) if lines else slope
+        # предсказания и цепочка сравниваются В ЦЕНТРЕ трека (там же, где детект — без подписей)
+        ys_pred_c = [y + med_sl * (x_c - (xt + (d - td) * xpm)) for d, y in zip(depths, ys_pred)]
+        yCs = [l[0] for l in lines]
+        ys_snap_c, moved, mx = snap_bold_monotone(ys_pred_c, yCs, bstep or step * pxm)
+        by_yc = {round(l[0], 1): l for l in lines}
+        line_slopes, det_flag, ys_snap = [], [], []
+        for d, yc in zip(depths, ys_snap_c):
+            l = by_yc.get(round(yc, 1))
+            det_flag.append(l is not None)
+            sl = (l[1] if (l and l[1] is not None) else med_sl)
+            line_slopes.append(sl)
+            xa = xt + (d - td) * xpm
+            ys_snap.append(yc + sl * (xa - x_c))       # y НА ОСИ (якорь в левую границу)
         got = sum(det_flag)
-        med_sl = float(np.median([s for s in line_slopes if s is not None])) if got else slope
-        line_slopes = [s if s is not None else med_sl for s in line_slopes]
-        print(f"  снап к ЖИРНЫМ (2-полосный): {moved}/{len(ys_pred)} линий, max сдвиг {mx:.0f}px, "
-              f"наклон med {med_sl*1000:.2f}px/1000px ({got} измерено)")
+        print(f"  снап к ЖИРНЫМ (мультиполосный): {moved}/{len(ys_pred)} линий, max сдвиг {mx:.0f}px, "
+              f"наклон med {med_sl*1000:.2f}px/1000px ({got} с детектом)")
     elif bold_ys is not None and len(bold_ys):
         ys_snap, moved, mx = snap_bold_monotone(ys_pred, bold_ys, bold_step or step * pxm)
         print(f"  снап к ЖИРНЫМ: {moved}/{len(ys_pred)} линий, max сдвиг {mx:.0f}px")
@@ -118,9 +123,7 @@ def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step
     xs0, ys0, xs1, ys1 = [], [], [], []
     for k, (d, ys) in enumerate(zip(depths, ys_snap)):
         xs = int(round(xt + (d - td) * xpm))           # левый X = ось глубин (левая граница)
-        sl = line_slopes[k] if line_slopes else slope
-        if line_slopes and det_flag[k]:                # детект в центре полосы → экстраполяция к якорю
-            ys = ys + sl * (xs - xLc)                  # y НА ОСИ (привязка к левой границе)
+        sl = line_slopes[k] if line_slopes else slope  # (мультиполосный путь: ys уже на оси)
         ys = int(round(ys))
         xs0.append(xs); ys0.append(ys)
         xs1.append(xs + int(width))                    # правый X

@@ -277,7 +277,8 @@ def main():
         save_npz(out / f"{stem}_traces_peak.npz", mgz, mpz)      # база до refine — честный A/B
         mgz, mpz, rinfo = refine_traces(rgb, mgz, mpz, prob=(prob if S == 1 else None))
         print(f"refine: штрих MGZ~{rinfo['w0_mgz']}px MPZ~{rinfo['w0_mpz']}px | "
-              f"дотянуто строк MGZ={rinfo['ext_mgz']} MPZ={rinfo['ext_mpz']}")
+              f"дотянуто MGZ={rinfo['ext_mgz']} MPZ={rinfo['ext_mpz']} | "
+              f"заполнено от партнёра MGZ={rinfo.get('fill_mgz', 0)} MPZ={rinfo.get('fill_mpz', 0)}")
     if save_prob:
         np.save(out / "mk_prob2.npy", prob.astype(np.float16))
     save_npz(out / f"{stem}_traces.npz", mgz, mpz)               # для объективного eval_mk vs GT
