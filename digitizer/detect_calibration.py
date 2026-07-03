@@ -267,6 +267,184 @@ def fit_bold_grid(gray, ys_pred, xs_axis, step_px, exclude_x=None,
     return ys_out, sl_out, ok_out
 
 
+def fit_bold_ladder(gray, step_px, y_top, y_bot, exclude_x=None, bands_n=5):
+    """ЖИРНЫЕ = ЛЕСТНИЦА ПО СЫРЫМ ЛИНИЯМ (гейт vs эталон 03.07): позиции из detect_hgrid
+    (эксперт покрыт med 1.4px — точнее любого профильного пере-детекта), ЖИРНОСТЬ мерится
+    напрямую (интегральная темнота строки±1 вне зоны кривых), лестница выбирается DP:
+    подпоследовательность линий с шагом ~step_px и max Σ жирности (лестница тонких имеет
+    тот же шаг — побеждается жирностью; подписи/кривые в жирность почти не вносят).
+    Наклон per-line: локальные пики узких полос ±6px вокруг выбранной линии.
+    Возвращает [(y_на_x0, slope, matched)]."""
+    H, W = gray.shape
+    ys_all, fine = detect_hgrid(gray)
+    if fine and 6 <= fine <= 40:                       # жирная = каждые 10 клеток; шаг ОТ ПЛАНШЕТА
+        step10 = 10.0 * fine                           # (масштабонезависимо: 1:500 жирная = 10м,
+        if not step_px or abs(step10 - step_px) / step10 > 0.25:   # шаг «4м из рамки» там врал 2.5×)
+            step_px = step10
+    ys_all = np.asarray([y for y in ys_all if y_top - step_px < y < y_bot + step_px], float)
+    if len(ys_all) < 5:
+        return []
+    cols = np.ones(W, bool)
+    cols[:int(0.04 * W)] = False; cols[int(0.92 * W):] = False
+    if exclude_x:
+        lo, hi = max(0, exclude_x[0]), min(W, exclude_x[1])
+        if (hi - lo) < 0.5 * W:                        # BKZ-фикс: кривые на всю ширину — не исключаем
+            cols[lo:hi] = False
+    bg = float(np.median(gray))
+    dark = np.clip(bg - gray[:, cols].astype(np.float64), 0, 60)
+    B = np.array([dark[max(0, int(y) - 1):int(y) + 2].mean() for y in ys_all])
+    # DP: лестница с шагом [0.82..1.18]*step и max Σ жирности (допускаем пропуск 1 ступени)
+    n = len(ys_all)
+    dp = B.copy(); prev = np.full(n, -1)
+    for i in range(n):
+        for span, pen in ((1.0, 0.0), (2.0, 0.3)):     # шаг или пропуск ступени
+            lo, hi = ys_all[i] - span * step_px * 1.18, ys_all[i] - span * step_px * 0.82
+            js = np.nonzero((ys_all >= lo) & (ys_all <= hi))[0]
+            if len(js):
+                j = js[np.argmax(dp[js])]
+                cand = dp[j] + B[i] - pen * B.mean()
+                if cand > dp[i]:
+                    dp[i] = cand; prev[i] = j
+    i = int(np.argmax(dp))
+    chain_idx = []
+    while i >= 0:
+        chain_idx.append(i); i = prev[i]
+    chain_idx = chain_idx[::-1]
+    # наклон per-line: локальные пики узких полос вокруг выбранной линии
+    bands = [(k / bands_n * 0.84 + 0.06, (k + 1) / bands_n * 0.84 + 0.06) for k in range(bands_n)]
+    profs = []
+    for lo, hi in bands:
+        p = _band_profile(gray, int(lo * W), int(hi * W), exclude_x if exclude_x and
+                          (exclude_x[1] - exclude_x[0]) < 0.5 * W else None)
+        if p is not None:
+            profs.append((p, 0.5 * (int(lo * W) + int(hi * W))))
+    out = []
+    sls = []
+    for ci in chain_idx:
+        ya = float(ys_all[ci])
+        pts = []
+        for p, xc in profs:
+            a, b = max(1, int(ya - 6)), min(H - 2, int(ya + 7))
+            if b - a < 3:
+                continue
+            seg = p[a:b]
+            j = int(np.argmax(seg))
+            if seg[j] > 0.02:
+                pts.append((xc, a + j))
+        if len(pts) >= 3:
+            xs = np.array([q[0] for q in pts], float); yy = np.array([q[1] for q in pts], float)
+            sl = float(np.median([(yy[j] - yy[i2]) / (xs[j] - xs[i2])
+                                  for i2 in range(len(pts)) for j in range(i2 + 1, len(pts))
+                                  if xs[j] != xs[i2]]))
+            good = np.abs(yy - (ya + sl * (xs - np.median(xs)))) <= 5
+            if good.sum() >= 3:
+                xs2, yy2 = xs[good], yy[good]
+                sl = float(np.median([(yy2[j] - yy2[i2]) / (xs2[j] - xs2[i2])
+                                      for i2 in range(len(xs2)) for j in range(i2 + 1, len(xs2))
+                                      if xs2[j] != xs2[i2]]))
+        else:
+            sl = None
+        sls.append(sl)
+    med_sl = float(np.median([s for s in sls if s is not None])) if any(s is not None for s in sls) else 0.0
+    for ci, sl in zip(chain_idx, sls):
+        ya = float(ys_all[ci])
+        s = sl if sl is not None else med_sl
+        # ya измерен «в среднем по ширине» (детект по полосе 0.15-0.9W) → к x=0 через центр
+        out.append((ya - s * 0.5 * W, s, True))
+    # мостим пропуски ступеней интерполяцией
+    filled = []
+    for (a_, b_) in zip(out, out[1:]):
+        filled.append(a_)
+        gapn = round((b_[0] - a_[0]) / step_px)
+        for k in range(1, int(gapn)):
+            t = k / gapn
+            filled.append((a_[0] + (b_[0] - a_[0]) * t, med_sl, False))
+    if out:
+        filled.append(out[-1])
+    return filled
+
+
+def fit_bold_chain(gray, step_px, y_top, y_bot, exclude_x=None,
+                   bands=((0.08, 0.20), (0.20, 0.34), (0.36, 0.58), (0.60, 0.74), (0.76, 0.90)),
+                   clus_tol=6.0, min_bands=3):
+    """Жирные горизонтали со СВОБОДНОЙ ФАЗОЙ (гейт vs эталон 03.07: фаза жирных задаётся
+    ПЛАНШЕТОМ, а не «глубинами кратными шагу» — привязка к слотам давала промах в полшага
+    (61px) там, где фаза рамки не совпадает с жирными; у эксперта линии на реальных жирных).
+    Цепочка: старт = сильнейший кластер голосования полос во всём [y_top..y_bot], затем шаги
+    ±step_px с окном ±0.3 шага и тем же голосованием (≥min_bands полос, max Σмагнитуд);
+    пропуск (бледная) — экстраполяция и ход дальше. Возвращает [(y_на_x0, slope, matched)].
+    y отдаётся на x=0 (пересчёт на любой якорь: y + slope*x)."""
+    H, W = gray.shape
+    profs = []
+    for lo, hi in bands:
+        p = _band_profile(gray, int(lo * W), int(hi * W), exclude_x)
+        if p is not None:
+            profs.append((p, 0.5 * (int(lo * W) + int(hi * W))))
+    if not profs:
+        return []
+
+    def vote(yc, win):
+        cands = []
+        for p, xc in profs:
+            a, b = max(1, int(yc - win)), min(H - 2, int(yc + win))
+            if b - a < 3:
+                continue
+            seg = p[a:b]
+            for j in range(1, len(seg) - 1):
+                if seg[j] >= seg[j - 1] and seg[j] > seg[j + 1] and seg[j] > 0.02:
+                    cands.append((xc, float(a + j), float(seg[j])))
+        best = None
+        for _, yy, _ in cands:
+            cl = [c for c in cands if abs(c[1] - yy) <= clus_tol]
+            if len({c[0] for c in cl}) < min_bands:
+                continue
+            mass = sum(c[2] for c in cl)
+            if best is None or mass > best[0]:
+                best = (mass, cl)
+        if best is None:
+            return None
+        cl = best[1]
+        xs = np.array([c[0] for c in cl]); ys = np.array([c[1] for c in cl])
+        sl = float(np.median([(ys[j] - ys[i]) / (xs[j] - xs[i])
+                              for i in range(len(cl)) for j in range(i + 1, len(cl))
+                              if xs[j] != xs[i]])) if len(cl) > 1 else 0.0
+        y0 = float(np.median(ys - sl * xs))            # y на x=0
+        xc0 = float(np.median(xs))
+        return y0, sl, best[0], xc0
+
+    # старт: сильнейший кластер по всему диапазону (скан крупными окнами)
+    seed = None
+    for yc in np.arange(y_top + step_px * 0.5, y_bot - step_px * 0.5, step_px * 0.5):
+        v = vote(yc, step_px * 0.45)
+        if v and (seed is None or v[2] > seed[2]):
+            seed = v
+    if seed is None:
+        return []
+    y0s, sls, _, xc0 = seed
+    lines = {}
+    for direction in (+1, -1):                         # цепочка вверх и вниз от старта
+        y_prev = y0s + sls * xc0                       # в координате центра детекта
+        sl_prev = sls
+        k = 0
+        while True:
+            k += 1
+            yc = y_prev + direction * step_px
+            if not (y_top - step_px * 0.4 <= yc <= y_bot + step_px * 0.4):
+                break
+            v = vote(yc, step_px * 0.3)
+            if v:
+                y0, sl, _, xcv = v
+                yk = y0 + sl * xcv
+                lines[round(yk, 1)] = (y0, sl, True)
+                y_prev, sl_prev = yk, sl
+            else:                                      # бледная — экстраполяция, идём дальше
+                y0 = yc - sl_prev * xc0
+                lines[round(yc, 1)] = (y0, sl_prev, False)
+                y_prev = yc
+    lines[round(y0s + sls * xc0, 1)] = (y0s, sls, True)
+    return [lines[k] for k in sorted(lines)]
+
+
 def detect_hgrid(gray, frac_lo=0.15, frac_hi=0.90, min_cover=0.02):
     """Субпиксельный детект ВСЕХ горизонтальных линий сетки (тонких + жирных).
     Профиль покрытия строки чернилами в центральной x-полосе при АДАПТИВНОМ пороге

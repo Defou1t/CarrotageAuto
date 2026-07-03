@@ -117,7 +117,31 @@ def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step
         ys_pred.append(ty + (d - td) * pxm)            # левый Y (глубина), float
         d += step
     line_slopes = None
-    if lines_geo:                                      # ГОТОВАЯ геометрия (fit_bold_grid, QC №5):
+    if lines_geo and lines_geo[0] and isinstance(lines_geo[0], tuple):   # СВОБОДНАЯ ФАЗА (fit_bold_chain):
+        # [(y_на_x0, slope, matched)] — фаза от ПЛАНШЕТА (гейт vs эталон: слоты по глубинам
+        # промахивались на полшага там, где фаза жирных не совпадает с рамкой)
+        chain = lines_geo
+        xs0, ys0, xs1, ys1 = [], [], [], []
+        ax_k = (xb - xt) / max(by - ty, 1)             # x оси как функция y
+        for y0l, sl, ok_ in chain:
+            xa = xt + (y0l - ty) * ax_k                # x оси на высоте линии (итерация 1 достаточно:
+            ya = y0l + sl * xa                         # поправка sl·Δx < 1px)
+            xs0.append(int(round(xa))); ys0.append(int(round(ya)))
+            xs1.append(int(round(xa + width)))
+            ys1.append(int(round(ya + sl * width)))
+        n = len(chain)
+        set_tag(ifds, i, 35594, 4, xs0)
+        set_tag(ifds, i, 35596, 4, ys0)
+        set_tag(ifds, i, 35598, 4, xs1)
+        set_tag(ifds, i, 35600, 4, ys1)
+        set_tag(ifds, i, 35601, 4, [3] * n)
+        set_tag(ifds, i, 35590, 4, n)
+        set_tag(ifds, i, 35586, 4, int(round(step * pxm)))
+        for t in (35578, 35582, 35584):
+            set_tag(ifds, i, t, 12, float(step))
+        print(f"  сетка со свободной фазой: {n} линий ({sum(1 for _,_,o in chain if o)} с детектом)")
+        return [round(td + (y - ty) / pxm, 2) for y in ys0], ys0
+    elif lines_geo:                                    # ГОТОВАЯ геометрия (fit_bold_grid, QC №5):
         ys_fit, sl_fit, ok = lines_geo                 # y на оси + наклон per-line
         ys_snap = list(ys_fit); line_slopes = list(sl_fit)
         print(f"  сетка по голосованию полос: {sum(ok)}/{len(ok)} линий с детектом")

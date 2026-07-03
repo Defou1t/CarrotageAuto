@@ -215,6 +215,9 @@ def refine_traces(rgb, mgz, mpz, iters=3, dark_thr=110, prob=None):
         total_m += fm; total_p += fp
         if fm + fp == 0:
             break
+    for _ in range(2):                                  # финальная гладкость (QC №6: «немного
+        m = smooth_pass(m, tol=2.5)                     # сгладить после оцифровки») — только
+        p = smooth_pass(p, tol=2.5)                     # дрожь <2.5px, пики не трогаем
     return m, p, {"w0_mgz": round(w0m, 1), "w0_mpz": round(w0p, 1),
                   "ext_mgz": total_m, "ext_mpz": total_p,
                   "fill_mgz": fill_m + br_m, "fill_mpz": fill_p + br_p}

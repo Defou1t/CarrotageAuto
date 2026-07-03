@@ -151,7 +151,7 @@ def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write
     if grid_step and img_for_grid and Path(str(img_for_grid)).is_file():
         try:
             from set_depth_grid import regrid, predict_lines
-            from detect_calibration import fit_bold_grid
+            from detect_calibration import fit_bold_ladder
             from PIL import Image
             Image.MAX_IMAGE_PIXELS = None
             import numpy as _np
@@ -161,14 +161,20 @@ def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write
                 depths_, ys_pred, xs_axis, step_px = pl
                 # зона кривых исключается из профилей полос (кривые загрязняли наклоны, QC №5)
                 xs_tr = list(mgz.values()) + list(mpz.values())
-                exc = (max(0, int(min(xs_tr)) - 25), int(max(xs_tr)) + 25)
-                geo = fit_bold_grid(g, ys_pred, xs_axis, step_px, exclude_x=exc)
-                res = regrid(ifds, model, step=grid_step, lines_geo=geo)
+                exc = (max(0, int(min(xs_tr)) - 25), int(max(xs_tr)) + 60)
+                da = model["depth_axis"]
+                chain = fit_bold_ladder(g, step_px, min(da["top_y"], da["bottom_y"]),
+                                        max(da["top_y"], da["bottom_y"]), exclude_x=exc)
+                step_m = grid_step
+                if len(chain) > 3:                      # метраж шага — производный от планшета
+                    pxm = abs(da["bottom_y"] - da["top_y"]) / max(abs(da["bottom_depth"] - da["top_depth"]), 1e-6)
+                    step_m = max(1.0, round(_np.median(_np.diff([c[0] for c in chain])) / pxm))
+                res = regrid(ifds, model, step=step_m, lines_geo=chain)
                 if res:
                     rep["grid_lines"] = len(res[0])
-                    log(f"  Depth Grid: {len(res[0])} линий шаг {grid_step}м "
-                        f"(голосование полос: {sum(geo[2])}/{len(geo[2])} с детектом, "
-                        f"зона кривых x[{exc[0]}..{exc[1]}] исключена)")
+                    nd = sum(1 for _, _, o in chain if o)
+                    log(f"  Depth Grid: {len(res[0])} линий шаг {step_m}м (лестница по жирности "
+                        f"от планшета, {nd} с детектом)")
             else:
                 log("  ! Depth Grid: вырожденная ось — пропуск")
         except Exception as e:
