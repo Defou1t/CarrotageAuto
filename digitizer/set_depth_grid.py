@@ -61,8 +61,30 @@ def snap_bold_monotone(ys_pred, bold_ys, step_px):
     return out, moved, mx
 
 
+def predict_lines(m, step=4.0):
+    """Линейные предсказания 4м-линий по оси: (depths, ys_axis, xs_axis, step_px) или None."""
+    import math
+    da = m["depth_axis"]
+    ty, by = da["top_y"], da["bottom_y"]
+    td, bd = da["top_depth"], da["bottom_depth"]
+    xt, xb = da.get("x_top") or 0, da.get("x_bot") or 0
+    if bd == td or by == ty:
+        return None
+    pxm = (by - ty) / (bd - td)
+    xpm = (xb - xt) / (bd - td)
+    lo, hi = min(td, bd), max(td, bd)
+    d = math.ceil(lo / step) * step
+    depths, ys, xs = [], [], []
+    while d <= hi + 1e-6:
+        depths.append(round(d, 3))
+        ys.append(ty + (d - td) * pxm)
+        xs.append(xt + (d - td) * xpm)
+        d += step
+    return depths, ys, xs, abs(step * pxm)
+
+
 def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step=None,
-           bold_geo=None):
+           bold_geo=None, lines_geo=None):
     """Перегенерировать Depth Grid на шаг `step` (м), КОРРЕКТНО с геометрией наклонённых
     сегментов. Каждая линия = сегмент (x_start,y_start)->(x_end,y_end), наклон сохраняется из
     тега 35570. Все per-line массивы (35594/35596/35598/35600/35601) пишутся согласованной длины,
@@ -95,7 +117,11 @@ def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step
         ys_pred.append(ty + (d - td) * pxm)            # левый Y (глубина), float
         d += step
     line_slopes = None
-    if bold_geo:                                       # мультиполосный детект: (y_c, slope, x_c)
+    if lines_geo:                                      # ГОТОВАЯ геометрия (fit_bold_grid, QC №5):
+        ys_fit, sl_fit, ok = lines_geo                 # y на оси + наклон per-line
+        ys_snap = list(ys_fit); line_slopes = list(sl_fit)
+        print(f"  сетка по голосованию полос: {sum(ok)}/{len(ok)} линий с детектом")
+    elif bold_geo:                                     # мультиполосный детект: (y_c, slope, x_c)
         lines, bstep = bold_geo
         x_c = lines[0][2] if lines else 0.5 * width
         med_sl = float(np.median([l[1] for l in lines if l[1] is not None])) if lines else slope

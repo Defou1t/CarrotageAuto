@@ -192,6 +192,81 @@ def detect_bold_hgrid_multiband(gray, bands=((0.08, 0.20), (0.20, 0.34), (0.36, 
     return lines, float(step)
 
 
+def _band_profile(gray, x0, x1, exclude_x=None):
+    """Профиль покрытия строк тёмным в полосе [x0,x1) с ИСКЛЮЧЕНИЕМ зоны кривых
+    (QC №5: почти-горизонтальные сегменты пиков кривой дают ложные пики профиля —
+    наклоны 3172/3188 уехали до −17/+26 px/1000)."""
+    cols = np.ones(gray.shape[1], bool)
+    cols[:x0] = False; cols[x1:] = False
+    if exclude_x:
+        cols[max(0, exclude_x[0]):exclude_x[1]] = False
+    n = int(cols.sum())
+    if n < 30:
+        return None
+    bg = float(np.median(gray))
+    p = (gray[:, cols] < bg - 22).sum(1).astype(np.float64) / n
+    p -= np.convolve(p, np.ones(31) / 31, mode="same")
+    return np.clip(p, 0, None)
+
+
+def fit_bold_grid(gray, ys_pred, xs_axis, step_px, exclude_x=None,
+                  bands=((0.08, 0.20), (0.20, 0.34), (0.36, 0.58), (0.60, 0.74), (0.76, 0.90)),
+                  win_frac=0.35, clus_tol=6.0, min_bands=3):
+    """ГОЛОСОВАНИЕ ПОЛОС ПО СЛОТАМ (QC №5, замена цепочке): для каждой предсказанной 4м-линии
+    кандидаты = локальные пики профилей 5 полос в окне ±win_frac·шаг; кластеры по y (±clus_tol);
+    побеждает кластер ≥min_bands полос с max Σмагнитуд (жирная бьёт тонкую массой; подпись/
+    кривая живут в 1-2 полосах и проигрывают всегда). y и наклон каждой линии — медианный фит
+    по кластеру, экстраполяция на ось. Возвращает (ys_axis, slopes, matched_flags)."""
+    H, W = gray.shape
+    profs = []
+    for lo, hi in bands:
+        p = _band_profile(gray, int(lo * W), int(hi * W), exclude_x)
+        if p is not None:
+            profs.append((p, 0.5 * (int(lo * W) + int(hi * W))))
+    win = win_frac * step_px
+    ys_out, sl_out, ok_out = [], [], []
+    prev = -1e18
+    raw = []
+    for k, yp in enumerate(ys_pred):
+        cands = []                                    # (xc, y, mag)
+        for p, xc in profs:
+            a, b = max(1, int(yp - win)), min(H - 2, int(yp + win))
+            if b - a < 3:
+                continue
+            seg = p[a:b]
+            for j in range(1, len(seg) - 1):          # все локальные пики окна (не только max)
+                if seg[j] >= seg[j - 1] and seg[j] > seg[j + 1] and seg[j] > 0.02:
+                    cands.append((xc, float(a + j), float(seg[j])))
+        best = None                                   # кластеризация по y
+        for _, yc, _ in cands:
+            cl = [c for c in cands if abs(c[1] - yc) <= clus_tol]
+            bset = {c[0] for c in cl}
+            if len(bset) < min_bands:
+                continue
+            mass = sum(c[2] for c in cl)
+            if best is None or mass > best[0]:
+                best = (mass, cl)
+        if best is None:
+            raw.append(None); continue
+        cl = best[1]
+        xs = np.array([c[0] for c in cl]); ys = np.array([c[1] for c in cl])
+        sl = float(np.median([(ys[j] - ys[i]) / (xs[j] - xs[i])
+                              for i in range(len(cl)) for j in range(i + 1, len(cl))
+                              if xs[j] != xs[i]])) if len(cl) > 1 else 0.0
+        y_ax = float(np.median(ys - sl * (xs - xs_axis[k])))
+        raw.append((y_ax, sl))
+    med_sl = float(np.median([r[1] for r in raw if r])) if any(raw) else 0.0
+    for k, yp in enumerate(ys_pred):
+        r = raw[k]
+        if r and r[0] > prev + 0.5 * step_px:         # монотонность
+            ys_out.append(r[0]); sl_out.append(r[1]); ok_out.append(True)
+            prev = r[0]
+        else:
+            ys_out.append(float(yp)); sl_out.append(med_sl); ok_out.append(False)
+            prev = max(prev, float(yp))
+    return ys_out, sl_out, ok_out
+
+
 def detect_hgrid(gray, frac_lo=0.15, frac_hi=0.90, min_cover=0.02):
     """Субпиксельный детект ВСЕХ горизонтальных линий сетки (тонких + жирных).
     Профиль покрытия строки чернилами в центральной x-полосе при АДАПТИВНОМ пороге

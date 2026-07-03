@@ -150,20 +150,27 @@ def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write
     img_for_grid = scan_path or model.get("img_path")
     if grid_step and img_for_grid and Path(str(img_for_grid)).is_file():
         try:
-            from set_depth_grid import regrid
-            from detect_calibration import detect_bold_hgrid_multiband
+            from set_depth_grid import regrid, predict_lines
+            from detect_calibration import fit_bold_grid
             from PIL import Image
             Image.MAX_IMAGE_PIXELS = None
             import numpy as _np
             g = _np.asarray(Image.open(str(img_for_grid)).convert("L"))
-            geo = detect_bold_hgrid_multiband(g)            # жирные робастно к подписям (QC №4)
-            res = regrid(ifds, model, step=grid_step, bold_geo=geo if geo[0] else None)
-            if res:
-                rep["grid_lines"] = len(res[0])
-                log(f"  Depth Grid: {len(res[0])} линий шаг {grid_step}м (жирных {len(geo[0])}, "
-                    f"шаг ~{geo[1]:.0f}px, мультиполосный наклон + якорь в ось)")
+            pl = predict_lines(model, step=grid_step)
+            if pl:
+                depths_, ys_pred, xs_axis, step_px = pl
+                # зона кривых исключается из профилей полос (кривые загрязняли наклоны, QC №5)
+                xs_tr = list(mgz.values()) + list(mpz.values())
+                exc = (max(0, int(min(xs_tr)) - 25), int(max(xs_tr)) + 25)
+                geo = fit_bold_grid(g, ys_pred, xs_axis, step_px, exclude_x=exc)
+                res = regrid(ifds, model, step=grid_step, lines_geo=geo)
+                if res:
+                    rep["grid_lines"] = len(res[0])
+                    log(f"  Depth Grid: {len(res[0])} линий шаг {grid_step}м "
+                        f"(голосование полос: {sum(geo[2])}/{len(geo[2])} с детектом, "
+                        f"зона кривых x[{exc[0]}..{exc[1]}] исключена)")
             else:
-                log("  ! Depth Grid: нет тип-8 IFD в шаблоне — пропуск")
+                log("  ! Depth Grid: вырожденная ось — пропуск")
         except Exception as e:
             log(f"  ! Depth Grid: {e}")
     data = write_full(ifds)
