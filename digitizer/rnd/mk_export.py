@@ -105,13 +105,20 @@ def qc_render(nlgx_path, out_dir, n=4, half_h=130):
 
 
 def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write_las=True, log=print,
-                  grid_step=4.0):
-    """Главный вход (и для GUI): пишет <stem>_auto.nlgx/.bck/.las. Возврат: dict-отчёт или None.
-    grid_step: шаг Depth Grid в метрах (4 = каждые 10 клеток при 1:200); 0/None — не трогать сетку."""
+                  grid_step=4.0, qc_tag=None):
+    """Главный вход (и для GUI): пишет <stem>_auto_qcN.nlgx/.bck/.las в ОДНУ папку (просьба
+    эксперта 03.07 — не плодить qc-папки; номер попытки в имени, авто-инкремент по папке).
+    grid_step: шаг Depth Grid в метрах (эталонный подход меряет с планшета); 0/None — не трогать."""
     traces_npz, template_nlgx = str(traces_npz), str(template_nlgx)
     stem = Path(template_nlgx).stem
     out = Path(out_dir) if out_dir else Path(traces_npz).parent
     out.mkdir(parents=True, exist_ok=True)
+    if qc_tag is None:                                           # авто-номер попытки
+        import re as _re
+        prev = [int(mm.group(1)) for f in out.glob(f"{stem}_auto_qc*.nlgx")
+                if (mm := _re.search(r"_qc(\d+)\.nlgx$", f.name))]
+        qc_tag = (max(prev) + 1) if prev else 8                  # нумерация продолжает qc-серию
+    stem_out = f"{stem}_auto_qc{qc_tag}"
     mgz, mpz = _load_traces(traces_npz)
     if not mgz or not mpz:
         log(f"  ! пустые трассы в {Path(traces_npz).name} — пропуск")
@@ -180,9 +187,9 @@ def export_bundle(traces_npz, template_nlgx, scan_path=None, out_dir=None, write
         except Exception as e:
             log(f"  ! Depth Grid: {e}")
     data = write_full(ifds)
-    dst = out / f"{stem}_auto.nlgx"
+    dst = out / f"{stem_out}.nlgx"
     dst.write_bytes(data)
-    (out / f"{stem}_auto.bck").write_bytes(data)                 # bck = точная копия (см. докстрок)
+    (out / f"{stem_out}.bck").write_bytes(data)                  # bck = точная копия (см. докстрок)
     # верификация round-trip: наши трассы читаются назад с точностью округления
     m2 = extract(str(dst))
     ok = True

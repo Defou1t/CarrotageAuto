@@ -121,14 +121,30 @@ def regrid(ifds, m, step=4.0, det_ys=None, snap_tol=8.0, bold_ys=None, bold_step
         # [(y_на_x0, slope, matched)] — фаза от ПЛАНШЕТА (гейт vs эталон: слоты по глубинам
         # промахивались на полшага там, где фаза жирных не совпадает с рамкой)
         chain = lines_geo
-        xs0, ys0, xs1, ys1 = [], [], [], []
         ax_k = (xb - xt) / max(by - ty, 1)             # x оси как функция y
-        for y0l, sl, ok_ in chain:
+        step_px_c = float(np.median(np.diff([c[0] for c in chain]))) if len(chain) > 2 else 100.0
+        y_lo, y_hi = min(ty, by), max(ty, by)
+        # якорные линии (крестики) NeuraLOG создаёт САМ — наши у якорей выкидываем,
+        # но пишем ДВЕ якорные с точным y оси и ИЗМЕРЕННЫМ углом (уточнение эксперта 03.07)
+        body = [c for c in chain
+                if abs(c[0] - y_lo) > 0.55 * step_px_c and abs(c[0] - y_hi) > 0.55 * step_px_c
+                and y_lo - 2 <= c[0] <= y_hi + 2]
+        sl_med = float(np.median([c[1] for c in chain])) if chain else 0.0
+        sl_top = min(chain, key=lambda c: abs(c[0] - y_lo))[1] if chain else sl_med
+        sl_bot = min(chain, key=lambda c: abs(c[0] - y_hi))[1] if chain else sl_med
+        x_top_ax = xt + (y_lo - ty) * ax_k             # якоря заданы НА ОСИ → в координату x=0
+        x_bot_ax = xt + (y_hi - ty) * ax_k
+        full = ([(float(y_lo) - sl_top * x_top_ax, sl_top, True)] + body
+                + [(float(y_hi) - sl_bot * x_bot_ax, sl_bot, True)])
+        xs0, ys0, xs1, ys1 = [], [], [], []
+        for y0l, sl, ok_ in full:
             xa = xt + (y0l - ty) * ax_k                # x оси на высоте линии (итерация 1 достаточно:
             ya = y0l + sl * xa                         # поправка sl·Δx < 1px)
             xs0.append(int(round(xa))); ys0.append(int(round(ya)))
             xs1.append(int(round(xa + width)))
             ys1.append(int(round(ya + sl * width)))
+        set_tag(ifds, i, 35570, 12, sl_med)            # глобальный угол (авто-линии NeuraLOG)
+        chain = full
         n = len(chain)
         set_tag(ifds, i, 35594, 4, xs0)
         set_tag(ifds, i, 35596, 4, ys0)
