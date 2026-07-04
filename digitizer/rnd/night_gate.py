@@ -141,10 +141,11 @@ def main():
             report["configs"][name] = res
     # сводка: средний eff≤3px (refined_D) по конфигам
     print("\n=== СВОДКА (средний eff≤3px по кликам, refined_D) ===")
-    for name, res in report["configs"].items():
+    report["summary"] = {}
+    for name, res in list(report["configs"].items()):
         effs = [c["eff_le3"] for pl in res.values() if "refined_D" in pl for c in pl["refined_D"].values()]
         if effs:
-            report["configs"][name + "_summary"] = round(float(np.mean(effs)), 4)
+            report["summary"][name] = round(float(np.mean(effs)), 4)
             print(f"  {name:<10} {np.mean(effs)*100:.1f}%  (n кривых {len(effs)})")
     rp = os.path.join(workroot, "report.json")
     json.dump(report, open(rp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
