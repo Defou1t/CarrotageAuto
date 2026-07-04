@@ -76,11 +76,66 @@ def _stroke_width(dark, tr, sample=7):
     return float(np.median(ws)) if ws else 4.0
 
 
-def refine_pass(dark, tr, other, w0, max_ext=90, probc=None, prob_min=0.10, labels=None):
+def _vert_thin(dark, y, x, w0, k=3.0):
+    """Вертикальная толщина туши в колонке x (макс. по x±1): лепесток-пик тонкий
+    (1-3 строки), клякса/пятно — толстые. Порог k*w0."""
+    H = dark.shape[0]
+    lim = int(k * w0) + 1
+    best = lim + 1
+    for xx in (int(round(x)) - 1, int(round(x)), int(round(x)) + 1):
+        if not (0 <= xx < dark.shape[1]) or not dark[y, xx]:
+            continue
+        u = d = 0
+        while u < lim and y - u - 1 >= 0 and dark[y - u - 1, xx]:
+            u += 1
+        while d < lim and y + d + 1 < H and dark[y + d + 1, xx]:
+            d += 1
+        best = min(best, u + d + 1)
+    return best <= lim
+
+
+def reseat_pass(dark, tr, w0, labels=None, search=None):
+    """Пере-посадка строк, где трасса стоит на БЕЛОМ (сглаживание/fill в жгуте
+    уводит её в зазор между прядями — диагностика 04.07: 41/70 плохих кликов низа
+    Yatskivska = no_run_at_our_x, вся построчная дотяжка на них отключалась).
+    Строка мимо чернил ±2px → центр ближайшего тёмного рана в ±search px; если
+    рана нет — строку не трогаем (законный разрыв)."""
+    W = dark.shape[1]
+    if search is None:
+        search = max(int(1.5 * w0), 6)
+    out = dict(tr)
+    n = 0
+    for y, x in tr.items():
+        xi = int(round(x))
+        if not (0 <= xi < W):
+            continue
+        if dark[y, max(0, xi - 2):min(W, xi + 3)].any():
+            continue                                   # уже на чернилах
+        best = None
+        for d in range(3, search + 1):
+            for xx in (xi - d, xi + d):
+                if 0 <= xx < W and dark[y, xx]:
+                    best = xx; break
+            if best is not None:
+                break
+        if best is None:
+            continue
+        r = _run_at(dark[y], best, W, labrow=(labels[y] if labels is not None else None))
+        if r:
+            out[y] = (r[0] + r[1]) / 2.0
+            n += 1
+    return out, n
+
+
+def refine_pass(dark, tr, other, w0, max_ext=90, probc=None, prob_min=0.10, labels=None,
+                petal=False):
     """Один пасс дотяжки. Возврат (новая трасса, число дотянутых строк).
     probc (канал модели, native): тянуть только куда модель видит СВОЮ кривую —
     кляксы/пятна она подавляет (LEVEN-регресс без гейта: MPZ 17.6→21px, гейт 03.07),
-    реальные горбы — нет."""
+    реальные горбы — нет. Модель слепа на ВЕРШИНАХ тонких лепестков (клики эксперта
+    сидят именно там, низ Yatskivska) → альтернативный допуск 04.07: цель в ТОЙ ЖЕ
+    2D-компоненте (ран уже смощён hop'ом по labels) и вертикально ТОНКАЯ (_vert_thin)
+    — лепесток, не клякса."""
     W = dark.shape[1]
     out = dict(tr)
     spike_thr = max(3.0 * w0, w0 + 6.0)
@@ -114,13 +169,40 @@ def refine_pass(dark, tr, other, w0, max_ext=90, probc=None, prob_min=0.10, labe
         if probc is not None:
             ti = int(round(target))
             lo, hi = max(0, ti - 2), min(W, ti + 3)
-            if not hi > lo or float(probc[y, lo:hi].max()) < prob_min:
-                continue                               # НИ ОДИН канал кривую не видит — клякса/чужое
-                                                       # (гейт по combined: на зигзагах идентичность
-                                                       # каналов путается, но тушь кривой модель видит)
+            prob_ok = hi > lo and float(probc[y, lo:hi].max()) >= prob_min
+            if not prob_ok and not (petal and _vert_thin(dark, y, far, w0)):
+                continue                               # модель кривую не видит И это не тонкий
+                                                       # лепесток (same-CC гарантирован hop'ом по
+                                                       # labels) — клякса/чужое
         out[y] = float(target)
         fixed += 1
     return out, fixed
+
+
+def recenter_pass(dark, tr, w0, labels=None, max_w_mult=2.2, max_shift=None):
+    """ЧЕРНИЛЬНОЕ ПОСТ-ЦЕНТРИРОВАНИЕ (план 95-99%, этап C; реализовано 04.07):
+    эксперт сидит на ЦЕНТРЕ штриха (ink_jitter: median 1.0px) — а наш peak центрирован
+    по prob. Для каждой строки: ран под трассой обычной толщины (≤max_w_mult*w0 —
+    не слипание и не пик-выброс) → x к центру рана. Широкие раны не трогаем (их
+    ведёт дотяжка/партнёр-логика). max_shift страхует от прыжка на чужой ран."""
+    W = dark.shape[1]
+    if max_shift is None:
+        max_shift = max(1.5 * w0, 6.0)
+    out = dict(tr)
+    n = 0
+    for y, x in tr.items():
+        r = _run_at(dark[y], x, W, labrow=(labels[y] if labels is not None else None))
+        if not r:
+            continue
+        a, b = r
+        if (b - a + 1) > max_w_mult * w0:
+            continue
+        c = (a + b) / 2.0
+        if abs(c - x) < 0.6 or abs(c - x) > max_shift:
+            continue
+        out[y] = c
+        n += 1
+    return out, n
 
 
 def smooth_pass(tr, tol=3.0, alpha=0.5, max_gap=6):
@@ -189,8 +271,16 @@ def bridge_gaps(tr, prob_comb, max_gap=40, snap_win=10, thr=0.08):
     return out, n
 
 
-def refine_traces(rgb, mgz, mpz, iters=3, dark_thr=110, prob=None):
-    """Главный вход: native rgb + трассы (+prob 2×H×W native) → дотянутые/сглаженные + stats."""
+def refine_traces(rgb, mgz, mpz, iters=3, dark_thr=110, prob=None,
+                  do_fill=True, do_bridge=True, do_reseat=True, do_ext=True,
+                  petal=False, do_smooth=True, do_recenter=False):
+    # Гейт-матрица vs эталон Yatskivska (04.07, mk_knots_iter): сырые peak 64.0% eff
+    # (≤3px на кликах, дыры=fail) → fill 66.1 → +bridge 67.5 → +дотяжка 68.3 (ЛУЧШИЙ,
+    # без petal/recenter). petal (дотяжка в тонкие лепестки без prob) — эффект 0;
+    # recenter (центр рана) — РЕГРЕСС 68→57 (в жгуте ран = обе кривые, центр чужой);
+    # smooth −0.9пп на кликах, но оставлен для сдачи (QC эксперта «сгладить»).
+    """Главный вход: native rgb + трассы (+prob 2×H×W native) → дотянутые/сглаженные + stats.
+    Переключатели стадий — для гейт-матрицы vs эталон (04.07)."""
     dark = rgb.max(2) < dark_thr
     import cv2
     _, labels = cv2.connectedComponents(dark.astype(np.uint8), connectivity=8)
@@ -200,24 +290,40 @@ def refine_traces(rgb, mgz, mpz, iters=3, dark_thr=110, prob=None):
     p1 = prob[1] if prob is not None else None
     pc = np.maximum(p0, p1) if prob is not None else None
     fill_m = fill_p = br_m = br_p = 0
-    if p0 is not None:                                  # дыры в зонах слипания — ДО дотяжки
+    if p0 is not None and do_fill:                      # дыры в зонах слипания — ДО дотяжки
         m, fill_m = fill_from_partner(m, p, p0)
         p, fill_p = fill_from_partner(p, m, p1)
+    if pc is not None and do_bridge:
         m, br_m = bridge_gaps(m, pc)                    # дыры БЕЗ обеих трасс (зигзаг-узлы)
         p, br_p = bridge_gaps(p, pc)
+    rs_m = rs_p = 0
+    if do_reseat:
+        m, rs_m = reseat_pass(dark, m, w0m, labels=labels)
+        p, rs_p = reseat_pass(dark, p, w0p, labels=labels)
+    rc_m = rc_p = 0
+    if do_recenter:                                     # чернильное пост-центрирование (этап C)
+        m, rc_m = recenter_pass(dark, m, w0m, labels=labels)
+        p, rc_p = recenter_pass(dark, p, w0p, labels=labels)
     total_m = total_p = 0
-    for _ in range(iters):
+    for _ in range(iters if do_ext else 0):
         # гейт дотяжки по COMBINED prob: на зигзагах канальная идентичность путается,
         # но тушь кривой модель видит; кляксы давит в обоих каналах
-        m, fm = refine_pass(dark, m, p, w0m, probc=pc, prob_min=0.08, labels=labels)
-        p, fp = refine_pass(dark, p, m, w0p, probc=pc, prob_min=0.08, labels=labels)
-        m, p = smooth_pass(m), smooth_pass(p)
+        m, fm = refine_pass(dark, m, p, w0m, probc=pc, prob_min=0.08, labels=labels, petal=petal)
+        p, fp = refine_pass(dark, p, m, w0p, probc=pc, prob_min=0.08, labels=labels, petal=petal)
+        if do_smooth:
+            m, p = smooth_pass(m), smooth_pass(p)
+        if do_reseat:
+            m, rm = reseat_pass(dark, m, w0m, labels=labels)  # сглаживание могло увести в зазор
+            p, rp = reseat_pass(dark, p, w0p, labels=labels)
+            rs_m += rm; rs_p += rp
         total_m += fm; total_p += fp
         if fm + fp == 0:
             break
-    for _ in range(2):                                  # финальная гладкость (QC №6: «немного
+    for _ in range(2 if do_smooth else 0):              # финальная гладкость (QC №6: «немного
         m = smooth_pass(m, tol=2.5)                     # сгладить после оцифровки») — только
         p = smooth_pass(p, tol=2.5)                     # дрожь <2.5px, пики не трогаем
     return m, p, {"w0_mgz": round(w0m, 1), "w0_mpz": round(w0p, 1),
                   "ext_mgz": total_m, "ext_mpz": total_p,
-                  "fill_mgz": fill_m + br_m, "fill_mpz": fill_p + br_p}
+                  "fill_mgz": fill_m + br_m, "fill_mpz": fill_p + br_p,
+                  "reseat_mgz": rs_m, "reseat_mpz": rs_p,
+                  "recenter_mgz": rc_m, "recenter_mpz": rc_p}

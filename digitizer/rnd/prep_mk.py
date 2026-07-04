@@ -164,6 +164,7 @@ def main():
     args = sys.argv[1:]
     T = 256; stride = 110; negfrac = 0.15; valfrac = 0.18; maxtiles = 180; scale = 1; snap = False
     out = Path(r"F:\nds\output\mk_data")
+    exclude = set()
     i = 0
     while i < len(args):
         a = args[i]
@@ -174,6 +175,7 @@ def main():
         elif a == "--scale": scale = int(args[i+1]); i += 2   # апскейл планшета ×S перед нарезкой
         elif a == "--out": out = Path(args[i+1]); i += 2
         elif a == "--snap": snap = True; i += 1               # снап GT к туши (возвращает align-fail скважины)
+        elif a == "--exclude": exclude.update(args[i+1].split(",")); i += 2  # gate-щит: скважины ВНЕ датасета
         else: i += 1
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     (out / "train").mkdir(parents=True, exist_ok=True)
@@ -183,6 +185,9 @@ def main():
     for wl in sorted([d for d in ARCHIVE.iterdir() if d.is_dir()]):
         wlg = wl / "wlg"
         if not wlg.is_dir():
+            continue
+        if wl.name in exclude:                                # gate-щит (напр. Yatskivska_001)
+            print(f"  [excl] {wl.name}")
             continue
         split = "val" if is_val(wl.name, valfrac) else "train"
         for nlgx in sorted(wlg.glob("*.nlgx")):
