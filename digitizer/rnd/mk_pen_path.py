@@ -603,6 +603,14 @@ def step2(scan, et_path, prob_path, args):
     print(f"SCJP: кандидатов {sum(len(r) for r in cands)} | "
           f"покрытие строк {cov_a*100:.0f}% / {cov_b*100:.0f}%")
 
+    if "--save-npz" in args:                     # native-координаты для eval_mk / гибрида
+        outp = args[args.index("--save-npz") + 1]
+        nm = {y0 + y: x0 + x for y, x in ta.items()}
+        np_ = {y0 + y: x0 + x for y, x in tb.items()}
+        np.savez(outp, mgz_y=np.array(list(nm)), mgz_x=np.array(list(nm.values())),
+                 mpz_y=np.array(list(np_)), mpz_x=np.array(list(np_.values())))
+        print(f"SCJP native трассы -> {outp}")
+
     print("ГЕЙТ (клики эксперта, окно):")
     ea = gate_clicks(cl_m, ta, y0, x0, "skel MGZ")
     eb = gate_clicks(cl_p, tb, y0, x0, "skel MPZ")
