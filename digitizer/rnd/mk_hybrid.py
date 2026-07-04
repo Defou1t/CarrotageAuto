@@ -6,19 +6,29 @@ r"""Трек 2 / ГИБРИД prod-ens3 ↔ SCJP по зигзаг-детект�
 MPZ 23.5→41%) или где prod схлопывается/умирает (3130 хвост 3500-3760: prod
 0-44% → SCJP 74-100% eff≤3).
 
-ДЕТЕКТОР (per-окно 200 строк, из ТУШИ скана — признаки независимы от identity):
-  • solid = widest_seg / total_ink по строке: одиночный ход пера = один широкий
-    штрих (solid 89-100%), две реальные кривые дробят тушь (37-42%);
-  • nseg = число тёмных сегментов строки: зигзаг 1-2, две кривые+сетка 5-17;
-  • prod_health = min по кривым (покрытие × доля-на-туши) prod-трассы.
-Окно = ЗИГЗАГ (берём SCJP) если (solid>0.6 И nseg<=3) ИЛИ (prod_health<0.5).
-Триггер-доля окон: 3752 94%, 3853 100%, 3130 61%, BEZLUD 0%, BOGAT 0% (нулевой
-ложняк на prod-планшетах — детектор проверен seg_discrim/detector_profile).
+РЕЖИМ ПО УМОЛЧАНИЮ = HOLE-FILL: hybrid = prod везде, где у prod ЕСТЬ значение;
+SCJP заполняет ТОЛЬКО дыры prod (строки без prod-значения в [y0,y1]). НИКОГДА не
+переопределяет живой prod ⇒ eff≤3 гибрида ДОКАЗУЕМО ≥ prod (заполнение дыры может
+только превратить промах-fail в попадание, не наоборот). Восстанавливает провалы
+prod: 3130 хвост 3724-3760 (prod 99% дыр → 0→87/19→65 eff≤3). На планшетах без
+дыр гибрид = prod байт-в-байт. Проверено гейтом по 8 эталонным планшетам —
+регрессов нет НИГДЕ.
+
+⚠ ПОЧЕМУ НЕ ДЕТЕКТОР ЗИГЗАГА (эволюция, 05.07, не повторять): пытались per-окно
+переключать prod→SCJP по морфологии (solid=widest/ink>0.6 & nseg<=3) — гейт
+эталона Pn_Zavoda вскрыл РЕГРЕСС: морфо-триггер бьёт по здоровым зигзаг-планшетам,
+где prod уже хорош (4718: prod MGZ med 2.7px 52% → SCJP 14px 33%). Морфология НЕ
+отличает «сломанный зигзаг» (3752 prod med 12.8) от «хорошего» (4718 med 2.7);
+prod-джиттер тоже (4718 LOSE — самый дребезжащий); health-on-ink ложно-срабатывает
+на ВЫЦВЕТШЕЙ туши (prod верен, но тушь<110 → «сошёл»). НИ ОДИН inference-time
+сигнал «prod сломан» не надёжен ⇒ безопасно только заполнять ЯВНЫЕ дыры prod.
+Морфо-выигрыш 3752-MPZ (23.5→40) безопасно недостижим — открытый вопрос (нужен
+GT-подобный сигнал качества prod). Флаг --morph оставлен для research (UNSAFE).
 
 Полоса MK берётся из X-ДИАПАЗОНА prod-трасс (в проде есть всегда) → без GT.
 
   python mk_hybrid.py <scan> <frame.nlgx> --prob <mk_prob2.npy> --prod <traces.npz>
-        [--win d0 d1] [--out <hybrid.npz>] [--gate]     (--gate: клики эталона A/B)
+        [--win d0 d1] [--out <hybrid.npz>] [--gate] [--morph]   (--morph: окно-замена, UNSAFE)
 """
 import sys, os
 import numpy as np
@@ -35,9 +45,10 @@ WIN = 200
 SOLID_T, NSEG_T, HEALTH_T = 0.6, 3, 0.5
 
 
-def window_flags(dark, prod_native, y0, x0, darkF):
+def window_flags(dark, prod_native, y0, x0, darkF, morph=False):
     """Per-окно: (is_zigzag, solid, nseg, health). dark — тушь band; prod_native —
-    {'MGZ':{y:x},'MPZ':{y:x}} в НАТИВНЫХ координатах; darkF — тушь всего скана."""
+    {'MGZ':{y:x},'MPZ':{y:x}} в НАТИВНЫХ координатах; darkF — тушь всего скана.
+    morph=False (по умолч.): триггер = health<HEALTH_T. morph=True: +морфо (UNSAFE)."""
     H, Wb = dark.shape
     nseg = np.zeros(H, np.int32); widest = np.zeros(H, np.int32); inkw = np.zeros(H, np.int32)
     for i in range(H):
@@ -66,14 +77,28 @@ def window_flags(dark, prod_native, y0, x0, darkF):
                     nok += 1
             hs.append((nh / (w1 - w0)) * (nok / nh if nh else 0.0))
         health = min(hs) if hs else 1.0
-        zz = (solid > SOLID_T and medseg <= NSEG_T) or (health < HEALTH_T)
+        zz = health < HEALTH_T
+        if morph:
+            zz = zz or (solid > SOLID_T and medseg <= NSEG_T)
         flags[w0] = (zz, solid, medseg, health)
     return flags
 
 
-def merge(prod_native, scjp_native, flags, y0, y1):
-    """Собрать гибрид: в зигзаг-окнах — SCJP, иначе prod (fallback на партнёра
-    ради покрытия). scjp_native/prod_native в НАТИВНЫХ координатах."""
+def merge_fill(prod_native, scjp_native, y0, y1):
+    """HOLE-FILL (по умолч.): prod везде, где есть; SCJP заполняет дыры prod.
+    Живой prod НИКОГДА не переопределяется ⇒ eff гибрида ≥ prod."""
+    out = {"MGZ": {}, "MPZ": {}}
+    for k in ("MGZ", "MPZ"):
+        out[k].update(prod_native[k])
+        for y, x in scjp_native[k].items():
+            if y0 <= y < y1 and y not in prod_native[k]:
+                out[k][y] = float(x)
+    return out
+
+
+def merge_window(prod_native, scjp_native, flags, y0, y1):
+    """⚠ UNSAFE (--morph): в зигзаг-окнах целиком SCJP. Регрессирует здоровые
+    зигзаг-планшеты (Pn_Zavoda 4718). Оставлено для research."""
     out = {"MGZ": {}, "MPZ": {}}
     for k in ("MGZ", "MPZ"):
         for y in range(y0, y1):
@@ -115,13 +140,14 @@ def main():
     darkF = rgb.max(2) < DARK
     band = rgb[y0:y1, x0:x1]
     dark = band.max(2) < DARK
-    flags = window_flags(dark, prod_native, y0, x0, darkF)
-    n_zz = sum(1 for f in flags.values() if f[0])
-    print(f"окно y[{y0}..{y1}] x[{x0}..{x1}] | окон {len(flags)}, зигзаг {n_zz} "
-          f"({n_zz/max(1,len(flags))*100:.0f}%)")
+    morph = "--morph" in a
+    holes = {k: sum(1 for y in range(y0, y1) if y not in prod_native[k]) for k in ("MGZ", "MPZ")}
+    need_scjp = morph or holes["MGZ"] or holes["MPZ"]
+    print(f"окно y[{y0}..{y1}] x[{x0}..{x1}] | дыр prod MGZ {holes['MGZ']} MPZ {holes['MPZ']}")
 
     scjp_native = {"MGZ": {}, "MPZ": {}}
-    if n_zz:
+    flags = {}
+    if need_scjp:
         skel = zhang_suen(dark)
         probw, S = load_prob_window(prob_path, rgb.shape[0], y0, y1, x0, x1)
         cands = scjp_candidates(skel, dark, probw)
@@ -131,8 +157,15 @@ def main():
                        "MPZ": {y0 + y: x0 + x for y, x in tb.items()}}
         print(f"SCJP посчитан: MGZ {len(ta)} MPZ {len(tb)} строк")
 
-    hyb = merge(prod_native, scjp_native, flags, y0, y1)
-    print(f"гибрид: MGZ {len(hyb['MGZ'])} MPZ {len(hyb['MPZ'])} строк")
+    if morph:
+        flags = window_flags(dark, prod_native, y0, x0, darkF, morph=True)
+        n_zz = sum(1 for f in flags.values() if f[0])
+        print(f"⚠ --morph окно-замена: зигзаг-окон {n_zz}/{len(flags)}")
+        hyb = merge_window(prod_native, scjp_native, flags, y0, y1)
+    else:
+        hyb = merge_fill(prod_native, scjp_native, y0, y1)
+    filled = {k: len(hyb[k]) - len(prod_native[k]) for k in ("MGZ", "MPZ")}
+    print(f"гибрид: MGZ {len(hyb['MGZ'])} (+{filled['MGZ']}) MPZ {len(hyb['MPZ'])} (+{filled['MPZ']}) строк")
 
     if out:
         np.savez(out,
