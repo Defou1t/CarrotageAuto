@@ -139,13 +139,15 @@ def repair_outliers(probc, tr, S=1, med_win=45, out_thr=15.0, cap_win=12.0, rati
     return new, fixed
 
 
-def predict_tta(net, rgb, dev, y0, y1, softmax, tta):
-    """prob с TTA-ансамблем ориентаций (h/v-флипы не портят толщину-различитель)."""
-    ps = [predict2(net, rgb, dev, y0=y0, y1=y1, softmax=softmax)]
+def predict_tta(net, rgb, dev, y0, y1, softmax, tta, tile=256, ov=96, bs=24):
+    """prob с TTA-ансамблем ориентаций (h/v-флипы не портят толщину-различитель).
+    tile/ov/bs масштабируются под модель (честный 2× = tile 512, тот же 256-нативный контекст)."""
+    kw = dict(tile=tile, ov=ov, bs=bs, softmax=softmax)
+    ps = [predict2(net, rgb, dev, y0=y0, y1=y1, **kw)]
     if tta:
         H = rgb.shape[0]
-        ps.append(predict2(net, rgb[:, ::-1].copy(), dev, y0=y0, y1=y1, softmax=softmax)[:, :, ::-1])
-        ps.append(predict2(net, rgb[::-1].copy(), dev, y0=H - y1, y1=H - y0, softmax=softmax)[:, ::-1, :])
+        ps.append(predict2(net, rgb[:, ::-1].copy(), dev, y0=y0, y1=y1, **kw)[:, :, ::-1])
+        ps.append(predict2(net, rgb[::-1].copy(), dev, y0=H - y1, y1=H - y0, **kw)[:, ::-1, :])
     return np.mean(ps, 0) if len(ps) > 1 else ps[0]
 
 
@@ -217,9 +219,14 @@ def main():
         TYp, BYp, Wp = TY * S, BY * S, W * S
     else:
         rgbP, TYp, BYp, Wp = rgb, TY, BY, W
-    prob = np.mean([predict_tta(n_, rgbP, dev, TYp, BYp, bool(c_.get("softmax")), tta)
+    PT = 256 * S                                                 # tile под масштаб: 256@1× / 512@2× (тот же контекст)
+    OV = PT * 3 // 8                                             # оверлап пропорц. (96/192)
+    PBS = max(2, int(24 * (256.0 / PT) ** 2))                    # батч ↓ с ростом тайла (24@256 / 6@512)
+    if len({int(c_.get("scale", 1)) for _, c_ in nets}) > 1:
+        print("⚠ ансамбль РАЗНЫХ scale — infer апскейлит под nets[0]; смешивать 256/512 модели нельзя")
+    prob = np.mean([predict_tta(n_, rgbP, dev, TYp, BYp, bool(c_.get("softmax")), tta, tile=PT, ov=OV, bs=PBS)
                     for n_, c_ in nets], 0)
-    print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}% scale={S}")
+    print(f"prob MGZ>0.4={100*(prob[0]>0.4).mean():.2f}% MPZ>0.4={100*(prob[1]>0.4).mean():.2f}% scale={S} tile={PT}")
     # PER-TRACK band: MK-полоса = плотнейший непрерывный кластер обоих каналов (исключает MBK/чужие треки)
     comb = (prob[0] + prob[1])[TYp:BYp].sum(0)
     if sa_rng:                                                   # вне шкал MK prob не участвует в выборе полосы

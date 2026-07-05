@@ -18,11 +18,20 @@ DATA = Path(r"F:\nds\output\mk_data")
 
 
 class MK(Dataset):
+    CAP = 0                                                 # 0 = все тайлы; >0 = потолок (RAM: 512² тайлы тяжёлые)
+
     def __init__(self, split, augment=False):
         self.aug = augment
+        files = sorted(glob.glob(str(DATA / split / "*.npz")))
+        per = 10**9 if not MK.CAP or split != "train" else max(1, MK.CAP // max(1, len(files)))
+        rng = np.random.default_rng(0)
         imgs, masks = [], []
-        for f in sorted(glob.glob(str(DATA / split / "*.npz"))):
-            d = np.load(f); imgs.append(d["imgs"]); masks.append(d["masks"])
+        for f in files:
+            d = np.load(f); im = d["imgs"]; mk = d["masks"]
+            if len(im) > per:                               # субсэмпл per-файл — пик RAM ограничен
+                sel = rng.choice(len(im), per, replace=False)
+                im, mk = im[sel], mk[sel]
+            imgs.append(im); masks.append(mk)
         self.imgs = np.concatenate(imgs); self.masks = np.concatenate(masks)   # N×T×T×3, N×T×T×{2,3}
         if self.masks.shape[-1] == 2:                       # старый преп без ignore-канала
             self.masks = np.concatenate([self.masks, np.zeros_like(self.masks[..., :1])], -1)
@@ -138,12 +147,14 @@ def main():
     if "--data" in a: DATA = Path(a[a.index("--data") + 1])
     softmax = "--softmax" in a                       # 3-класс softmax-конкуренция vs незав. сигмоиды
     scale = int(a[a.index("--scale") + 1]) if "--scale" in a else 1   # метка масштаба препа → в чекпойнт для infer
+    if "--maxtrain" in a: MK.CAP = int(a[a.index("--maxtrain") + 1])  # потолок train-тайлов (RAM для 512²)
     OUT = DATA / "mk_sep.pt"
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     tr = DataLoader(MK("train", augment=True), batch_size=bs, shuffle=True, num_workers=0)
     va = DataLoader(MK("val"), batch_size=bs, num_workers=0)
-    print(f"device={dev} train={len(tr.dataset)} val={len(va.dataset)} ep={ep} bs={bs} softmax={softmax}")
+    tile = int(tr.dataset.imgs.shape[1])                 # размер тайла из данных (512 у честного 2×)
+    print(f"device={dev} train={len(tr.dataset)} val={len(va.dataset)} ep={ep} bs={bs} tile={tile} scale={scale} softmax={softmax}")
     ncls = 3 if softmax else 2
     crit = loss_fn_softmax if softmax else loss_fn
     model = UNet(in_ch=4, n_classes=ncls, base=base).to(dev)   # RGB+DT
@@ -165,7 +176,8 @@ def main():
             best = score
             torch.save({"model": model.state_dict(), "epoch": e + 1, "val_dice": (dm + dp) / 2,
                         "val_collapse": col, "score": score,
-                        "n_classes": ncls, "base": base, "in_ch": 4, "softmax": softmax, "scale": scale}, OUT)
+                        "n_classes": ncls, "base": base, "in_ch": 4, "softmax": softmax,
+                        "scale": scale, "tile": tile}, OUT)
             print(f"   ✓ best -> {OUT}")
     print(f"DONE best score={best:.3f}")
 
