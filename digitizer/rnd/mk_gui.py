@@ -72,6 +72,8 @@ class App:
         ttk.Checkbutton(act, text="Качество (медленнее)", variable=self.quality).pack(side="left", padx=6)
         self.refine = tk.BooleanVar(value=True)                  # дотяжка пиков по чернилам (QC 03.07)
         ttk.Checkbutton(act, text="Дотяжка пиков", variable=self.refine).pack(side="left", padx=2)
+        self.holefill = tk.BooleanVar(value=True)                # SCJP заполняет дыры prod (зигзаг-провалы, 05.07)
+        ttk.Checkbutton(act, text="Заполнить дыры (зигзаг)", variable=self.holefill).pack(side="left", padx=2)
         ttk.Button(act, text="Открыть выход", command=self.open_out).pack(side="left", padx=4)
         self.nlgx_btn = ttk.Button(act, text="Выгрузить nlgx+bck", command=lambda: self.export(las=False))
         self.nlgx_btn.pack(side="right", padx=4)
@@ -215,6 +217,8 @@ class App:
                 cmd += ["--ens", ENS_LIST, "--tta"]              # ансамбль чекпойнтов + флипы
             if self.refine.get():
                 cmd += ["--refine"]                              # дотяжка пиков + сглаживание
+            if self.holefill.get():
+                cmd += ["--holefill"]                            # SCJP заполняет дыры prod (зигзаг-провалы)
             if sib.exists():
                 cmd += ["--nlgx", str(sib)]
             else:
