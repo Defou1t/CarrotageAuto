@@ -96,6 +96,25 @@ def merge_fill(prod_native, scjp_native, y0, y1):
     return out
 
 
+def scjp_native_from(rgb, prob_native, y0, y1, x0, x1):
+    """SCJP-трассы в НАТИВНЫХ координатах для полосы [y0:y1, x0:x1]. prob_native —
+    (2, y1-y0, x1-x0) float. Переиспользуется infer_mk (--holefill) и main."""
+    dark = rgb[y0:y1, x0:x1].max(2) < DARK
+    skel = zhang_suen(dark)
+    cands = scjp_candidates(skel, dark, prob_native)
+    tm, tp = scjp_joint(cands)
+    ta, tb = plateau(tm), plateau(tp)
+    return {"MGZ": {y0 + y: x0 + x for y, x in ta.items()},
+            "MPZ": {y0 + y: x0 + x for y, x in tb.items()}}
+
+
+def holefill(rgb, prob_native, prod_native, y0, y1, x0, x1):
+    """Заполнить дыры prod SCJP-структурой. rgb — весь скан; prob_native — окно
+    полосы (2,h,w) в НАТИВ; prod_native — {'MGZ'/'MPZ':{y_native:x_native}}."""
+    scjp = scjp_native_from(rgb, prob_native, y0, y1, x0, x1)
+    return merge_fill(prod_native, scjp, y0, y1)
+
+
 def merge_window(prod_native, scjp_native, flags, y0, y1):
     """⚠ UNSAFE (--morph): в зигзаг-окнах целиком SCJP. Регрессирует здоровые
     зигзаг-планшеты (Pn_Zavoda 4718). Оставлено для research."""
@@ -148,14 +167,9 @@ def main():
     scjp_native = {"MGZ": {}, "MPZ": {}}
     flags = {}
     if need_scjp:
-        skel = zhang_suen(dark)
         probw, S = load_prob_window(prob_path, rgb.shape[0], y0, y1, x0, x1)
-        cands = scjp_candidates(skel, dark, probw)
-        tm, tp = scjp_joint(cands)
-        ta, tb = plateau(tm), plateau(tp)
-        scjp_native = {"MGZ": {y0 + y: x0 + x for y, x in ta.items()},
-                       "MPZ": {y0 + y: x0 + x for y, x in tb.items()}}
-        print(f"SCJP посчитан: MGZ {len(ta)} MPZ {len(tb)} строк")
+        scjp_native = scjp_native_from(rgb, probw, y0, y1, x0, x1)
+        print(f"SCJP посчитан: MGZ {len(scjp_native['MGZ'])} MPZ {len(scjp_native['MPZ'])} строк")
 
     if morph:
         flags = window_flags(dark, prod_native, y0, x0, darkF, morph=True)

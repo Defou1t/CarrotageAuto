@@ -159,6 +159,7 @@ def main():
     repair = "--repair" in a                                     # пост #2: constrained re-peak выбросов
     assign = "--assign" in a                                     # пост #3: joint-назначение на пики combined
     refine = "--refine" in a                                     # пост #4: дотяжка пиков по чернилам + сглаживание
+    hole_fill = "--holefill" in a                                # пост #5: SCJP заполняет дыры prod (зигзаг-провалы)
     tta = "--tta" in a                                           # ансамбль ориентаций (id+hflip+vflip)
     ens = "--ens" in a                                           # ансамбль чекпойнтов; опц. значение =
     ens_list = None                                              # список путей через запятую
@@ -279,6 +280,24 @@ def main():
         print(f"refine: штрих MGZ~{rinfo['w0_mgz']}px MPZ~{rinfo['w0_mpz']}px | "
               f"дотянуто MGZ={rinfo['ext_mgz']} MPZ={rinfo['ext_mpz']} | "
               f"заполнено от партнёра MGZ={rinfo.get('fill_mgz', 0)} MPZ={rinfo.get('fill_mpz', 0)}")
+    if hole_fill:                                                # SCJP заполняет ТОЛЬКО дыры prod
+        holes = sum(1 for y in range(TY, BY) if y not in mgz) \
+              + sum(1 for y in range(TY, BY) if y not in mpz)    # (зигзаг-провалы: 3130-хвост 0→86%)
+        pxv = [x for dd in (mgz, mpz) for x in dd.values()]
+        if S != 1:
+            print("holefill: S!=1 не поддержан — пропуск")       # eff≤3 ≥ prod by construction (mk_hybrid)
+        elif not holes or not pxv:
+            print("holefill: дыр нет — пропуск")
+        else:
+            from mk_hybrid import holefill as _holefill
+            # ПОЛОСА из x-диапазона prod-трасс ±30 (НЕ dominant-cluster X0..X1: зигзаг-хвост
+            # уходит за X0..X1 влево — 3130 tail x~71 vs band 101; matched к standalone mk_hybrid)
+            x0n = max(0, int(min(pxv)) - 30); x1n = min(W, int(max(pxv)) + 31)
+            pw = np.ascontiguousarray(prob[:, TY:BY, x0n:x1n].astype(np.float32))
+            filled = _holefill(rgb, pw, {"MGZ": mgz, "MPZ": mpz}, TY, BY, x0n, x1n)
+            nf = (len(filled["MGZ"]) - len(mgz)) + (len(filled["MPZ"]) - len(mpz))
+            mgz, mpz = filled["MGZ"], filled["MPZ"]
+            print(f"holefill: заполнено дыр prod +{nf} строк (SCJP), полоса x[{x0n}..{x1n}]")
     if save_prob:
         np.save(out / "mk_prob2.npy", prob.astype(np.float16))
     save_npz(out / f"{stem}_traces.npz", mgz, mpz)               # для объективного eval_mk vs GT
