@@ -75,6 +75,23 @@ def loss_fn(logits, target3):
     return bce + dice / 2
 
 
+def posreg_loss(logits, target3):
+    """Per-row ПОЗИЦИОННАЯ регрессия (06.07): prob-взвешенный центроид строки канала →
+    к центроиду GT-маски. BCE+dice учит ПЕРЕКРЫТИЕ пикселей, а не точность позиции per-row
+    (метрика = |dx| на кликах). Этот член прямо штрафует размытие prob у вершин/наложения:
+    заставляет prob концентрироваться на истинном x строки. Модель остаётся 2-канальной."""
+    prob = torch.sigmoid(logits)                         # B×2×H×W
+    tgt = target3[:, :2]
+    W = prob.shape[-1]
+    xs = torch.arange(W, device=logits.device, dtype=torch.float32)
+    ex = (prob * xs).sum(-1) / prob.sum(-1).clamp(min=1e-6)   # B×2×H prob-центроид
+    tx = (tgt * xs).sum(-1) / tgt.sum(-1).clamp(min=1e-6)     # B×2×H GT-центроид
+    valid = tgt.sum(-1) > 1.0                             # строки с реальной GT канала
+    if int(valid.sum()) < 1:
+        return logits.sum() * 0.0
+    return torch.abs(ex - tx)[valid].mean()              # в пикселях
+
+
 def to_label(msk):
     """Маска (B×3×T×T) → метки {0=фон,1=MGZ,2=MPZ,-100=ignore} (B×T×T long)."""
     lab = torch.zeros(msk.shape[0], msk.shape[2], msk.shape[3], dtype=torch.long, device=msk.device)
@@ -148,7 +165,8 @@ def main():
     softmax = "--softmax" in a                       # 3-класс softmax-конкуренция vs незав. сигмоиды
     scale = int(a[a.index("--scale") + 1]) if "--scale" in a else 1   # метка масштаба препа → в чекпойнт для infer
     if "--maxtrain" in a: MK.CAP = int(a[a.index("--maxtrain") + 1])  # потолок train-тайлов (RAM для 512²)
-    OUT = DATA / "mk_sep.pt"
+    posreg = float(a[a.index("--posreg") + 1]) if "--posreg" in a else 0.0  # вес per-row позиц. регрессии
+    OUT = DATA / (a[a.index("--out") + 1] if "--out" in a else "mk_sep.pt")
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     tr = DataLoader(MK("train", augment=True), batch_size=bs, shuffle=True, num_workers=0)
@@ -166,6 +184,8 @@ def main():
         for img, msk in tr:
             img, msk = img.to(dev), msk.to(dev)
             opt.zero_grad(); out = model(img); l = crit(out, msk)
+            if posreg > 0 and not softmax:               # per-row позиц. регрессия (sigmoid-путь)
+                l = l + posreg * posreg_loss(out, msk)
             l.backward(); opt.step(); tot += l.item()
         sched.step()
         dm, dp, col = val_dice(model, va, dev, softmax)
