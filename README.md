@@ -4,6 +4,7 @@
 (raster JPEG/TIFF) into digital curves as NeuraLOG `.nlgx` working files (+ `.bck`) and LAS,
 ready for expert QC — with as little manual correction as possible.
 
+> **🗺️ Live project map (modules, status, progress journal): [`PROJECT_MAP.md`](PROJECT_MAP.md)** — updated every session.
 > Internal development log (detailed, Russian): [`PLAN_new_dialog.md`](PLAN_new_dialog.md).
 > **Current authoritative course (2026-06): [`ROADMAP_v2.md`](ROADMAP_v2.md)** — reorientation to
 > autonomous image-first vectorization (the template-guided "snap-to-expert-trace" path is deprecated
