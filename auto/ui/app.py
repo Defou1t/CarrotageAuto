@@ -11,6 +11,38 @@ from dataclasses import asdict
 from pathlib import Path
 
 
+IMG_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+NLGX_EXT = {".nlgx"}
+
+
+def _text(payload, key):
+    return str(payload.get(key) or "").strip()
+
+
+def _require_value(payload, key, label):
+    value = _text(payload, key)
+    if not value:
+        raise ValueError(f"Заполните поле «{label}».")
+    return value
+
+
+def _require_file(payload, key, label, suffixes=None):
+    value = _require_value(payload, key, label)
+    path = Path(value)
+    if not path.is_file():
+        raise ValueError(f"Файл из поля «{label}» не найден: {value}")
+    if suffixes and path.suffix.lower() not in suffixes:
+        allowed = ", ".join(sorted(suffixes))
+        raise ValueError(f"Поле «{label}» ожидает файл {allowed}: {value}")
+    return value
+
+
+def _optional_file(payload, key, label, suffixes=None):
+    if not _text(payload, key):
+        return None
+    return _require_file(payload, key, label, suffixes=suffixes)
+
+
 def _build_cfg(payload):
     """Config из payload: пути (out/data) + переопределения CV-параметров (для 'уточнения')."""
     from ..config import Config
@@ -40,14 +72,15 @@ def op_test(payload, cfg):
     name = payload.get("test", "filename")
     from .. import meta as M
     if name == "filename":
-        m = M.parse_filename(payload["image"], cfg.mnemonics)
+        m = M.parse_filename(_require_value(payload, "image", "Скан (image)"), cfg.mnemonics)
         return {"result": asdict(m)}
     if name == "curve_info":
         return {"result": M.curve_info(payload.get("name", "SP"), cfg.mnemonics)}
     if name == "frame":
         from .. import imaging, frame as F
-        rgb = imaging.load_rgb(payload["image"])
-        m = M.parse_filename(payload["image"], cfg.mnemonics)
+        image = _require_file(payload, "image", "Скан (image)", IMG_EXT)
+        rgb = imaging.load_rgb(image)
+        m = M.parse_filename(image, cfg.mnemonics)
         fr = F.detect_frame(rgb, m, cfg.cv)
         return {"result": {"tracks": [[t.x_left, t.x_right] for t in fr.tracks],
                            "top_y": fr.top_y, "bottom_y": fr.bottom_y,
@@ -55,19 +88,26 @@ def op_test(payload, cfg):
                            "diag": fr.diag}}
     if name == "prob":
         from .. import imaging, prob as P
-        prov = P.make_prob_provider(payload["ckpt"], device=payload.get("device"))
-        rgb = imaging.load_rgb(payload["image"])
+        image = _require_file(payload, "image", "Скан (image)", IMG_EXT)
+        ckpt = _require_file(payload, "ckpt", "Чекпойнт .pt")
+        prov = P.make_prob_provider(ckpt, device=payload.get("device"))
+        rgb = imaging.load_rgb(image)
         pm = prov(rgb)
-        ov = P.save_prob_overlay(rgb, pm, cfg.ensure_out(), Path(payload["image"]).stem[:40])
+        ov = P.save_prob_overlay(rgb, pm, cfg.ensure_out(), Path(image).stem[:40])
         return {"result": {"model": prov.meta,
-                           "coverage_pct": round(float((pm > 0.4).mean()) * 100, 2)},
+                            "coverage_pct": round(float((pm > 0.4).mean()) * 100, 2)},
                 "overlay": ov}
     return {"result": f"неизвестный тест: {name}"}
 
 
 def _run_pipeline(payload, cfg, frame_nlgx=None, las=False):
     from .. import pipeline
-    sheet, traces, res = pipeline.run(payload["image"], frame_nlgx=frame_nlgx, cfg=cfg,
+    image = _require_file(payload, "image", "Скан (image)", IMG_EXT)
+    if las and not frame_nlgx:
+        raise ValueError("Для --las выберите «Рамка .nlgx».")
+    if frame_nlgx:
+        frame_nlgx = _require_file({"frame": frame_nlgx}, "frame", "Рамка .nlgx", NLGX_EXT)
+    sheet, traces, res = pipeline.run(image, frame_nlgx=frame_nlgx, cfg=cfg,
                                       read_ruler=bool(payload.get("ruler")), las=las)
     return {"understanding": sheet.to_dict(), "artifacts": res,
             "overlay": res.get("overlay"),
@@ -82,7 +122,7 @@ def op_analyze(payload, cfg):
 
 def op_vectorize(payload, cfg):
     """Векторизация: полный конвейер + инъекция в рамку → _auto.nlgx(+bck)[+las]."""
-    fr = payload.get("frame") or None
+    fr = _require_file(payload, "frame", "Рамка .nlgx", NLGX_EXT)
     return _run_pipeline(payload, cfg, frame_nlgx=fr, las=bool(payload.get("las")))
 
 
@@ -97,14 +137,19 @@ def op_refine(payload, cfg):
 def op_verify(payload, cfg):
     """Проверка (QC) сдаваемого _auto.nlgx против изображения (score, флаги для эксперта)."""
     from .. import verify
-    return {"result": verify.verify(payload["nlgx"], payload.get("image"))}
+    nlgx = _require_file(payload, "nlgx", "Готовый _auto.nlgx", NLGX_EXT)
+    image = _optional_file(payload, "image", "Скан (image)", IMG_EXT)
+    return {"result": verify.verify(nlgx, image)}
 
 
 def op_feedback(payload, cfg):
     """Обратная связь: исправленный экспертом nlgx → сравнение с авто + QC + опц. интейк в корпус."""
     from .. import feedback
+    corrected = _require_file(payload, "corrected", "Исправленный экспертом .nlgx", NLGX_EXT)
+    auto_nlgx = _optional_file(payload, "nlgx", "Готовый _auto.nlgx", NLGX_EXT)
+    image = _optional_file(payload, "image", "Скан (image)", IMG_EXT)
     return {"result": feedback.feedback(
-        payload["corrected"], auto_nlgx=payload.get("nlgx"), image=payload.get("image"),
+        corrected, auto_nlgx=auto_nlgx, image=image,
         corpus=str(cfg.corpus), do_ingest=bool(payload.get("ingest")))}
 
 
@@ -120,5 +165,7 @@ def dispatch(op, payload):
         cfg = _build_cfg(payload)
         res = _OPS[op](payload, cfg)
         return {"ok": True, "op": op, **res}
+    except ValueError as e:
+        return {"ok": False, "op": op, "error": str(e)}
     except Exception as e:
         return {"ok": False, "op": op, "error": repr(e), "trace": traceback.format_exc()[-1800:]}

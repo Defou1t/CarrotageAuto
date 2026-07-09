@@ -3,13 +3,19 @@ server.py — локальный HTTP-сервер UI на stdlib (без Flask/
 Маршруты:
   GET  /                 → страница (static/index.html)
   GET  /file?path=...    → отдать файл (overlay/скан/json) — ТОЛЬКО из разрешённых каталогов
+  POST /api/upload       → multipart file upload → локальная staging-копия, путь для UI
   POST /api/op           → {op, ...payload} → app.dispatch → JSON
 
 Безопасность /file: путь должен лежать под cfg.out / cfg.data ИЛИ под каталогом, явно переданным
 в этой сессии (родитель image/frame/corrected из запросов). Иначе 403 — не отдаём произвольный FS.
 """
+import itertools
 import json
 import mimetypes
+import threading
+from datetime import datetime
+from email.parser import BytesParser
+from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -17,6 +23,44 @@ from urllib.parse import urlparse, parse_qs
 from . import app as app_mod
 
 STATIC = Path(__file__).resolve().parent / "static"
+
+IMG_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+
+# ---- фоновые батч-джобы (анализ ПАПКИ сырых сканов; поллинг GET /api/job?id=) ----
+_JOBS = {}
+_JOBS_LOCK = threading.Lock()
+_JOB_SEQ = itertools.count(1)
+
+
+def _batch_worker(job, payload):
+    """Последовательный анализ всех сканов папки; каждая строка — компактная сводка понимания."""
+    for i, f in enumerate(job["_files"]):
+        job["current"] = f.name
+        pl = dict(payload)
+        pl["image"] = str(f)
+        res = app_mod.dispatch("analyze", pl)
+        row = {"file": f.name, "image": str(f)}
+        if res.get("ok"):
+            u = res.get("understanding") or {}
+            fr = (u.get("frame") or {})
+            d = fr.get("diag") or {}
+            row.update(ok=True, overlay=res.get("overlay"),
+                       n_lines=u.get("n_lines_total"),
+                       n_auto=res.get("n_auto"), n_flag=res.get("n_flag"),
+                       source=d.get("source") or "frame",
+                       low_confidence=bool(d.get("low_confidence")),
+                       advise=d.get("advise"),
+                       px_per_m=fr.get("px_per_m") and round(fr["px_per_m"], 1))
+            ov = res.get("overlay")
+            if ov:
+                with _JOBS_LOCK:
+                    _Handler.allowed_dirs.add(str(Path(ov).resolve().parent))
+        else:
+            row.update(ok=False, error=res.get("error"))
+        job["rows"].append(row)
+        job["done"] = i + 1
+    job["status"] = "done"
+    job["current"] = None
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -55,12 +99,97 @@ class _Handler(BaseHTTPRequestHandler):
             return False
         return any(rp == r or rp.startswith(r + "/") or rp.startswith(r + "\\") for r in roots)
 
+    @staticmethod
+    def _safe_filename(filename):
+        name = Path(filename or "").name.replace("\x00", "").strip()
+        for ch in '<>:"/\\|?*':
+            name = name.replace(ch, "_")
+        return name or "upload.bin"
+
+    def _read_multipart_upload(self):
+        ctype = self.headers.get("Content-Type", "")
+        if not ctype.lower().startswith("multipart/form-data"):
+            raise ValueError("ожидался multipart/form-data")
+        n = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(n)
+        prefix = f"Content-Type: {ctype}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
+        msg = BytesParser(policy=default).parsebytes(prefix + raw)
+
+        fields = {}
+        file_item = None
+        for part in msg.iter_parts():
+            if part.get_content_disposition() != "form-data":
+                continue
+            name = part.get_param("name", header="content-disposition")
+            filename = part.get_filename()
+            payload = part.get_payload(decode=True) or b""
+            if filename is None:
+                enc = part.get_content_charset() or "utf-8"
+                fields[name] = payload.decode(enc, errors="replace")
+            else:
+                file_item = (name, filename, payload)
+        if not file_item:
+            raise ValueError("файл не передан")
+        return fields, file_item
+
+    def _handle_upload(self):
+        from ..config import Config
+        try:
+            fields, file_item = self._read_multipart_upload()
+            _, filename, payload = file_item
+            if not payload:
+                raise ValueError("выбран пустой файл")
+
+            cfg = Config()
+            if fields.get("out"):
+                cfg.out = Path(fields["out"])
+            upload_dir = cfg.ensure_out() / "_uploads" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            dst = upload_dir / self._safe_filename(filename)
+            dst.write_bytes(payload)
+
+            self.allowed_dirs.add(str(upload_dir.resolve()))
+            return self._send(200, {
+                "ok": True,
+                "field": fields.get("field") or file_item[0],
+                "path": str(dst.resolve()),
+                "name": dst.name,
+                "size": len(payload),
+            })
+        except Exception as e:
+            return self._send(400, {"ok": False, "error": str(e)})
+
+    def _start_batch(self, payload):
+        """op=batch: папка сканов → фоновый джоб (последовательный анализ), сразу вернуть id."""
+        folder = (payload.get("folder") or "").strip()
+        if not folder or not Path(folder).is_dir():
+            return self._send(200, {"ok": False, "error": f"нет папки: {folder or '(пусто)'}"})
+        files = sorted(p for p in Path(folder).iterdir() if p.suffix.lower() in IMG_EXT)
+        if not files:
+            return self._send(200, {"ok": False, "error": f"в папке нет изображений: {folder}"})
+        self.allowed_dirs.add(str(Path(folder).resolve()))
+        jid = str(next(_JOB_SEQ))
+        job = {"id": jid, "status": "run", "total": len(files), "done": 0,
+               "current": None, "rows": [], "_files": files}
+        with _JOBS_LOCK:
+            _JOBS[jid] = job
+        threading.Thread(target=_batch_worker, args=(job, payload), daemon=True).start()
+        return self._send(200, {"ok": True, "op": "batch", "job": jid, "total": len(files)})
+
     # ---- routes ----
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             html = (STATIC / "index.html").read_text(encoding="utf-8")
             return self._send(200, html, "text/html; charset=utf-8")
+        if u.path == "/api/job":
+            jid = parse_qs(u.query).get("id", [""])[0]
+            with _JOBS_LOCK:
+                job = _JOBS.get(jid)
+            if not job:
+                return self._send(404, {"ok": False, "error": f"нет джоба {jid}"})
+            pub = {k: v for k, v in job.items() if not k.startswith("_")}
+            return self._send(200, {"ok": True, **pub})
         if u.path == "/file":
             q = parse_qs(u.query).get("path", [""])[0]
             if not q or not Path(q).is_file():
@@ -74,6 +203,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        if u.path == "/api/upload":
+            return self._handle_upload()
         if u.path != "/api/op":
             return self._send(404, {"error": "not found"})
         n = int(self.headers.get("Content-Length", 0))
@@ -83,6 +214,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(400, {"ok": False, "error": f"bad json: {e}"})
         op = payload.get("op", "")
         self._register(payload)
+        if op == "batch":
+            return self._start_batch(payload)
         res = app_mod.dispatch(op, payload)
         # зарегистрировать каталоги созданных артефактов (чтобы /file их отдал)
         for k in ("overlay",):

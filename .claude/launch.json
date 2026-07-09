@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "auto-ui",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "auto.ui"],
+      "port": 8765
+    }
+  ]
+}

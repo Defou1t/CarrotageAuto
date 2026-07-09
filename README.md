@@ -102,12 +102,19 @@ the image; it produces the trace. Output opens directly in NeuraLOG for QC over 
 ```
 CarrotageAuto/
 ├─ README.md                 ← you are here
-├─ PLAN_new_dialog.md        internal dev log / roadmap (Russian, authoritative status)
-├─ neuralog_context.md       NeuraLOG UI-automation context (legacy path)
+├─ ROADMAP_v2.md             authoritative course + status (Russian)
+├─ PLAN_new_dialog.md        historical dev log (Russian)
 ├─ mnemonics.json            curve dictionary (names, units, groups) from the client
-├─ *.py (repo root)          legacy NeuraLOG UI automation (Win32 clicks) — superseded
-└─ digitizer/                STANDALONE digitizer (the real product)
+├─ run_ui.bat / run.py       launchers: web UI / one template-pair run (regression)
+├─ auto/                     ★ AUTONOMOUS image-first vectorizer (v2 course) + web UI (auto/ui)
+├─ digitizer/                nlgx I/O foundation + template pipeline + QC tooling
+│   └─ rnd/                  R&D: MK separator (production ensemble), BKZ separator, experiments
+└─ archive/                  dead code kept for reference (NeuraLOG Win32 UI automation, block-2)
 ```
+
+**Where to work:** the web UI (`run_ui.bat` → http://127.0.0.1:8765) is the development cockpit —
+single-scan analysis/vectorization/QC plus **batch analysis of a raw folder** (no templates needed),
+with per-sheet understanding, AUTO/FLAG counts and overlays.
 
 ### `digitizer/` — module map (grouped by role)
 

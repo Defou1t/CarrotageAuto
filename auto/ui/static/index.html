@@ -19,7 +19,10 @@
   label { display:block; margin:8px 0 3px; color:var(--mut); font-size:12px; }
   input[type=text], select, textarea { width:100%; background:#0c0e14; border:1px solid var(--line);
         color:var(--tx); border-radius:6px; padding:7px 9px; font:13px monospace; }
+  input[type=file] { display:none; }
   .row { display:flex; gap:8px; } .row>div { flex:1; }
+  .pathpick { display:grid; grid-template-columns:minmax(0,1fr) 84px; gap:6px; align-items:center; }
+  .pathpick button { width:auto; margin-top:0; padding:7px 10px; background:#222838; font-weight:500; }
   .chk { display:flex; align-items:center; gap:6px; margin:8px 0; color:var(--tx); }
   .chk input { width:auto; }
   button { background:var(--acc); color:#fff; border:0; border-radius:7px; padding:10px 14px;
@@ -37,6 +40,15 @@
   .status.err { background:rgba(255,107,107,.12); color:var(--err); display:block; }
   .muted { color:var(--mut); }
   .params { display:none; }
+  table.batch { width:100%; border-collapse:collapse; font:12px monospace; margin-bottom:12px; }
+  table.batch th, table.batch td { border:1px solid var(--line); padding:4px 7px; text-align:left; }
+  table.batch th { color:var(--mut); font-weight:500; }
+  table.batch tr.bad td { color:var(--err); }
+  table.batch tr.lowc td { color:var(--warn); }
+  table.batch tr:hover { background:#1c2130; cursor:pointer; }
+  .pill { display:inline-block; padding:0 6px; border-radius:8px; font-size:11px; }
+  .pill.ok { background:rgba(62,207,142,.15); color:var(--ok); }
+  .pill.warn { background:rgba(255,207,79,.15); color:var(--warn); }
 </style>
 </head>
 <body>
@@ -50,18 +62,27 @@
       <button data-op="refine">Уточнение</button>
       <button data-op="verify">Проверка (QC)</button>
       <button data-op="feedback">Обратная связь</button>
+      <button data-op="batch">Батч: папка сканов</button>
     </div>
 
     <fieldset>
       <legend>Пути</legend>
-      <label>Скан (image)</label><input type="text" id="image" placeholder="F:\nds\...\img\scan.jpg">
+      <label>Скан (image)</label>
+      <div class="pathpick"><input type="text" id="image" placeholder="F:\nds\...\img\scan.jpg"><button type="button" data-file-for="image">Файл…</button></div>
+      <label>Папка сканов (для батча)</label><input type="text" id="folder" placeholder="F:\nds\projects\Semeguniv_001\img">
       <label>Папка вывода (out)</label><input type="text" id="out" placeholder="output">
       <div class="row">
-        <div><label>Рамка .nlgx (опц.)</label><input type="text" id="frame" placeholder="лёгкий каркас"></div>
+        <div><label>Рамка .nlgx (для vectorize/LAS)</label><div class="pathpick"><input type="text" id="frame" placeholder="лёгкий каркас"><button type="button" data-file-for="frame">Файл…</button></div></div>
         <div><label>Папка данных (data)</label><input type="text" id="data" placeholder="CARROTAGE_DATA"></div>
       </div>
-      <label>Готовый _auto.nlgx (для QC/обратной связи)</label><input type="text" id="nlgx">
-      <label>Исправленный экспертом .nlgx (обратная связь)</label><input type="text" id="corrected">
+      <label>Готовый _auto.nlgx (для QC/обратной связи)</label>
+      <div class="pathpick"><input type="text" id="nlgx"><button type="button" data-file-for="nlgx">Файл…</button></div>
+      <label>Исправленный экспертом .nlgx (обратная связь)</label>
+      <div class="pathpick"><input type="text" id="corrected"><button type="button" data-file-for="corrected">Файл…</button></div>
+      <input type="file" id="file_image" accept=".jpg,.jpeg,.png,.tif,.tiff,.bmp,image/*">
+      <input type="file" id="file_frame" accept=".nlgx">
+      <input type="file" id="file_nlgx" accept=".nlgx">
+      <input type="file" id="file_corrected" accept=".nlgx">
     </fieldset>
 
     <fieldset id="testbox" style="display:none">
@@ -78,7 +99,9 @@
 
     <fieldset>
       <legend>Модель (опц., recall prob)</legend>
-      <label>Чекпойнт .pt</label><input type="text" id="ckpt" placeholder="F:\nds\output\unet_best.pt">
+      <label>Чекпойнт .pt</label>
+      <div class="pathpick"><input type="text" id="ckpt" placeholder="F:\nds\output\unet_best.pt"><button type="button" data-file-for="ckpt">Файл…</button></div>
+      <input type="file" id="file_ckpt" accept=".pt,.pth,.ckpt,.npy">
       <div class="row">
         <div><label>device</label><input type="text" id="device" placeholder="cuda / cpu"></div>
         <div></div>
@@ -119,6 +142,7 @@
 <script>
 let OP = "analyze";
 const $ = id => document.getElementById(id);
+const PICKERS = ["image","frame","nlgx","corrected","ckpt"];
 
 function selOp(op){
   OP = op;
@@ -135,15 +159,106 @@ function params(){
 }
 function payload(){
   return { op:OP, image:$("image").value.trim(), out:$("out").value.trim(),
+    folder:$("folder").value.trim() || $("folder").placeholder,
     data:$("data").value.trim(), frame:$("frame").value.trim(), nlgx:$("nlgx").value.trim(),
     corrected:$("corrected").value.trim(), ckpt:$("ckpt").value.trim(),
     device:$("device").value.trim()||null, test:$("test").value, name:$("name").value.trim(),
     ruler:$("ruler").checked, las:$("las").checked, ingest:$("ingest").checked, params:params() };
 }
 
+function showStatus(kind, text){
+  const st=$("status");
+  st.className = kind ? "status "+kind : "status";
+  st.textContent = text || "";
+}
+
+async function uploadPicked(field){
+  const inp = $("file_"+field);
+  const file = inp.files && inp.files[0];
+  if(!file) return;
+  showStatus("ok", "Загружаю файл: "+file.name);
+  const fd = new FormData();
+  fd.append("field", field);
+  fd.append("out", $("out").value.trim());
+  fd.append("file", file, file.name);
+  let res;
+  try {
+    const r = await fetch("/api/upload", {method:"POST", body:fd});
+    res = await r.json();
+  } catch(e) {
+    res = {ok:false, error:String(e)};
+  }
+  if(res.ok){
+    $(field).value = res.path;
+    showStatus("ok", "Выбран файл: "+res.name);
+  } else {
+    showStatus("err", "ОШИБКА · "+(res.error || "файл не загружен"));
+  }
+  inp.value = "";
+}
+
+PICKERS.forEach(field=>{
+  const btn = document.querySelector(`[data-file-for="${field}"]`);
+  const inp = $("file_"+field);
+  if(btn && inp){
+    btn.onclick = ()=>inp.click();
+    inp.onchange = ()=>uploadPicked(field);
+  }
+});
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function renderBatch(job){
+  const rows = job.rows.map((r,i)=>{
+    const cls = !r.ok ? "bad" : (r.low_confidence ? "lowc" : "");
+    const cells = r.ok
+      ? `<td>${r.n_lines??""}</td><td>${r.n_auto??""}/${r.n_flag??""}</td><td>${r.px_per_m??""}</td>`
+        + `<td>${r.low_confidence?'<span class="pill warn">FLAG</span>':'<span class="pill ok">ok</span>'} ${esc(r.advise||"")}</td>`
+      : `<td colspan="4">${esc(r.error)}</td>`;
+    return `<tr class="${cls}" data-i="${i}"><td>${esc(r.file)}</td>${cells}</tr>`;
+  }).join("");
+  const head = "<tr><th>файл</th><th>линий</th><th>AUTO/FLAG</th><th>px/м</th><th>рамка</th></tr>";
+  $("ovlbox").innerHTML = `<table class="batch">${head}${rows}</table><div id="batchovl"></div>`;
+  document.querySelectorAll("table.batch tr[data-i]").forEach(tr=>{
+    tr.onclick = ()=>{
+      const r = job.rows[+tr.dataset.i];
+      if(!r.overlay) return;
+      $("batchovl").innerHTML = `<div class="muted" style="margin:6px 0">${esc(r.file)}</div>`
+        + `<img class="ovl" src="/file?path=${encodeURIComponent(r.overlay)}">`;
+    };
+  });
+}
+
+async function pollBatch(jid){
+  for(;;){
+    let job;
+    try { job = await (await fetch("/api/job?id="+jid)).json(); }
+    catch(e){ showStatus("err", "ОШИБКА · "+e); return; }
+    if(!job.ok){ showStatus("err", "ОШИБКА · "+(job.error||"")); return; }
+    renderBatch(job);
+    const flags = job.rows.filter(r=>r.low_confidence||!r.ok).length;
+    if(job.status==="done"){
+      showStatus("ok", `БАТЧ ГОТОВ · ${job.done}/${job.total} · ненадёжных/ошибок: ${flags} · клик по строке — оверлей`);
+      $("out_json").textContent = JSON.stringify(job.rows, null, 2);
+      return;
+    }
+    showStatus("ok", `Батч ${job.done}/${job.total}… сейчас: ${job.current||""}`);
+    await new Promise(r=>setTimeout(r, 2500));
+  }
+}
+
 async function run(){
-  $("status").className="status"; $("status").textContent="";
+  showStatus("", "");
   $("out_json").textContent="Выполняется…"; $("ovlbox").innerHTML="";
+  if(OP==="batch"){
+    let res;
+    try { res = await (await fetch("/api/op", {method:"POST", headers:{"Content-Type":"application/json"},
+                                               body: JSON.stringify(payload())})).json(); }
+    catch(e){ res = {ok:false, error:String(e)}; }
+    if(!res.ok){ showStatus("err", "ОШИБКА · "+(res.error||"")); $("out_json").textContent=JSON.stringify(res,null,2); return; }
+    $("out_json").textContent = `джоб ${res.job}: ${res.total} файлов`;
+    return pollBatch(res.job);
+  }
   let res;
   try {
     const r = await fetch("/api/op", {method:"POST", headers:{"Content-Type":"application/json"},

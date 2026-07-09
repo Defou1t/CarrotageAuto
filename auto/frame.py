@@ -119,6 +119,117 @@ def _frame_top_bottom(rgb, p, tracks):
     return int(0.05 * H), int(0.95 * H)
 
 
+def _tape_edge_zone(colfrac, W, side, thr=0.08):
+    """Внутренняя граница тёмной краевой зоны (фон сканера + перфорация). None если зоны нет.
+    Допуск на светлые прогалины между дырками/кромкой — max(8, W//40) колонок."""
+    tol = max(8, W // 40)
+    rng = range(W) if side == "L" else range(W - 1, -1, -1)
+    last, misses = None, 0
+    for x in rng:
+        if colfrac[x] > thr:
+            last, misses = x, 0
+        else:
+            misses += 1
+            if misses > tol:
+                break
+    if last is None:
+        return None
+    # зона обязана быть краевой (не вертикаль в поле данных)
+    if side == "L" and last > W // 3:
+        return None
+    if side == "R" and last < 2 * W // 3:
+        return None
+    return last
+
+
+def _tape_periodic_holes(very_dark, zone_x0, zone_x1):
+    """Перфорация = РЕГУЛЯРНЫЕ дырки: в зоне ищем колонку с частичной темнотой (дырки, не сплошной
+    фон) и проверяем периодичность блобов по вертикали."""
+    H = very_dark.shape[0]
+    for x in range(zone_x0, zone_x1, max(1, (zone_x1 - zone_x0) // 12 or 1)):
+        frac = very_dark[:, x].mean()
+        if not (0.05 < frac < 0.6):
+            continue
+        rows = np.nonzero(very_dark[:, x])[0]
+        if len(rows) < 12:
+            continue
+        cuts = np.nonzero(np.diff(rows) > 5)[0] + 1
+        centers = [float(seg.mean()) for seg in np.split(rows, cuts)]
+        if len(centers) < 6:
+            continue
+        d = np.diff(centers)
+        med = float(np.median(d))
+        if med > 4 and float(np.median(np.abs(d - med))) < 0.35 * med:
+            return True
+    return False
+
+
+def _tape_data_span(rgb, p, x0, x1, block=64, k=3):
+    """Верх/низ ДАННЫХ на ленте: рукописная шапка/хвост vs зона кривой.
+    Блок 64 строк «кривая»: ≥75% строк имеют 1..6 ранов чернила (кривая непрерывна, рукопись — россыпь
+    штрихов либо пусто). Данные = от первых k подряд «кривых» блоков до последних (замер Semeguniv)."""
+    fg = im.ink_foreground(rgb, p)[:, x0:x1]
+    H = fg.shape[0]
+    nb = H // block
+    if nb < k:
+        return 0, H, 0.0
+    ok = np.zeros(nb, bool)
+    for i in range(nb):
+        rr = np.array([len(im.row_runs(fg[i * block + j])) for j in range(block)])
+        ok[i] = float(((rr >= 1) & (rr <= 6)).mean()) > 0.75
+    runs = [i for i in range(nb - k + 1) if ok[i:i + k].all()]
+    if not runs:
+        return 0, H, 0.0
+    return runs[0] * block, min(H, (runs[-1] + k) * block), float(ok.mean())
+
+
+# px/m-приоры корпуса (Semeguniv, скан ~150dpi): 1:200 → ~29-31, 1:500 → ~11-12.
+_TAPE_PPM_PRIOR = {200: (22.0, 40.0), 500: (8.0, 16.0)}
+
+
+def detect_tape(rgb, meta=None, p=None):
+    """Перфолента (Semeguniv и т.п.): узкий однотрековый бланк с перфорацией по краям и рукописной
+    шапкой. Возвращает Frame или None (не лента). Триггер: краевая тёмная зона с ПЕРИОДИЧНЫМИ
+    дырками хотя бы с одной стороны."""
+    from .config import DEFAULT
+    p = p or DEFAULT.cv
+    H, W = rgb.shape[:2]
+    v = im.value_channel(rgb)
+    very_dark = (v < 80)
+    colfrac = very_dark.mean(0)
+    zl = _tape_edge_zone(colfrac, W, "L")
+    zr = _tape_edge_zone(colfrac, W, "R")
+    periodic = ((zl is not None and _tape_periodic_holes(very_dark, 0, zl + 1)) or
+                (zr is not None and _tape_periodic_holes(very_dark, zr, W)))
+    if not periodic:
+        return None
+    x0 = (zl + 9) if zl is not None else 10
+    x1 = (zr - 8) if zr is not None else W - 10
+    if x1 - x0 < 0.3 * W:
+        return None
+    top_y, bottom_y, ok_frac = _tape_data_span(rgb, p, x0, x1)
+    period, gys = _grid_period(rgb, p, top_y, bottom_y, x0, x1)
+    td = getattr(meta, "top_depth", None)
+    bd = getattr(meta, "bottom_depth", None)
+    fr = Frame(img_w=W, img_h=H, top_y=top_y, bottom_y=bottom_y,
+               tracks=[Track(x0, x1, 0)], top_depth=td, bottom_depth=bd,
+               grid_period_px=period, grid_ys=gys,
+               diag={"source": "tape", "n_tracks": 1, "perf_left": zl, "perf_right": zr,
+                     "data_blocks_frac": round(ok_frac, 2),
+                     "depth_from_filename": td is not None})
+    # честность: длина данных должна сходиться с интервалом из имени (px/m в приоре масштаба)
+    ppm = fr.px_per_m
+    lohi = _TAPE_PPM_PRIOR.get(getattr(meta, "scale", None) or 0)
+    if ppm is None or (lohi and not (lohi[0] <= ppm <= lohi[1])):
+        fr.diag["low_confidence"] = True
+        fr.diag["advise"] = (f"px/м={ppm and round(ppm,1)} вне приора {lohi} для 1:{getattr(meta,'scale',None)} — "
+                             "длина ленты не сходится с интервалом из имени; глубинная калибровка "
+                             "ненадёжна (нужны метки глубин/сетка)")
+    else:
+        fr.diag["low_confidence"] = False
+    return fr
+
+
 def _grid_period(rgb, p, top_y, bottom_y, x0, x1):
     """Период горизонтальной сетки в светло-серой полосе (для опц. Depth Grid). (period, ys)."""
     g = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
@@ -181,8 +292,12 @@ def detect_frame(rgb, meta=None, p=None) -> Frame:
     from .config import DEFAULT
     p = p or DEFAULT.cv
     H, W = rgb.shape[:2]
-    fg = im.ink_foreground(rgb, p)
     xs, colprof = _vertical_lines(rgb, p)
+    if len(xs) < 2:                                 # нет граней рамки → возможно перфолента
+        tape = detect_tape(rgb, meta, p)
+        if tape is not None:
+            return tape
+    fg = im.ink_foreground(rgb, p)
     tracks = _tracks_from_verticals(rgb, p, xs, fg)
     top_y, bottom_y = _frame_top_bottom(rgb, p, tracks)
     x0 = tracks[0].x_left if tracks else int(0.06 * W)
