@@ -11,15 +11,23 @@ curve-id) оказался мисматчем: каждый градиент-з�
      (геометрия SA base + "5X" SA; избыточная нить = scale-трансформ ведомой).
   4. on-scale/строку: base где значение в диапазоне, иначе ×5 (value-continuity, decode_levels).
 
-СОСТОЯНИЕ (07.07):
-  M1 (link_strands): детект нитей РАБОТАЕТ — страйды покрывают GT на 100%, медиана 1.0px
-     (GZ21 <3px 82%, GZ31 93% на 3474). Тушь-нити детектируемы. (флаг --m1)
-  M2 (decode_curve DP по ран×уровень + value/spatial continuity + wrap-gate): ★ BEST-OF-BOTH
-     (любой из 2 путей →GT) = GZ21 93% / GZ31 96% eff≤3 на 3160 (72/80% на 3474). Материал
-     ЕСТЬ. НО индивидуальные пути СВОПАЮТСЯ между кривыми (одна трасса 61-84%, вторая 44-46%):
-     остался SWAP-FREE ASSIGNMENT (та же identity-непрерывность, что MK, но материал в разы
-     лучше — MK best был ~58%). Sequential-decode+вычитание нити НЕ разделяет; нужен joint
-     2-curve DP / relabel (value-continuity на кривую + взаимоисключение ранов).
+СОСТОЯНИЕ (07.07, durable):
+  M1 (link_strands): ★ детект нитей РАБОТАЕТ — страйды покрывают GT 100%, медиана 1.0px
+     (GZ21 <3px 82%, GZ31 93%). Тушь-нити детектируемы. (флаг --m1)
+  M2 (decode_curve, DP по ран×уровень + value/spatial continuity + wrap-gate) + reconstruct_pair:
+     ГЕЙТ 4 D1-плейта (sequential, individual eff≤3): одна кривая 55-84%, вторая 39-54%.
+     ★ ORACLE-ПОТОЛОК (best-of-both, любой из 2 путей →GT) = 48-96% (обычно 72-96%): МАТЕРИАЛ
+     ЕСТЬ, узкое место = SWAP-FREE НАЗНАЧЕНИЕ (2 пути свопаются между кривыми). Для сравнения
+     MK production был ~58% строгого eff≤3 — тут ЛУЧШАЯ кривая уже вровень БЕЗ обучения, но
+     ВТОРАЯ отстаёт. Перепробовано (НЕ побили sequential, durable): joint 2-curve DP с жёстким
+     взаимоисключением ранов (ХУЖЕ — форсирует 2 рана где 2-я кривая разрежена: 3160 oracle
+     93→55); relabel min-jerk 2-track (нейтрально/вредит: 3474 61→52 — greedy свопит на level-
+     скачках). Корень: per-row value-continuity DP смещён от высокоамплитудных нитей → 2-я
+     трасса садится на низкозначную реплику; identity/level сцеплены.
+  ★ СЛЕДУЮЩИЙ РЫЧАГ (не сделан): СТРУКТУРНОЕ ×1↔×5 паррование НИТЕЙ — не per-row, а на уровне
+     СТРАНДОВ M1: смёрджить фрагменты → каждый странд = (кривая,шкала) → стежка ×1/×5 по
+     геометрии (странд у правого края + странд на ×5-позиции с непрерывным value = одна кривая)
+     → назначение 2 кривым БЕЗ per-row свопов. Обходит смещение per-row DP.
 
   python bkz_track.py <plate.nlgx> [--track auto|D1|D2] [--m1]   (авто-ищет парный img)
 """
@@ -226,9 +234,112 @@ def remove_path_runs(mask, path, x0, x1, dilate=3):
     return mm
 
 
-def reconstruct_pair(m, tokens, mask, x0, x1, y0, y1):
-    """Две on-scale трассы. Декод A на всей туши; ВЫЧИТАЕМ ран A из маски; декод B на очищенной
-    (форсирует B на другие нити, вкл. жирную правую). → dict token->{row:(x,level)}."""
+def joint_decode_pair(rbr, famA, famB, lam=1.2, dxfrac=0.12, gate_w=4.0,
+                      sp_w=0.5, sp_scale=40.0, max_runs=6):
+    """JOINT DP по ДВУМ кривым: state=(ранA,levelA,ранB,levelB), ранA≠ранB (взаимоисключение —
+    анти-коллапс + форсирует вторую кривую на СВОЮ нить, а не низкозначную реплику). Стоимость
+    = value+spatial continuity на КАЖДУЮ кривую (identity держится непрерывностью). → (trA,trB)
+    dict row->(x,level). Векторно: переход раскладывается tA(a',a)+tB(b',b)."""
+    mapsA = [DL.scale_map(s) for s in famA]; mapsB = [DL.scale_map(s) for s in famB]
+    KA, KB = len(famA), len(famB)
+    dxtA = max(1.0, dxfrac * abs(famA[0]["x_right"] - famA[0]["x_left"]))
+    dxtB = max(1.0, dxfrac * abs(famB[0]["x_right"] - famB[0]["x_left"]))
+    rows = sorted(rbr)
+
+    def lv(maps, k, x):
+        return math.log(abs(maps[k](x)) + 1.0)
+
+    def tc(maps, dxt, xp, kp, x, k):
+        d = x - xp
+        if k == kp:
+            t = sp_w * (d / sp_scale)**2
+        else:
+            nl = k - kp; want = -1 if nl > 0 else 1
+            mag = min(1.0, abs(d) / dxt)
+            t = lam * abs(nl) + gate_w * lam * (1.0 - (mag if (d * want) > 0 else 0.0))
+        return (lv(maps, k, x) - lv(maps, kp, xp))**2 + t
+
+    hist = []  # (runs, As, Bs, JA, JB, back)
+    pcost = None; pinfo = None
+    for r, y in enumerate(rows):
+        runs = rbr[y][:max_runs]; n = len(runs)
+        As = [(i, k) for i in range(n) for k in range(KA)]
+        Bs = [(i, k) for i in range(n) for k in range(KB)]
+        JA = []; JB = []
+        for ai, (ia, _) in enumerate(As):
+            for bi, (ib, _) in enumerate(Bs):
+                if n >= 2 and ia == ib:
+                    continue
+                JA.append(ai); JB.append(bi)
+        JA = np.array(JA, int); JB = np.array(JB, int); S = len(JA)
+        if r == 0:
+            pcost = np.zeros(S); hist.append((runs, As, Bs, JA, JB, np.full(S, -1, int)))
+            pinfo = (runs, As, Bs, JA, JB); continue
+        pruns, pAs, pBs, pJA, pJB = pinfo
+        tA = np.array([[tc(mapsA, dxtA, pruns[pi], pk, runs[ia], ka) for (ia, ka) in As]
+                       for (pi, pk) in pAs])                    # (nPA, nA)
+        tB = np.array([[tc(mapsB, dxtB, pruns[pi], pk, runs[ib], kb) for (ib, kb) in Bs]
+                       for (pi, pk) in pBs])                    # (nPB, nB)
+        total = pcost[:, None] + tA[pJA[:, None], JA[None, :]] + tB[pJB[:, None], JB[None, :]]
+        bp = np.argmin(total, axis=0)
+        pcost = total[bp, np.arange(S)]
+        hist.append((runs, As, Bs, JA, JB, bp)); pinfo = (runs, As, Bs, JA, JB)
+    if not hist:
+        return {}, {}
+    s = int(np.argmin(pcost)); trA = {}; trB = {}
+    for r in range(len(rows) - 1, -1, -1):
+        runs, As, Bs, JA, JB, bp = hist[r]; y = rows[r]
+        ia, ka = As[JA[s]]; ib, kb = Bs[JB[s]]
+        trA[y] = (runs[ia], ka); trB[y] = (runs[ib], kb)
+        s = bp[s]
+        if s < 0:
+            break
+    return trA, trB
+
+
+def relabel_2track(a, b, slmax=45.0):
+    """Пересобрать 2 swap-free кривые из 2 путей a,b (каждый row->(x,level)). Пожадному 2-track
+    min-jerk: на строке 2 точки {a,b} назначаются к C1/C2 по МИНИМУМУ прыжка от предыдущей
+    позиции каждой (identity = пространств. непрерывность; кривые ~130px раздельны на D1).
+    Смена уровня (x прыгает у ОДНОЙ кривой) терпима: другая не двигается → ориентация та же."""
+    rows = sorted(set(a) | set(b))
+    c1 = {}; c2 = {}
+    c1x = c2x = None
+    for y in rows:
+        pts = []
+        if y in a:
+            pts.append(a[y])
+        if y in b:
+            pts.append(b[y])
+        if not pts:
+            continue
+        if c1x is None:                                  # инициализация: левый→C1, правый→C2
+            pts.sort(key=lambda p: p[0])
+            c1[y] = pts[0]; c1x = pts[0][0]
+            if len(pts) > 1:
+                c2[y] = pts[1]; c2x = pts[1][0]
+            continue
+        if len(pts) == 1:
+            p = pts[0]                                   # к ближайшей из C1/C2
+            if c2x is None or abs(p[0] - c1x) <= abs(p[0] - c2x):
+                c1[y] = p; c1x = p[0]
+            else:
+                c2[y] = p; c2x = p[0]
+            continue
+        p, q = pts
+        if c2x is None:
+            c2x = q[0]
+        straight = abs(p[0] - c1x) + abs(q[0] - c2x)
+        swap = abs(q[0] - c1x) + abs(p[0] - c2x)
+        if swap < straight:
+            p, q = q, p
+        c1[y] = p; c1x = p[0]; c2[y] = q; c2x = q[0]
+    return c1, c2
+
+
+def reconstruct_pair(m, tokens, mask, x0, x1, y0, y1, joint=False, relabel=False):
+    """Две on-scale трассы. По умолч. sequential (декод A → вычесть ран A → декод B) + relabel
+    (min-jerk swap-free). joint=True → joint 2-curve DP. → dict token->{row:(x,level)}."""
     fams = {}
     for t in tokens:
         c = next((c for c in m["curves"] if c["name"].split()[0] == t), None)
@@ -239,10 +350,14 @@ def reconstruct_pair(m, tokens, mask, x0, x1, y0, y1):
     if len(toks) < 2:
         return {}
     rbr = runs_by_row(mask, x0, x1, y0, y1)
-    a = decode_curve(rbr, fams[toks[0]])
-    maskB = remove_path_runs(mask, a, x0, x1)
-    rbrB = runs_by_row(maskB, x0, x1, y0, y1)
-    b = decode_curve(rbrB, fams[toks[1]])
+    if joint:
+        a, b = joint_decode_pair(rbr, fams[toks[0]], fams[toks[1]])
+    else:
+        a = decode_curve(rbr, fams[toks[0]])
+        rbrB = runs_by_row(remove_path_runs(mask, a, x0, x1), x0, x1, y0, y1)
+        b = decode_curve(rbrB, fams[toks[1]])
+    if relabel:
+        a, b = relabel_2track(a, b)
     return {toks[0]: a, toks[1]: b}
 
 
