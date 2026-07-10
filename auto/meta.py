@@ -149,5 +149,6 @@ def curve_info(name: str, mnemonics_path) -> dict:
     aliases = d.get("aliases", {})
     root = aliases.get(root, root)
     info = d.get("curves", {}).get(root, {})
-    return {"root": root, "class": curve_class(root), "color": expected_color(root),
+    # цвет: словарь (экспертное знание, напр. STK: PZ чёрная/GZ зелёная/SP красная) > встроенный приор
+    return {"root": root, "class": curve_class(root), "color": info.get("color") or expected_color(root),
             "unit": info.get("unit"), "group": info.get("group"), "comment": info.get("comment")}

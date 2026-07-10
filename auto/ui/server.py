@@ -62,14 +62,19 @@ def _batch_worker(job, payload):
             fr = (u.get("frame") or {})
             d = fr.get("diag") or {}
             # гейт G2: приоритет — wlg-ЭТАЛОН (точное число кривых), иначе ожидание из имени;
-            # BKZ по имени — диапазон 3..6 (mnemonics: планшет несёт ПОДМНОЖЕСТВО зондов)
+            # BKZ по имени — диапазон 3..6 (mnemonics: планшет несёт ПОДМНОЖЕСТВО зондов);
+            # STK — n..n+1 (Эдуард 10.07: PZ+GZ+SP, иногда ещё DS); DN не линия — это
+            # ПРЯМАЯ-референс вокруг которой вьётся DS (straight-фильтр её сознательно режет)
             n_et = _etalon_curve_count(f)
-            n_exp = n_et or len(u.get("expected_curves") or [])
+            exp_curves = u.get("expected_curves") or []
+            n_exp = n_et or (len(exp_curves) - (1 if "DN" in exp_curves else 0))
             n_got = u.get("n_lines_total")
-            is_bkz = "BKZ" in (u.get("curves_token") or "")
+            token = u.get("curves_token") or ""
             gate = (None if not n_exp else
                     (n_got == n_exp) if n_et else
-                    (3 <= (n_got or 0) <= 6) if is_bkz else (n_got == n_exp))
+                    (3 <= (n_got or 0) <= 6) if "BKZ" in token else
+                    (n_exp <= (n_got or 0) <= n_exp + 1) if "STK" in token
+                    else (n_got == n_exp))
             row.update(ok=True, overlay=res.get("overlay"),
                        n_lines=n_got, n_expected=n_exp, exp_from="wlg" if n_et else "имя",
                        gate=gate,
