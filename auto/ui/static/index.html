@@ -213,7 +213,7 @@ function renderBatch(job){
     const cls = !r.ok ? "bad" : (r.low_confidence ? "lowc" : "");
     const gate = r.gate==null ? "" : (r.gate ? '<span class="pill ok">G2</span>' : '<span class="pill warn">G2✗</span>');
     const cells = r.ok
-      ? `<td>${r.n_lines??""}${r.n_expected?`/${r.n_expected}`:""} ${gate}</td><td>${r.n_auto??""}/${r.n_flag??""}</td><td>${r.px_per_m??""}</td>`
+      ? `<td title="ожидание: ${esc(r.exp_from||"имя")}">${r.n_lines??""}${r.n_expected?`/${r.n_expected}`:""}${r.exp_from==="wlg"?"<small>·wlg</small>":""} ${gate}</td><td>${r.n_auto??""}/${r.n_flag??""}</td><td>${r.px_per_m??""}</td>`
         + `<td>${r.low_confidence?'<span class="pill warn">FLAG</span>':'<span class="pill ok">ok</span>'} ${esc(r.advise||"")}</td>`
       : `<td colspan="4">${esc(r.error)}</td>`;
     return `<tr class="${cls}" data-i="${i}"><td>${esc(r.file)}</td>${cells}</tr>`;

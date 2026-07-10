@@ -32,6 +32,23 @@ _JOBS_LOCK = threading.Lock()
 _JOB_SEQ = itertools.count(1)
 
 
+def _etalon_curve_count(image_path):
+    """Число кривых в wlg-эталоне рядом со сканом (projects/<well>/wlg/<stem>.nlgx), если есть.
+    Эталон честнее «ожидания из имени» (замер 10.07: BKZ-лента несёт 3 кривые GZ4/GZ5/OGZ,
+    а имя обещает 6; 'DA*' — ось глубин, не кривая). None — эталона нет/не читается."""
+    try:
+        p = Path(image_path)
+        et = p.parent.parent / "wlg" / (p.stem + ".nlgx")
+        if not et.is_file():
+            return None
+        from extract_nlgx import extract          # digitizer на sys.path (auto/__init__)
+        curves = extract(str(et)).get("curves") or []
+        n = len([c for c in curves if not str(c.get("name", "")).startswith("DA")])
+        return n or None
+    except Exception:
+        return None
+
+
 def _batch_worker(job, payload):
     """Последовательный анализ всех сканов папки; каждая строка — компактная сводка понимания."""
     for i, f in enumerate(job["_files"]):
@@ -44,15 +61,18 @@ def _batch_worker(job, payload):
             u = res.get("understanding") or {}
             fr = (u.get("frame") or {})
             d = fr.get("diag") or {}
-            # гейт G2: число линий = ожиданию из имени; BKZ — диапазон 3..6 (mnemonics:
-            # планшет несёт ПОДМНОЖЕСТВО зондов, D1=GZ1-GZ3 / D2=GZ4-GZ5+OGZ)
-            n_exp = len(u.get("expected_curves") or [])
+            # гейт G2: приоритет — wlg-ЭТАЛОН (точное число кривых), иначе ожидание из имени;
+            # BKZ по имени — диапазон 3..6 (mnemonics: планшет несёт ПОДМНОЖЕСТВО зондов)
+            n_et = _etalon_curve_count(f)
+            n_exp = n_et or len(u.get("expected_curves") or [])
             n_got = u.get("n_lines_total")
             is_bkz = "BKZ" in (u.get("curves_token") or "")
-            gate = None if not n_exp else ((3 <= (n_got or 0) <= 6) if is_bkz
-                                           else (n_got == n_exp))
+            gate = (None if not n_exp else
+                    (n_got == n_exp) if n_et else
+                    (3 <= (n_got or 0) <= 6) if is_bkz else (n_got == n_exp))
             row.update(ok=True, overlay=res.get("overlay"),
-                       n_lines=n_got, n_expected=n_exp, gate=gate,
+                       n_lines=n_got, n_expected=n_exp, exp_from="wlg" if n_et else "имя",
+                       gate=gate,
                        n_auto=res.get("n_auto"), n_flag=res.get("n_flag"),
                        source=d.get("source") or "frame",
                        low_confidence=bool(d.get("low_confidence")),
