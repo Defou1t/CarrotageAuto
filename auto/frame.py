@@ -168,21 +168,34 @@ def _tape_periodic_holes(very_dark, zone_x0, zone_x1):
 
 def _tape_data_span(rgb, p, x0, x1, block=64, k=3):
     """Верх/низ ДАННЫХ на ленте: рукописная шапка/хвост vs зона кривой.
-    Блок 64 строк «кривая»: ≥75% строк имеют 1..6 ранов чернила (кривая непрерывна, рукопись — россыпь
-    штрихов либо пусто). Данные = от первых k подряд «кривых» блоков до последних (замер Semeguniv)."""
+    Блок 64 строк «кривая»: ≥75% строк имеют 1..rmax ранов чернила (кривая непрерывна, рукопись —
+    россыпь штрихов либо пусто). Данные = от первых k подряд «кривых» блоков до последних.
+    rmax=6 (замер Semeguniv, 1-3 кривые). МУЛЬТИ-кривые ломают потолок 6 (STK_3280: 4-5 кривых,
+    медиана ранов 5-8 → проходили лишь обрывки, span 256 строк) → если span < 40% H, ретрай с
+    rmax=12; берём широкий вариант, если он ≥1.5× длиннее (шапку k-подряд всё равно отсекает:
+    рукопись даёт и строки >12 ранов, её блоки не выстраиваются в k подряд)."""
     fg = im.ink_foreground(rgb, p)[:, x0:x1]
     H = fg.shape[0]
     nb = H // block
     if nb < k:
         return 0, H, 0.0
-    ok = np.zeros(nb, bool)
-    for i in range(nb):
-        rr = np.array([len(im.row_runs(fg[i * block + j])) for j in range(block)])
-        ok[i] = float(((rr >= 1) & (rr <= 6)).mean()) > 0.75
-    runs = [i for i in range(nb - k + 1) if ok[i:i + k].all()]
-    if not runs:
-        return 0, H, 0.0
-    return runs[0] * block, min(H, (runs[-1] + k) * block), float(ok.mean())
+    rr_blocks = [np.array([len(im.row_runs(fg[i * block + j])) for j in range(block)])
+                 for i in range(nb)]
+
+    def span_for(rmax):
+        ok = np.array([float(((rr >= 1) & (rr <= rmax)).mean()) > 0.75 for rr in rr_blocks])
+        runs = [i for i in range(nb - k + 1) if ok[i:i + k].all()]
+        if not runs:
+            return None
+        return runs[0] * block, min(H, (runs[-1] + k) * block), float(ok.mean())
+
+    s6 = span_for(6)
+    if s6 is not None and (s6[1] - s6[0]) >= 0.4 * H:
+        return s6
+    s12 = span_for(12)
+    if s12 is not None and (s6 is None or (s12[1] - s12[0]) >= 1.5 * (s6[1] - s6[0])):
+        return s12
+    return s6 if s6 is not None else (0, H, 0.0)
 
 
 def _tape_drift(very_dark, W, H, n=16):

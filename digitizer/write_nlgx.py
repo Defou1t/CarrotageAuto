@@ -135,7 +135,20 @@ def set_tag(ifds, ifd_idx, tag, typ, values):
     if not isinstance(values, (list, tuple)):
         values = [values]
     if typ == 2:  # ASCII
-        raw = (values[0].encode("latin1") if isinstance(values[0], str) else values[0])
+        v0 = values[0]
+        if isinstance(v0, str):
+            # Формат хранит строки как байты (читатель decode('latin1')). Пути с кириллицей —
+            # это Windows-cp1251 в исходных nlgx; юникод-строка не лезет в latin1 (>255), поэтому
+            # фолбэк на cp1251 (как ждёт NeuraLOG), затем utf-8 — чтобы не падать на любом пути.
+            try:
+                raw = v0.encode("latin1")
+            except UnicodeEncodeError:
+                try:
+                    raw = v0.encode("cp1251")
+                except UnicodeEncodeError:
+                    raw = v0.encode("utf-8", "replace")
+        else:
+            raw = v0
         if not raw.endswith(b"\x00"):
             raw += b"\x00"
         count = len(raw)
