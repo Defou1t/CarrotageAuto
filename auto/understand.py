@@ -211,13 +211,13 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
     """Сгруппировать штрихи одного цвета в ЛИНИИ по x-полосам (band-детект, PLAN §6.6.11).
     Разнесённые (долина плотности) → отдельные линии ~1px; сбитый одноцветный пучок → 1 'multi'
     линия (FLAG разрешает U2). Куски дрейфа склеиваются обратно (_try_merge_drift).
-    Каждая линия — агрегат своих штрихов."""
+    Каждая линия — агрегат своих штрихов. Возвращает (lines, excluded_marks)."""
     if not insts:
-        return []
+        return [], []
     # столбцовая плотность чернил всех штрихов цвета (гистограмма x) → пики/долины = линии
     xs_all = np.concatenate([s["xs_row"][~np.isnan(s["xs_row"])] for s in insts])
     if not len(xs_all):
-        return []
+        return [], []
     lo, hi = int(xs_all.min()), int(xs_all.max()) + 1
     hist = np.zeros(hi - lo + 1, np.float64)
     for xv in xs_all.astype(int):
@@ -249,6 +249,48 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
         if float(xs_m.max() - xs_m.min()) <= p.straight_max_band:
             continue
         groups.append({"members": members})
+    # ЛЕНТЫ: ось-вертикаль с прицепленными рукописными МЕТКАМИ ГЛУБИН у ЛЕВОГО края трека
+    # (G2: BK_2410 x≈114, 57 штрихов, покрытие 24%). Исключаем НА УРОВНЕ ГРУПП, ДО слияний —
+    # иначе merge-одной-кривой втягивает ось+метки в кривую (регресс BK_2410 got=0).
+    # Ключ = ПРЯМИЗНА членов (ось по линейке x-std med ~0.4px; даже выцветшая кривая ≥1.8 —
+    # покрытие и периодичность НЕ разделяют, замер MK_190/STK_200). Только чёрный: метки
+    # пишутся карандашом/тушью, цветное у края = кривая.
+    excluded = []
+    if frame.diag.get("source") == "tape" and color == "black" and groups:
+        tr = frame.tracks[track_index]
+        keep = []
+        for g in groups:
+            ms = g["members"]
+            xs_g = np.concatenate([s["xs_row"][~np.isnan(s["xs_row"])] for s in ms])
+            _, prof = _row_profile(ms)
+            xc = float(np.median(xs_g))
+            cov = float((~np.isnan(prof)).mean())
+            xstd = float(np.median([np.std(s["xs_row"][~np.isnan(s["xs_row"])]) for s in ms]))
+            if ((xc - tr.x_left) < p.marks_left_frac * max(1, tr.width)
+                    and cov < p.marks_max_cov and len(ms) >= p.marks_min_strokes
+                    and xstd <= p.marks_max_xstd):
+                excluded.append({"track": track_index, "color": color,
+                                 "x_center": round(xc, 1), "n_strokes": len(ms),
+                                 "row_cov": round(cov, 2), "xstd_med": round(xstd, 2)})
+            else:
+                keep.append(g)
+        groups = keep
+    # ОДНА дико-пиковая кривая режется x-сплитом на куски (G2-замер BK_4020: 1→5 «линий»
+    # th 13-19). Канон §6.6.11 (мультипликативность): если штрихи цвета почти нигде НЕ
+    # сосуществуют в одной строке (медиана числа штрихов на покрытую строку ~1) — на треке
+    # ОДНА кривая этого цвета, любой сплит нелегален. Считаем по ЧЛЕНАМ выживших групп
+    # (прямые/метки уже отсеяны — ось в cmask завысила бы счёт до 2).
+    if len(groups) > 1:
+        alls = [s for g in groups for s in g["members"]]
+        ya = min(s["row0"] for s in alls)
+        yb = max(s["row0"] + len(s["xs_row"]) for s in alls)
+        cnt = np.zeros(yb - ya, np.int16)
+        for s in alls:
+            v = ~np.isnan(s["xs_row"])
+            cnt[np.nonzero(v)[0] + s["row0"] - ya] += 1
+        covered = cnt > 0
+        if covered.any() and float(np.median(cnt[covered])) <= p.single_curve_max_runs:
+            groups = [{"members": alls}]
     groups = _try_merge_drift(groups, track_h, p)
     lines = []
     for g in groups:
@@ -278,7 +320,7 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
             L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)
         lines.append(L)
     lines.sort(key=lambda L: L.x_center)
-    return lines
+    return lines, excluded
 
 
 def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
@@ -305,25 +347,10 @@ def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
         track_lines = []
         for color, cmask in chans.items():
             insts = _instances(cmask, color, t.index, min_h)
-            track_lines += _group_into_lines(insts, cmask, color, t.index, frame, p)
-        # ЛЕНТЫ: ось-вертикаль с прицепленными рукописными МЕТКАМИ ГЛУБИН у ЛЕВОГО края трека
-        # ловится как «линия» (G2, ROADMAP §8а: BK_2410 x≈114, 57 штрихов, покрытие 24%).
-        # Дискриминатор-ключ: члены кластера ПОЧТИ ИДЕАЛЬНО ПРЯМЫЕ (ось по линейке, x-std med
-        # ~0.4px) — даже сильно выцветшая кривая виляет ≥1.8px (замер MK_190/STK_200: покрытие и
-        # периодичность НЕ разделяют — выцветшие кривые у края выглядят так же; прямизна разделяет).
-        # Только чёрный: метки пишутся карандашом/тушью, цветная линия у края = кривая.
-        if frame.diag.get("source") == "tape":
-            marks = [L for L in track_lines
-                     if L.color == "black"
-                     and (L.x_center - t.x_left) < p.marks_left_frac * max(1, t.width)
-                     and L.row_cov < p.marks_max_cov and L.n_strokes >= p.marks_min_strokes
-                     and L.strokes_xstd_med <= p.marks_max_xstd]
-            if marks:
-                track_lines = [L for L in track_lines if L not in marks]
-                sheet.diag.setdefault("excluded_marks", []).extend(
-                    {"track": t.index, "color": L.color, "x_center": round(L.x_center, 1),
-                     "n_strokes": L.n_strokes, "row_cov": round(L.row_cov, 2),
-                     "xstd_med": round(L.strokes_xstd_med, 2)} for L in marks)
+            lines_c, excl_c = _group_into_lines(insts, cmask, color, t.index, frame, p)
+            track_lines += lines_c
+            if excl_c:      # ось+метки глубин, исключённые на уровне групп (см. _group_into_lines)
+                sheet.diag.setdefault("excluded_marks", []).extend(excl_c)
         track_lines.sort(key=lambda L: L.x_center)
         sheet.per_track[t.index] = len(track_lines)
         sheet.lines += track_lines
