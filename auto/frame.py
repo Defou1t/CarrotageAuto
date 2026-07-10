@@ -119,10 +119,12 @@ def _frame_top_bottom(rgb, p, tracks):
     return int(0.05 * H), int(0.95 * H)
 
 
-def _tape_edge_zone(colfrac, W, side, thr=0.08):
+def _tape_edge_zone(colfrac, W, side, thr=0.08, limit_frac=1 / 3):
     """Внутренняя граница тёмной краевой зоны (фон сканера + перфорация). None если зоны нет.
-    Допуск на светлые прогалины между дырками/кромкой — max(8, W//40) колонок."""
-    tol = max(8, W // 40)
+    Допуск на светлые прогалины между дырками/кромкой — max(8, W//25) колонок
+    (BKZ_3080: перфозона отстоит от кромки скана на ~27 светлых колонок при W=743).
+    limit_frac — насколько глубоко зона может заходить в лист (дрейфующая лента: до ~0.55)."""
+    tol = max(8, W // 25)
     rng = range(W) if side == "L" else range(W - 1, -1, -1)
     last, misses = None, 0
     for x in rng:
@@ -135,9 +137,9 @@ def _tape_edge_zone(colfrac, W, side, thr=0.08):
     if last is None:
         return None
     # зона обязана быть краевой (не вертикаль в поле данных)
-    if side == "L" and last > W // 3:
+    if side == "L" and last > W * limit_frac:
         return None
-    if side == "R" and last < 2 * W // 3:
+    if side == "R" and last < W * (1 - limit_frac):
         return None
     return last
 
@@ -183,6 +185,68 @@ def _tape_data_span(rgb, p, x0, x1, block=64, k=3):
     return runs[0] * block, min(H, (runs[-1] + k) * block), float(ok.mean())
 
 
+def _tape_drift(very_dark, W, H, n=16):
+    """ДРЕЙФУЮЩАЯ лента (косой/кривой скан, BK_190: край плывёт ±170px за 30000 строк —
+    глобальные краевые зоны размазаны и _tape_edge_zone молчит). По горизонтальным слэбам ищем
+    (zl, zr): лента = согласованная ШИРИНА (zr−zl) + светлая середина в ≥60% слэбов.
+    Возвращает (row_shift, x0, x1, диаг) в ВЫПРЯМЛЕННЫХ координатах, либо None."""
+    zs, cfs = [], []
+    for i in range(n):
+        s = very_dark[i * H // n:(i + 1) * H // n]
+        cf = s.mean(0)
+        cfs.append(cf)
+        zs.append((_tape_edge_zone(cf, W, "L", limit_frac=0.55),
+                   _tape_edge_zone(cf, W, "R", limit_frac=0.55)))
+    # 1-й проход: слэбы с ОБОИМИ краями и светлой серединой → медианная ширина ленты
+    both = []
+    for (zl, zr), cf in zip(zs, cfs):
+        if zl is not None and zr is not None and zr - 3 > zl + 3 \
+                and float(np.median(cf[zl + 3:zr - 3])) < 0.25:
+            both.append((zl, zr))
+    if len(both) < 0.35 * n:
+        return None
+    widths = np.array([zr - zl for zl, zr in both], float)
+    wmed = float(np.median(widths))
+    if not (0.25 * W <= wmed <= 0.9 * W) or float(np.median(np.abs(widths - wmed))) > 0.1 * wmed:
+        return None                                   # ширина гуляет — это не жёсткая лента
+    w = int(round(wmed))
+    # 2-й проход: центры; ОДНОСТОРОННИЕ слэбы достраиваем известной шириной (дрейф уводит второй
+    # край за позиционный лимит — BK_190 слэбы 0,6-8,13-15)
+    centers = np.full(n, np.nan)
+    for i, ((zl, zr), cf) in enumerate(zip(zs, cfs)):
+        if zl is not None and zr is not None:
+            if abs((zr - zl) - wmed) < 0.15 * wmed:
+                centers[i] = (zl + zr) / 2.0
+        elif zl is not None and zl + w <= W + 0.1 * w:
+            hi = min(W, zl + w) - 3
+            if hi > zl + 3 and float(np.median(cf[zl + 3:hi])) < 0.25:
+                centers[i] = zl + wmed / 2.0
+        elif zr is not None and zr - w >= -0.1 * w:
+            lo = max(0, zr - w) + 3
+            if zr - 3 > lo and float(np.median(cf[lo:zr - 3])) < 0.25:
+                centers[i] = zr - wmed / 2.0
+    valid = ~np.isnan(centers)
+    if valid.sum() < 0.6 * n:
+        return None
+    ys = (np.arange(n) * H + H // 2) // n             # центр каждого слэба по y
+    row_c = np.interp(np.arange(H), ys[valid], centers[valid])
+    cmed = float(np.median(row_c))
+    row_shift = np.round(cmed - row_c).astype(np.int32)   # сдвиг строки → лента центрируется
+    x0, x1 = int(cmed - wmed / 2), int(cmed + wmed / 2)
+    diag = {"drift_px": int(np.ptp(row_c)), "tape_w_px": int(wmed), "slabs_ok": int(valid.sum())}
+    return row_shift, x0, x1, diag
+
+
+def apply_row_shift(rgb, row_shift):
+    """Выпрямление дрейфующей ленты: каждая строка сдвигается на row_shift[y] (см. _tape_drift).
+    Группируем строки по величине сдвига — один np.roll на группу."""
+    out = np.empty_like(rgb)
+    for s in np.unique(row_shift):
+        rows = np.nonzero(row_shift == s)[0]
+        out[rows] = np.roll(rgb[rows], int(s), axis=1) if s else rgb[rows]
+    return out
+
+
 # px/m-приоры корпуса (Semeguniv, скан ~150dpi): 1:200 → ~29-31, 1:500 → ~11-12.
 _TAPE_PPM_PRIOR = {200: (22.0, 40.0), 500: (8.0, 16.0)}
 
@@ -210,10 +274,20 @@ def detect_tape(rgb, meta=None, p=None):
     if not periodic and zl is not None and zr is not None and zr - zl > 0.3 * W:
         interior = float(np.median(colfrac[zl + 3:zr - 3])) if zr - 3 > zl + 3 else 1.0
         two_sided = interior < 0.25
+    # Третий триггер: ДРЕЙФУЮЩАЯ лента (косой скан) — глобальные зоны размазаны, ищем по слэбам.
+    drift = None
+    row_shift = None
     if not periodic and not two_sided:
-        return None
-    x0 = (zl + 9) if zl is not None else 10
-    x1 = (zr - 8) if zr is not None else W - 10
+        drift = _tape_drift(very_dark, W, H)
+        if drift is None:
+            return None
+    if drift is not None:
+        row_shift, dx0, dx1, ddiag = drift
+        rgb = apply_row_shift(rgb, row_shift)          # дальше работаем в выпрямленных координатах
+        x0, x1 = dx0 + 9, dx1 - 8
+    else:
+        x0 = (zl + 9) if zl is not None else 10
+        x1 = (zr - 8) if zr is not None else W - 10
     if x1 - x0 < 0.3 * W:
         return None
     top_y, bottom_y, ok_frac = _tape_data_span(rgb, p, x0, x1)
@@ -227,6 +301,9 @@ def detect_tape(rgb, meta=None, p=None):
                      "perf_confirmed": bool(periodic),
                      "data_blocks_frac": round(ok_frac, 2),
                      "depth_from_filename": td is not None})
+    if drift is not None:
+        fr.diag["tape_drift"] = ddiag                  # косой скан: строки выпрямлены
+        fr.row_shift = row_shift                       # пайплайн обязан применить apply_row_shift
     # честность: длина данных должна сходиться с интервалом из имени (px/m в приоре масштаба)
     ppm = fr.px_per_m
     lohi = _TAPE_PPM_PRIOR.get(getattr(meta, "scale", None) or 0)

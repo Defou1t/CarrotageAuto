@@ -40,6 +40,8 @@ def run(image_path, frame_nlgx=None, cfg=None, read_ruler=False, las=False,
         fr = frame_mod.frame_from_nlgx(frame_nlgx, m, cfg.cv, rgb=rgb)
     else:
         fr = frame_mod.detect_frame(rgb, m, cfg.cv)
+    if getattr(fr, "row_shift", None) is not None:  # дрейфующая лента (косой скан) — выпрямляем,
+        rgb = frame_mod.apply_row_shift(rgb, fr.row_shift)  # дальше ВСЁ в выпрямленных координатах
     prob = cfg.prob_provider(rgb) if cfg.prob_provider else None   # recall-модель, если задана
     sheet = understand_mod.understand(rgb, fr, m, cfg.cv, prob=prob)
     if read_ruler:

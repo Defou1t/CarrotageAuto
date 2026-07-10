@@ -256,6 +256,34 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
     # покрытие и периодичность НЕ разделяют, замер MK_190/STK_200). Только чёрный: метки
     # пишутся карандашом/тушью, цветное у края = кривая.
     excluded = []
+    # ПРЯМАЯ ЛИНОВКА/РЕФЕРЕНС-ВЕРТИКАЛЬ ЛЮБОГО ЦВЕТА на ленте (G2: DS_3280 красная x≈241):
+    # члены ЛОКАЛЬНО прямые при почти полном покрытии строк. Сырой x-std НЕ работает: линовка
+    # ДРЕЙФУЕТ с перекосом ленты (x-std 1.59 у DS-линовки ≈ выцветшая кривая 1.8) — поэтому
+    # ДЕТРЕНД: вычитаем скользящее среднее (окно 151 строк), остаток = локальная волнистость.
+    # Замер: линовка 0.34-0.36, метки-ось BK_2410 2.66, гладкая красная кривая MK_1380 4-18.
+    # Сдвиги на склейках рвут straight_max_band по полосе (3 куска x±10px) — судим ПО ЧЛЕНАМ.
+    if frame.diag.get("source") == "tape" and groups:
+        def _detr(s, win=151):
+            x = s["xs_row"][~np.isnan(s["xs_row"])]
+            if len(x) < 2 * win:                       # короткий штрих: дрейф мал, годится сырой std
+                return float(np.std(x)) if len(x) else 9.9
+            r = (x - np.convolve(x, np.ones(win) / win, mode="same"))[win // 2:-win // 2]
+            return float(np.std(r))
+        keep = []
+        for g in groups:
+            ms = g["members"]
+            _, prof = _row_profile(ms)
+            cov = float((~np.isnan(prof)).mean())
+            detr = float(np.median([_detr(s) for s in ms]))
+            if cov >= p.ruler_min_cov and detr <= p.ruler_max_detr:
+                xs_g = np.concatenate([s["xs_row"][~np.isnan(s["xs_row"])] for s in ms])
+                excluded.append({"track": track_index, "color": color, "reason": "ruler",
+                                 "x_center": round(float(np.median(xs_g)), 1),
+                                 "n_strokes": len(ms), "row_cov": round(cov, 2),
+                                 "detr_med": round(detr, 2)})
+            else:
+                keep.append(g)
+        groups = keep
     if frame.diag.get("source") == "tape" and color == "black" and groups:
         tr = frame.tracks[track_index]
         keep = []
