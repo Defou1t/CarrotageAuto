@@ -419,6 +419,18 @@ def _lines_for_track(rgb, frame, t, p, fg_full):
         lines_c, excl_c = _group_into_lines(insts, cmask, color, t.index, frame, p)
         track_lines += lines_c
         excluded += excl_c
+    # РУКОПИСЬ/АННОТАЦИЯ в зоне данных (см. config: annot_*): плотный (cov≥0.9) блок в крошечной
+    # (<15%) доле зоны данных = подпись/шапка-рукопись, НЕ кривая. Кривая пишется весь интервал;
+    # её выцветший фрагмент разрежен (cov мал) и выживает. Замер 11.07: бьёт только мусор
+    # (STK_4020 «замеры», BKZ_4020_4060 блок справа, STK+DS сниппет, BKZ_4020_4120 blue) — 0/15 у PASS.
+    kept = []
+    for L in track_lines:
+        if (L.y1 - L.y0) < p.annot_max_h_frac * track_h and L.row_cov >= p.annot_min_cov:
+            excluded.append({"reason": "annot", "color": L.color, "x_center": L.x_center,
+                             "y0": L.y0, "y1": L.y1, "row_cov": round(L.row_cov, 2)})
+        else:
+            kept.append(L)
+    track_lines = kept
     track_lines.sort(key=lambda L: L.x_center)
     return track_lines, excluded
 
