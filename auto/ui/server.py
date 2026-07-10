@@ -44,8 +44,15 @@ def _batch_worker(job, payload):
             u = res.get("understanding") or {}
             fr = (u.get("frame") or {})
             d = fr.get("diag") or {}
+            # гейт G2: число линий = ожиданию из имени; BKZ — диапазон 3..6 (mnemonics:
+            # планшет несёт ПОДМНОЖЕСТВО зондов, D1=GZ1-GZ3 / D2=GZ4-GZ5+OGZ)
+            n_exp = len(u.get("expected_curves") or [])
+            n_got = u.get("n_lines_total")
+            is_bkz = "BKZ" in (u.get("curves_token") or "")
+            gate = None if not n_exp else ((3 <= (n_got or 0) <= 6) if is_bkz
+                                           else (n_got == n_exp))
             row.update(ok=True, overlay=res.get("overlay"),
-                       n_lines=u.get("n_lines_total"),
+                       n_lines=n_got, n_expected=n_exp, gate=gate,
                        n_auto=res.get("n_auto"), n_flag=res.get("n_flag"),
                        source=d.get("source") or "frame",
                        low_confidence=bool(d.get("low_confidence")),

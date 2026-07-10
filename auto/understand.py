@@ -37,6 +37,10 @@ class Line:
     depth_end: Optional[float] = None
     n_levels_est: Optional[int] = None     # оценка переходов масштаба (уточняет scales.py)
     n_runs_med: float = 0.0                # медиана инк-ранов на строку в полосе (U2): ~1 одиночная / ≥2 пучок
+    row_cov: float = 0.0                   # доля строк y0..y1, покрытых чернилами (кривая ~непрерывна,
+    #                                        метки глубин/мусор — россыпь: G2-дискриминатор)
+    strokes_xstd_med: float = 9.9          # медиана x-std членов-штрихов: ось по линейке ~0.4px,
+    #                                        даже выцветшая кривая ≥1.8px (G2-замер Semeguniv)
     confidence: Optional[str] = None       # 'AUTO' | 'FLAG' (заполняет confidence.classify)
     flag_reason: Optional[str] = None
 
@@ -74,6 +78,7 @@ class Sheet:
                 "thickness": round(L.thickness, 1), "behavior": L.behavior,
                 "rough_n": L.rough_n, "n_strokes": L.n_strokes,
                 "n_runs_med": round(L.n_runs_med, 2),
+                "row_cov": round(L.row_cov, 2),
                 "n_levels_est": L.n_levels_est,
                 "confidence": L.confidence, "flag_reason": L.flag_reason,
             } for L in self.lines],
@@ -142,10 +147,71 @@ def _row_multiplicity(cmask, y0, y1, x_lo, x_hi, gap=4, max_rows=800):
     return float(np.median(counts)) if counts else 0.0
 
 
+def _row_profile(members):
+    """Абсолютный профиль x(row) группы штрихов: (y0, xs[]) — nan там, где чернил нет."""
+    y0 = min(s["row0"] for s in members)
+    y1 = max(s["row0"] + len(s["xs_row"]) for s in members)
+    prof = np.full(y1 - y0, np.nan)
+    for s in members:
+        v = ~np.isnan(s["xs_row"])
+        prof[np.nonzero(v)[0] + s["row0"] - y0] = s["xs_row"][v]
+    return y0, prof
+
+
+def _try_merge_drift(groups, track_h, p):
+    """ДРЕЙФУЮЩАЯ кривая режется x-сплитом на куски (G2-замер BKZ_3690: красная → 3 «линии» со
+    стыком y 5087/5088). Физика: сплит по x-долине легален, только если полосы КОНКУРИРУЮТ за одни
+    строки (две линии сосуществуют по глубине); куски одного цвета, НЕ пересекающиеся по строкам и
+    непрерывные по x на стыке — одна кривая. Слияние до фикспоинта."""
+    def profiles(g):
+        if "_prof" not in g:
+            g["_y0"], g["_prof"] = _row_profile(g["members"])
+        return g["_y0"], g["_prof"]
+
+    changed = True
+    while changed and len(groups) > 1:
+        changed = False
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                ga, gb = groups[i], groups[j]
+                ya, pa = profiles(ga); yb, pb = profiles(gb)
+                # конкуренция за строки: доля строк, покрытых ОБЕИМИ, от меньшего покрытия
+                lo = max(ya, yb); hi = min(ya + len(pa), yb + len(pb))
+                both = 0
+                if hi > lo:
+                    va = ~np.isnan(pa[lo - ya:hi - ya]); vb = ~np.isnan(pb[lo - yb:hi - yb])
+                    both = int((va & vb).sum())
+                na = int((~np.isnan(pa)).sum()); nb = int((~np.isnan(pb)).sum())
+                if both / max(1, min(na, nb)) >= p.drift_max_concur:
+                    continue
+                # порядок по глубине: A выше B (по медиане покрытых строк)
+                ra = ya + np.nonzero(~np.isnan(pa))[0]; rb = yb + np.nonzero(~np.isnan(pb))[0]
+                if np.median(ra) > np.median(rb):
+                    ga, gb = gb, ga; ra, rb = rb, ra
+                    ya, pa = profiles(ga); yb, pb = profiles(gb)
+                gap = int(rb.min() - ra.max())
+                if not (-0.02 * track_h <= gap <= p.drift_max_gap_frac * track_h):
+                    continue
+                # непрерывность x на стыке: хвост A ≈ голова B
+                k = 100
+                tail = pa[~np.isnan(pa)][-k:]; head = pb[~np.isnan(pb)][:k]
+                if abs(float(np.median(tail)) - float(np.median(head))) > p.drift_max_dx:
+                    continue
+                merged = {"members": ga["members"] + gb["members"]}
+                groups[i] = merged
+                del groups[j]
+                changed = True
+                break
+            if changed:
+                break
+    return groups
+
+
 def _group_into_lines(insts, cmask, color, track_index, frame, p):
     """Сгруппировать штрихи одного цвета в ЛИНИИ по x-полосам (band-детект, PLAN §6.6.11).
     Разнесённые (долина плотности) → отдельные линии ~1px; сбитый одноцветный пучок → 1 'multi'
-    линия (FLAG разрешает U2). Каждая линия — агрегат своих штрихов."""
+    линия (FLAG разрешает U2). Куски дрейфа склеиваются обратно (_try_merge_drift).
+    Каждая линия — агрегат своих штрихов."""
     if not insts:
         return []
     # столбцовая плотность чернил всех штрихов цвета (гистограмма x) → пики/долины = линии
@@ -163,7 +229,8 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
     cuts = sorted(lo + s[2] for s in splits)
     edges = [lo] + cuts + [hi]
     px_per_m = frame.px_per_m
-    lines = []
+    track_h = frame.bottom_y - frame.top_y
+    groups = []
     for a, b in zip(edges, edges[1:]):
         members = [s for s in insts if a <= float(np.nanmedian(s["xs_row"])) < b]
         if not members:
@@ -172,7 +239,7 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
         # отсев одиночных специй: вертикальное покрытие полосы должно быть выше шумового пола
         # (xs_m — по медиане x на строку, т.е. ~число покрытых строк). Реальная линия покрывает
         # заметную долю интервала; синий 1-штриховой артефакт ~10-40px — отсекаем.
-        cov_min = max(2 * p.min_line_h_px, int(p.min_line_cov_frac * (frame.bottom_y - frame.top_y)))
+        cov_min = max(2 * p.min_line_h_px, int(p.min_line_cov_frac * track_h))
         if len(xs_m) < cov_min:
             continue
         # ПРЯМАЯ референс/грань-вертикаль (x почти константа над cov-порогом) ≠ кривая (та варьирует x —
@@ -181,7 +248,19 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
         # синяя печатная вертикаль x394 band4). Реальная даже тонкая кривая виляет шире.
         if float(xs_m.max() - xs_m.min()) <= p.straight_max_band:
             continue
+        groups.append({"members": members})
+    groups = _try_merge_drift(groups, track_h, p)
+    lines = []
+    for g in groups:
+        members = g["members"]
+        xs_m = np.concatenate([s["xs_row"][~np.isnan(s["xs_row"])] for s in members])
         y0 = min(s["y0"] for s in members); y1 = max(s["y1"] for s in members)
+        # покрытие строк полосы (уникальные строки с чернилами / высота): кривая непрерывна (высоко),
+        # метки глубин/мусор — россыпь (низко). G2-дискриминатор, честная метрика для U2/фильтров.
+        covered = np.zeros(max(1, y1 - y0 + 1), bool)
+        for s in members:
+            vr = np.nonzero(~np.isnan(s["xs_row"]))[0] + s["row0"] - y0
+            covered[vr[(vr >= 0) & (vr < len(covered))]] = True
         # центр-трасса полосы = объединение штрихов (для поведения берём самый длинный)
         longest = max(members, key=lambda s: (~np.isnan(s["xs_row"])).sum())
         rn, beh = _behavior(longest["xs_row"], longest["row0"], px_per_m)
@@ -191,10 +270,14 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
                  thickness=float(np.median([s["thickness"] for s in members])),
                  rough_n=rn, behavior=beh, n_strokes=len(members),
                  density=float(hist[max(0, int(np.median(xs_m)) - lo)]))
+        L.row_cov = float(covered.mean())
+        L.strokes_xstd_med = float(np.median(
+            [np.std(s["xs_row"][~np.isnan(s["xs_row"])]) for s in members]))
         L.n_runs_med = _row_multiplicity(cmask, y0, y1, L.x_lo, L.x_hi)
         if px_per_m:
             L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)
         lines.append(L)
+    lines.sort(key=lambda L: L.x_center)
     return lines
 
 
@@ -223,9 +306,27 @@ def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
         for color, cmask in chans.items():
             insts = _instances(cmask, color, t.index, min_h)
             track_lines += _group_into_lines(insts, cmask, color, t.index, frame, p)
+        # ЛЕНТЫ: ось-вертикаль с прицепленными рукописными МЕТКАМИ ГЛУБИН у ЛЕВОГО края трека
+        # ловится как «линия» (G2, ROADMAP §8а: BK_2410 x≈114, 57 штрихов, покрытие 24%).
+        # Дискриминатор-ключ: члены кластера ПОЧТИ ИДЕАЛЬНО ПРЯМЫЕ (ось по линейке, x-std med
+        # ~0.4px) — даже сильно выцветшая кривая виляет ≥1.8px (замер MK_190/STK_200: покрытие и
+        # периодичность НЕ разделяют — выцветшие кривые у края выглядят так же; прямизна разделяет).
+        # Только чёрный: метки пишутся карандашом/тушью, цветная линия у края = кривая.
+        if frame.diag.get("source") == "tape":
+            marks = [L for L in track_lines
+                     if L.color == "black"
+                     and (L.x_center - t.x_left) < p.marks_left_frac * max(1, t.width)
+                     and L.row_cov < p.marks_max_cov and L.n_strokes >= p.marks_min_strokes
+                     and L.strokes_xstd_med <= p.marks_max_xstd]
+            if marks:
+                track_lines = [L for L in track_lines if L not in marks]
+                sheet.diag.setdefault("excluded_marks", []).extend(
+                    {"track": t.index, "color": L.color, "x_center": round(L.x_center, 1),
+                     "n_strokes": L.n_strokes, "row_cov": round(L.row_cov, 2),
+                     "xstd_med": round(L.strokes_xstd_med, 2)} for L in marks)
         track_lines.sort(key=lambda L: L.x_center)
         sheet.per_track[t.index] = len(track_lines)
         sheet.lines += track_lines
-    sheet.diag = {"n_tracks": len(frame.tracks), "prob_used": prob is not None,
-                  "expected_n_curves": len(getattr(meta, "expected_curves", []) or [])}
+    sheet.diag.update({"n_tracks": len(frame.tracks), "prob_used": prob is not None,
+                       "expected_n_curves": len(getattr(meta, "expected_curves", []) or [])})
     return sheet

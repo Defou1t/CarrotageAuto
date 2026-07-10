@@ -201,7 +201,16 @@ def detect_tape(rgb, meta=None, p=None):
     zr = _tape_edge_zone(colfrac, W, "R")
     periodic = ((zl is not None and _tape_periodic_holes(very_dark, 0, zl + 1)) or
                 (zr is not None and _tape_periodic_holes(very_dark, zr, W)))
-    if not periodic:
+    # Запасной триггер (perf НЕ подтверждена, но геометрия ленты однозначна): тёмные краевые зоны
+    # С ОБЕИХ сторон + СВЕТЛАЯ середина (данные, не сплошь-тёмный скан) + нет вертикалей рамки (гейт
+    # в detect_frame). Замер Semeguniv 10.07: DS/MK/RK/BKZ имеют zl&zr, interiorMed 0.002-0.014 — это
+    # ленты, но дырки бледные/нерегулярные и периодичность не ловится → 7/22 падали в «весь лист».
+    # Защита от сплошь-тёмного скана (BK_190: colfrac~0.97) — середина обязана быть светлой (<0.25).
+    two_sided = False
+    if not periodic and zl is not None and zr is not None and zr - zl > 0.3 * W:
+        interior = float(np.median(colfrac[zl + 3:zr - 3])) if zr - 3 > zl + 3 else 1.0
+        two_sided = interior < 0.25
+    if not periodic and not two_sided:
         return None
     x0 = (zl + 9) if zl is not None else 10
     x1 = (zr - 8) if zr is not None else W - 10
@@ -215,6 +224,7 @@ def detect_tape(rgb, meta=None, p=None):
                tracks=[Track(x0, x1, 0)], top_depth=td, bottom_depth=bd,
                grid_period_px=period, grid_ys=gys,
                diag={"source": "tape", "n_tracks": 1, "perf_left": zl, "perf_right": zr,
+                     "perf_confirmed": bool(periodic),
                      "data_blocks_frac": round(ok_frac, 2),
                      "depth_from_filename": td is not None})
     # честность: длина данных должна сходиться с интервалом из имени (px/m в приоре масштаба)

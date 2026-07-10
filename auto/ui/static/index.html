@@ -211,13 +211,14 @@ function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;"
 function renderBatch(job){
   const rows = job.rows.map((r,i)=>{
     const cls = !r.ok ? "bad" : (r.low_confidence ? "lowc" : "");
+    const gate = r.gate==null ? "" : (r.gate ? '<span class="pill ok">G2</span>' : '<span class="pill warn">G2✗</span>');
     const cells = r.ok
-      ? `<td>${r.n_lines??""}</td><td>${r.n_auto??""}/${r.n_flag??""}</td><td>${r.px_per_m??""}</td>`
+      ? `<td>${r.n_lines??""}${r.n_expected?`/${r.n_expected}`:""} ${gate}</td><td>${r.n_auto??""}/${r.n_flag??""}</td><td>${r.px_per_m??""}</td>`
         + `<td>${r.low_confidence?'<span class="pill warn">FLAG</span>':'<span class="pill ok">ok</span>'} ${esc(r.advise||"")}</td>`
       : `<td colspan="4">${esc(r.error)}</td>`;
     return `<tr class="${cls}" data-i="${i}"><td>${esc(r.file)}</td>${cells}</tr>`;
   }).join("");
-  const head = "<tr><th>файл</th><th>линий</th><th>AUTO/FLAG</th><th>px/м</th><th>рамка</th></tr>";
+  const head = "<tr><th>файл</th><th>линий/ожид</th><th>AUTO/FLAG</th><th>px/м</th><th>рамка</th></tr>";
   $("ovlbox").innerHTML = `<table class="batch">${head}${rows}</table><div id="batchovl"></div>`;
   document.querySelectorAll("table.batch tr[data-i]").forEach(tr=>{
     tr.onclick = ()=>{
