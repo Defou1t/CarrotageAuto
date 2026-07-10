@@ -285,7 +285,9 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
                 keep.append(g)
         groups = keep
     if frame.diag.get("source") == "tape" and color == "black" and groups:
-        tr = frame.tracks[track_index]
+        # Ось+метки валидны НЕ только слева: на двухколоночных лентах-планшетах колонка меток
+        # стоит ПОСЕРЕДИНЕ (BKZ_4020_4120: x≈580 из 1212) и является РАЗДЕЛИТЕЛЕМ колонок —
+        # understand() по reason='marks' в середине расщепляет трек. Критерии без x-ограничения.
         keep = []
         for g in groups:
             ms = g["members"]
@@ -294,10 +296,9 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
             xc = float(np.median(xs_g))
             cov = float((~np.isnan(prof)).mean())
             xstd = float(np.median([np.std(s["xs_row"][~np.isnan(s["xs_row"])]) for s in ms]))
-            if ((xc - tr.x_left) < p.marks_left_frac * max(1, tr.width)
-                    and cov < p.marks_max_cov and len(ms) >= p.marks_min_strokes
+            if (cov < p.marks_max_cov and len(ms) >= p.marks_min_strokes
                     and xstd <= p.marks_max_xstd):
-                excluded.append({"track": track_index, "color": color,
+                excluded.append({"track": track_index, "color": color, "reason": "marks",
                                  "x_center": round(xc, 1), "n_strokes": len(ms),
                                  "row_cov": round(cov, 2), "xstd_med": round(xstd, 2)})
             else:
@@ -351,37 +352,119 @@ def _group_into_lines(insts, cmask, color, track_index, frame, p):
     return lines, excluded
 
 
+def _mid_labels_split(rgb, frame, t, p, fg_full):
+    """Двухколоночная лента-планшет: x разделителя колонок или None.
+    Разделитель = широкая ПУСТАЯ долина чернил в середине трека (обе колонки массивны)
+    + в долине КОРОТКИЕ dark-блобы (рукописные метки глубин 15..60px — ниже min_h инстансов,
+    поэтому marks-фильтр групп их не видит: BKZ_4020_4120, метки x≈580 без оси)."""
+    x0, x1 = t.x_left, t.x_right
+    W = x1 - x0
+    if W < 300:
+        return None
+    col = fg_full[frame.top_y:frame.bottom_y, x0:x1].astype(np.float64).sum(0)
+    col = np.convolve(col, np.ones(15) / 15, mode="same")
+    med = float(np.median(col[col > 0])) or 1.0
+    # 0.25: долина неидеально пуста — остатки сетки/меток (замер BKZ_4020_4120: 0.11×med)
+    lo_zone = col < 0.25 * med
+    # самые длинные пустые прогоны в центре 0.25..0.75 ширины
+    runs, start = [], None
+    for i, v in enumerate(lo_zone):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            runs.append((start, i)); start = None
+    if start is not None:
+        runs.append((start, len(lo_zone)))
+    total = float(col.sum()) or 1.0
+    for a, b in sorted(runs, key=lambda r: r[1] - r[0], reverse=True):
+        if b - a < 40:
+            break
+        xm = (a + b) // 2
+        if not (0.25 * W < xm < 0.75 * W):
+            continue
+        left_mass = float(col[:a].sum()) / total
+        right_mass = float(col[b:].sum()) / total
+        if left_mass < 0.25 or right_mass < 0.25:
+            continue
+        # метки У долины (±60px: бывают прижаты к колонке — BKZ_4020_4120 метки левее провала):
+        # короткие тёмные блобы (высота 12..60px, ниже min_h инстансов)
+        band = im.dark_mask(rgb, p)[frame.top_y:frame.bottom_y,
+                                    max(x0, x0 + a - 60):min(x1, x0 + b + 60)]
+        n, _, stats, _ = __import__("cv2").connectedComponentsWithStats(
+            band.astype(np.uint8), connectivity=8)
+        labels = sum(1 for i2 in range(1, n)
+                     if 12 <= stats[i2, 3] <= 60 and stats[i2, 4] >= 25)
+        if labels >= 5:
+            return x0 + xm
+    return None
+
+
+def _lines_for_track(rgb, frame, t, p, fg_full):
+    """Полный разбор одного трека: каналы → инстансы → линии. (track_lines, excluded)."""
+    track_h = frame.bottom_y - frame.top_y
+    # ПОЛ шума, не доля огромной высоты: clip(доля, пол, потолок) — иначе на полосе ~20000px
+    # min_h≈800 отсекает ВСЕ фрагменты пиковой кривой (баг калибровки, найден на Yatskivska).
+    min_h = int(np.clip(p.min_line_h_frac * track_h, p.min_line_h_px, p.min_line_h_cap))
+    sub = np.zeros(rgb.shape[:2], bool)
+    sub[frame.top_y:frame.bottom_y, t.x_left:t.x_right] = True
+    # цветовые каналы + чёрный, ограниченные телом трека и передним планом
+    chans = {**{c: m & sub & (fg_full > 0) for c, m in im.color_channels(rgb, p).items()}}
+    dark = im.dark_mask(rgb, p) & sub & (fg_full > 0)
+    for cm in chans.values():
+        dark = dark & ~cm                                   # чёрный = тёмное минус цветное
+    chans["black"] = dark
+    track_lines, excluded = [], []
+    for color, cmask in chans.items():
+        insts = _instances(cmask, color, t.index, min_h)
+        lines_c, excl_c = _group_into_lines(insts, cmask, color, t.index, frame, p)
+        track_lines += lines_c
+        excluded += excl_c
+    track_lines.sort(key=lambda L: L.x_center)
+    return track_lines, excluded
+
+
 def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
     """Главная точка U1: RGB + Frame (U0) → Sheet (сколько линий, их свойства, оценка уровней)."""
     from .config import DEFAULT
+    from .frame import Track
     p = p or DEFAULT.cv
     if prob is None and DEFAULT.prob_provider is not None:
         prob = DEFAULT.prob_provider(rgb)
     sheet = Sheet(meta=meta, frame=frame)
     fg_full = im.ink_foreground(rgb, p, prob=prob)
-    for t in frame.tracks:
-        track_h = frame.bottom_y - frame.top_y
-        # ПОЛ шума, не доля огромной высоты: clip(доля, пол, потолок) — иначе на полосе ~20000px
-        # min_h≈800 отсекает ВСЕ фрагменты пиковой кривой (баг калибровки, найден на Yatskivska).
-        min_h = int(np.clip(p.min_line_h_frac * track_h, p.min_line_h_px, p.min_line_h_cap))
-        sub = np.zeros(rgb.shape[:2], bool)
-        sub[frame.top_y:frame.bottom_y, t.x_left:t.x_right] = True
-        # цветовые каналы + чёрный, ограниченные телом трека и передним планом
-        chans = {**{c: m & sub & (fg_full > 0) for c, m in im.color_channels(rgb, p).items()}}
-        dark = im.dark_mask(rgb, p) & sub & (fg_full > 0)
-        for cm in chans.values():
-            dark = dark & ~cm                                   # чёрный = тёмное минус цветное
-        chans["black"] = dark
-        track_lines = []
-        for color, cmask in chans.items():
-            insts = _instances(cmask, color, t.index, min_h)
-            lines_c, excl_c = _group_into_lines(insts, cmask, color, t.index, frame, p)
-            track_lines += lines_c
-            if excl_c:      # ось+метки глубин, исключённые на уровне групп (см. _group_into_lines)
-                sheet.diag.setdefault("excluded_marks", []).extend(excl_c)
-        track_lines.sort(key=lambda L: L.x_center)
+    tracks = list(frame.tracks)
+    n_splits = 0
+    i = 0
+    while i < len(tracks):
+        t = tracks[i]
+        t.index = i
+        frame.tracks = tracks               # актуальная геометрия для marks-фильтра внутри групп
+        track_lines, excluded = _lines_for_track(rgb, frame, t, p, fg_full)
+        # ДВУХКОЛОНОЧНАЯ лента-планшет (BKZ_4020_4120: два набора кривых, колонка рукописных
+        # МЕТОК ГЛУБИН посередине x≈580/1212): ось-метки в СЕРЕДИНЕ трека = разделитель колонок
+        # → расщепить трек и разобрать колонки НЕЗАВИСИМО (микс колонок даёт ложные пучки/счёт).
+        mid = None
+        if frame.diag.get("source") == "tape" and n_splits < 2 and t.width > 300:
+            for e in excluded:
+                if e.get("reason") != "marks":
+                    continue
+                rel = (e["x_center"] - t.x_left) / max(1, t.width)
+                if 0.30 < rel < 0.70:
+                    mid = int(e["x_center"]); break
+            if mid is None:     # метки без оси — короче min_h, ищем долину+блобы напрямую
+                mid = _mid_labels_split(rgb, frame, t, p, fg_full)
+        if mid:
+            pad = 15
+            tracks[i:i + 1] = [Track(t.x_left, mid - pad, i), Track(mid + pad, t.x_right, i + 1)]
+            n_splits += 1
+            sheet.diag.setdefault("track_splits", []).append({"x": mid, "reason": "mid_marks"})
+            continue                        # перерасбор обеих колонок с этого же i
+        if excluded:
+            sheet.diag.setdefault("excluded_marks", []).extend(excluded)
         sheet.per_track[t.index] = len(track_lines)
         sheet.lines += track_lines
+        i += 1
+    frame.tracks = tracks
     sheet.diag.update({"n_tracks": len(frame.tracks), "prob_used": prob is not None,
                        "expected_n_curves": len(getattr(meta, "expected_curves", []) or [])})
     return sheet
