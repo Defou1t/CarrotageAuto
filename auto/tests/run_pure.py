@@ -60,30 +60,35 @@ def test_confidence():
         def __init__(s, lines):
             s.lines = lines; s.diag = {}
 
+    # Правило: ЦВЕТО-УНИКАЛЬНАЯ линия (единственная своего цвета в треке) → всегда AUTO (цвет
+    # задаёт идентичность). faint/bunched-по-ранам срабатывают ТОЛЬКО при одноцветном соседе.
     lines = [
+        # track0: red одиночная smooth (SP) + пара black-пучок + пара green (одна faint)
         L(track_index=0, color="red", behavior="smooth", density=50, thickness=2, x_lo=100, x_hi=120, n_strokes=1, n_levels_est=1),
         L(track_index=0, color="black", behavior="peaky", density=40, thickness=2, x_lo=200, x_hi=240, n_strokes=4, n_levels_est=1),
         L(track_index=0, color="black", behavior="peaky", density=38, thickness=2, x_lo=235, x_hi=275, n_strokes=4, n_levels_est=1),
         L(track_index=0, color="green", behavior="peaky", density=3, thickness=1, x_lo=300, x_hi=320, n_strokes=2, n_levels_est=1),
-        # одиночная ШИРОКАЯ пиковая (DT акустики): band велик, но ~1 ран/строку → AUTO (не пучок)
+        L(track_index=0, color="green", behavior="peaky", density=50, thickness=2, x_lo=360, x_hi=385, n_strokes=4, n_levels_est=1),
+        # одиночная ШИРОКАЯ пиковая (DT): band велик, но цвето-уникальная → AUTO
         L(track_index=1, color="black", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=1.0),
-        # ЦВЕТО-УНИКАЛЬНАЯ пиковая с n_runs~2 (резкий зигзаг, STK PZ/SP): цвет задаёт идентичность → AUTO
+        # цвето-уникальная зигзаг n_runs~2 (STK PZ/SP) → AUTO
         L(track_index=2, color="orange", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=2.0),
-        # ДВЕ одноцветные с n_runs~2 в одном треке = реальный схлопнутый пучок → обе FLAG
+        # цвето-уникальная даже n_runs≥3 (резкая SP) → AUTO
+        L(track_index=2, color="red", behavior="peaky", density=40, thickness=5, x_lo=400, x_hi=600, n_strokes=20, n_levels_est=1, n_runs_med=3.0),
+        # ДВЕ одноцветные n_runs~2 в одном треке = реальный пучок → обе FLAG
         L(track_index=3, color="black", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=2.0),
         L(track_index=3, color="black", behavior="peaky", density=40, thickness=5, x_lo=110, x_hi=350, n_strokes=20, n_levels_est=1, n_runs_med=2.0),
-        # ≥3 рана/строку — многожильный пучок ДАЖЕ цвето-уникальный → FLAG
-        L(track_index=4, color="green", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=3.0),
     ]
     CF.classify(Sheet(lines))
-    check("SP smooth → AUTO", lines[0].confidence == "AUTO", lines[0].confidence)
+    check("SP smooth цвето-уник → AUTO", lines[0].confidence == "AUTO", lines[0].confidence)
     check("пучок A → FLAG bunched", lines[1].confidence == "FLAG" and lines[1].flag_reason == "bunched_crossing", (lines[1].confidence, lines[1].flag_reason))
     check("пучок B → FLAG bunched", lines[2].confidence == "FLAG" and lines[2].flag_reason == "bunched_crossing", (lines[2].confidence, lines[2].flag_reason))
-    check("выцветшая → FLAG faint", lines[3].confidence == "FLAG" and lines[3].flag_reason == "faint", (lines[3].confidence, lines[3].flag_reason))
-    check("одиночная широкая (1 ран/стр) → AUTO", lines[4].confidence == "AUTO", (lines[4].confidence, lines[4].flag_reason))
-    check("цвето-уникальная зигзаг (≥2/стр) → AUTO", lines[5].confidence == "AUTO", (lines[5].confidence, lines[5].flag_reason))
-    check("две одноцветные (≥2/стр) → FLAG", lines[6].confidence == "FLAG" and lines[7].confidence == "FLAG", (lines[6].confidence, lines[7].confidence))
-    check("≥3 ран/стр цвето-уникальный → FLAG", lines[8].confidence == "FLAG" and lines[8].flag_reason == "bunched_crossing", (lines[8].confidence, lines[8].flag_reason))
+    check("выцветшая с одноцв.соседом → FLAG faint", lines[3].confidence == "FLAG" and lines[3].flag_reason == "faint", (lines[3].confidence, lines[3].flag_reason))
+    check("яркая зелёная сосед → AUTO", lines[4].confidence == "AUTO", (lines[4].confidence, lines[4].flag_reason))
+    check("одиночная широкая (1 ран/стр) → AUTO", lines[5].confidence == "AUTO", (lines[5].confidence, lines[5].flag_reason))
+    check("цвето-уник зигзаг (≥2/стр) → AUTO", lines[6].confidence == "AUTO", (lines[6].confidence, lines[6].flag_reason))
+    check("цвето-уник (≥3/стр) → AUTO", lines[7].confidence == "AUTO", (lines[7].confidence, lines[7].flag_reason))
+    check("две одноцветные (≥2/стр) → FLAG", lines[8].confidence == "FLAG" and lines[9].confidence == "FLAG", (lines[8].confidence, lines[9].confidence))
 
 
 def main():

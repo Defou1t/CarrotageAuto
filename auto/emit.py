@@ -114,12 +114,15 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path):
         pairs = []
         for s in tslots:
             for L, tr in tlines:
-                color_ok = (s["color"] is None) or (s["color"] == L.color)
+                # СТРОГИЙ цвет: слот с заданным цветом берёт ТОЛЬКО линию того же цвета. Иначе
+                # чёрная PZ влезала в красный SP-слот (STK_4020: «SP оцифрован чёрным»). Слот без
+                # цвета (color=None) — по классу. Линия без своего слота остаётся неназначенной
+                # (нет PZ-слота → PZ не выдаётся, честно; эксперт добавит слот).
+                if s["color"] is not None and s["color"] != L.color:
+                    continue
                 cls = "SP" if L.behavior == "smooth" else "RES"
                 class_ok = (s["class"] in (cls, "OTHER", "CALI"))
-                score = (0 if color_ok else 2) + (0 if class_ok else 1)
-                if score < 3:
-                    pairs.append((score, s, L, tr))
+                pairs.append((0 if class_ok else 1, s, L, tr))
         pairs.sort(key=lambda q: (q[0], q[2].x_center))
         taken_slots = set()
         for score, s, L, tr in pairs:

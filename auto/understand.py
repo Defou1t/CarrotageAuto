@@ -415,7 +415,12 @@ def _lines_for_track(rgb, frame, t, p, fg_full):
     chans["black"] = dark
     track_lines, excluded = [], []
     for color, cmask in chans.items():
-        insts = _instances(cmask, color, t.index, min_h)
+        # ЦВЕТНЫЕ каналы малошумны (цвет — уже фильтр): разреженная/пунктирная кривая (SP2 оранж,
+        # выцветшая GZ зелёная) дробится на штрихи <min_h и терялась вверху (STK_4020: оранж стартовал
+        # 4045 вместо 4015). Для цветных — низкий пол min_h, чтобы удержать фрагменты; чёрный
+        # (шумный: сетка/текст) держит высокий порог.
+        mh = min_h if color == "black" else p.min_line_h_color
+        insts = _instances(cmask, color, t.index, mh)
         lines_c, excl_c = _group_into_lines(insts, cmask, color, t.index, frame, p)
         track_lines += lines_c
         excluded += excl_c

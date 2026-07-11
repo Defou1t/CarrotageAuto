@@ -64,11 +64,14 @@ def classify(sheet, cp: ConfParams = None):
             # слипание (STK: чёрная PZ / красная SP разделены цветом, трасса 100% on-ink). Реальный
             # СХЛОПНУТЫЙ пучок цвето-уникальным не бывает и/или даёт n_runs≥3.
             color_unique = color_count.get(L.color, 0) == 1
-            if L.density < cp.faint_rel_density * med:
-                reason = "faint"                          # выцветшая ниже пола плотности
+            if L.density < cp.faint_rel_density * med and not color_unique:
+                # выцветшая ниже пола плотности — FLAG, НО не для цвето-уникальной: цвет задаёт
+                # идентичность, бледная зелёная GZ / оранжевая SP2 всё равно трассируются (STK_4020).
+                reason = "faint"
             elif id(L) in bunched:
                 reason = "bunched_crossing"               # сбитый одноцветный пучок
-            elif (getattr(L, "n_runs_med", 0) or 0) >= cp.bunch_hard_multiplicity:
+            elif ((getattr(L, "n_runs_med", 0) or 0) >= cp.bunch_hard_multiplicity
+                  and not color_unique):
                 reason = "bunched_crossing"               # ≥3 рана/строку — плотный многожильный пучок
             elif ((getattr(L, "n_runs_med", 0) or 0) >= cp.bunch_multiplicity
                   and not color_unique):
