@@ -22,7 +22,8 @@ from dataclasses import dataclass
 @dataclass
 class ConfParams:
     bunch_overlap_px: float = 10.0     # перекрытие x-полос РАЗДЕЛЬНЫХ одноцветных пиковых = пучок
-    bunch_multiplicity: float = 1.5    # медиана инк-ранов на строку ≥ этого = схлопнутый пучок
+    bunch_multiplicity: float = 1.5    # медиана инк-ранов ≥ этого + одноцветный сосед = пучок
+    bunch_hard_multiplicity: float = 3.0  # ≥3 ранов/строку = многожильный пучок ДАЖЕ цвето-уникальный
     faint_rel_density: float = 0.18    # плотность < доля медианы трека = выцветшая
     multiwrap_levels: int = 3          # ≥ столько уровней = мульти-оборот → FLAG
 
@@ -45,6 +46,9 @@ def classify(sheet, cp: ConfParams = None):
     n_auto = n_flag = 0
     for t, group in by_track.items():
         med = track_med_density[t] or 1.0
+        color_count = {}                                  # сколько линий каждого цвета в треке
+        for L in group:
+            color_count[L.color] = color_count.get(L.color, 0) + 1
         # сбитый пучок: одноцветные пиковые с перекрытием x-полос
         bunched = set()
         for color in {L.color for L in group}:
@@ -55,16 +59,22 @@ def classify(sheet, cp: ConfParams = None):
                         bunched.add(id(same[i])); bunched.add(id(same[j]))
         for L in group:
             reason = None
+            # ЦВЕТО-УНИКАЛЬНАЯ линия: цвет ОДНОЗНАЧНО задаёт идентичность (durable: цвето-уникальная
+            # → AUTO). n_runs~2 у неё = резкий ЗИГЗАГ одиночной кривой (2 рана на развороте), а НЕ
+            # слипание (STK: чёрная PZ / красная SP разделены цветом, трасса 100% on-ink). Реальный
+            # СХЛОПНУТЫЙ пучок цвето-уникальным не бывает и/или даёт n_runs≥3.
+            color_unique = color_count.get(L.color, 0) == 1
             if L.density < cp.faint_rel_density * med:
                 reason = "faint"                          # выцветшая ниже пола плотности
             elif id(L) in bunched:
                 reason = "bunched_crossing"               # сбитый одноцветный пучок
-            elif (getattr(L, "n_runs_med", 0) or 0) >= cp.bunch_multiplicity:
-                # СХЛОПНУТЫЙ пучок: ≥~2 инк-рана на строку в полосе = физически несколько штрихов
-                # (пересекающиеся кривые). ОДИНОЧНАЯ широкая пиковая (DT акустики: band велик ОТ
-                # РАЗМАХА, но в строке один штрих) даёт ~1 ран → AUTO. Поле U1, НЕ порог band/толщина
-                # (durable: «одиночная широкая ≠ пучок»; цвет не нужен — две наложенные одноцветные
-                # тоже дадут ≥2 рана и честно уйдут в FLAG, чего цвето-гейт бы не различил).
+            elif (getattr(L, "n_runs_med", 0) or 0) >= cp.bunch_hard_multiplicity:
+                reason = "bunched_crossing"               # ≥3 рана/строку — плотный многожильный пучок
+            elif ((getattr(L, "n_runs_med", 0) or 0) >= cp.bunch_multiplicity
+                  and not color_unique):
+                # СХЛОПНУТЫЙ пучок: ≥~2 инк-рана на строку в полосе И есть одноцветный сосед =
+                # физически несколько штрихов одного цвета (идентичность неоднозначна). Одиночная
+                # цвето-уникальная с n_runs~2 (резкий зигзаг) → AUTO: color pins identity.
                 reason = "bunched_crossing"
             elif (L.n_levels_est or 0) >= cp.multiwrap_levels:
                 reason = "multiwrap"

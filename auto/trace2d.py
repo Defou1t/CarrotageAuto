@@ -56,7 +56,29 @@ def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14):
         else:
             nx = c
         v = 0.6 * v + 0.4 * (nx - x); x = nx; tr[y] = float(nx)
+    _extend_ends(tr, fg, lo, hi, slmax)
     return tr
+
+
+def _extend_ends(tr, fg, lo, hi, slmax, max_gap=25):
+    """Доводка трассы за [y0,y1] по СВЯЗНОМУ чернилу цвета (G4/BK_4020: верхний заход кривой
+    4017-4020 терялся при группировке — линия стартовала на 4020). Идём от края вверх/вниз,
+    садимся на ближайший к предсказанию ран, стоп после max_gap пустых строк подряд."""
+    H = fg.shape[0]
+    if not tr:
+        return
+    for direction in (-1, +1):
+        y0 = min(tr) if direction < 0 else max(tr)
+        x = tr[y0]; gap = 0; y = y0 + direction
+        while 0 <= y < H and gap <= max_gap:
+            runs = im.row_runs(fg[y, lo:hi])
+            if not runs:
+                gap += 1; y += direction; continue
+            runs = [(a + lo, b + lo, c + lo) for a, b, c in runs]
+            a, b, c = min(runs, key=lambda r: abs(r[2] - x))
+            if abs(c - x) > slmax + (b - a):        # разрыв идентичности — не тянем на соседа
+                break
+            x = c; tr[y] = float(c); gap = 0; y += direction
 
 
 def trace_auto(rgb, sheet, p=None):

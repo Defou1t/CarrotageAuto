@@ -67,8 +67,13 @@ def test_confidence():
         L(track_index=0, color="green", behavior="peaky", density=3, thickness=1, x_lo=300, x_hi=320, n_strokes=2, n_levels_est=1),
         # одиночная ШИРОКАЯ пиковая (DT акустики): band велик, но ~1 ран/строку → AUTO (не пучок)
         L(track_index=1, color="black", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=1.0),
-        # сбитый пучок по РАНАМ: ≥2 ран/строку → FLAG (хотя один инстанс)
-        L(track_index=2, color="black", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=2.0),
+        # ЦВЕТО-УНИКАЛЬНАЯ пиковая с n_runs~2 (резкий зигзаг, STK PZ/SP): цвет задаёт идентичность → AUTO
+        L(track_index=2, color="orange", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=2.0),
+        # ДВЕ одноцветные с n_runs~2 в одном треке = реальный схлопнутый пучок → обе FLAG
+        L(track_index=3, color="black", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=2.0),
+        L(track_index=3, color="black", behavior="peaky", density=40, thickness=5, x_lo=110, x_hi=350, n_strokes=20, n_levels_est=1, n_runs_med=2.0),
+        # ≥3 рана/строку — многожильный пучок ДАЖЕ цвето-уникальный → FLAG
+        L(track_index=4, color="green", behavior="peaky", density=40, thickness=5, x_lo=100, x_hi=340, n_strokes=20, n_levels_est=1, n_runs_med=3.0),
     ]
     CF.classify(Sheet(lines))
     check("SP smooth → AUTO", lines[0].confidence == "AUTO", lines[0].confidence)
@@ -76,7 +81,9 @@ def test_confidence():
     check("пучок B → FLAG bunched", lines[2].confidence == "FLAG" and lines[2].flag_reason == "bunched_crossing", (lines[2].confidence, lines[2].flag_reason))
     check("выцветшая → FLAG faint", lines[3].confidence == "FLAG" and lines[3].flag_reason == "faint", (lines[3].confidence, lines[3].flag_reason))
     check("одиночная широкая (1 ран/стр) → AUTO", lines[4].confidence == "AUTO", (lines[4].confidence, lines[4].flag_reason))
-    check("пучок по ранам (≥2/стр) → FLAG", lines[5].confidence == "FLAG" and lines[5].flag_reason == "bunched_crossing", (lines[5].confidence, lines[5].flag_reason))
+    check("цвето-уникальная зигзаг (≥2/стр) → AUTO", lines[5].confidence == "AUTO", (lines[5].confidence, lines[5].flag_reason))
+    check("две одноцветные (≥2/стр) → FLAG", lines[6].confidence == "FLAG" and lines[7].confidence == "FLAG", (lines[6].confidence, lines[7].confidence))
+    check("≥3 ран/стр цвето-уникальный → FLAG", lines[8].confidence == "FLAG" and lines[8].flag_reason == "bunched_crossing", (lines[8].confidence, lines[8].flag_reason))
 
 
 def main():
