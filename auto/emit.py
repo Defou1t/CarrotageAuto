@@ -130,6 +130,38 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path):
     return mapping
 
 
+def _level_segments(tr, model, curve, top_y, n):
+    """Уровни-перевыносы (×5/×25) из НАШЕЙ трассы через decode_levels, если каркас несёт цепочку
+    масштабов (base→next). Возвращает (tops, bottoms, levels) для тегов 35494/35496/35498.
+    Одношкальный каркас / не-резистивная кривая → один сегмент level 0 (текущее поведение).
+    5х-переход декодируется, ТОЛЬКО когда эксперт задал 5х-шкалу в каркасе (как в Archive BKZ)."""
+    single = ([int(top_y)], [int(top_y + n - 1)], [0])
+    try:
+        import decode_levels as DL
+        if not DL.is_resistive(curve["name"]):
+            return single
+        fam = DL.build_family(model, curve)
+        if len(fam) < 2:
+            return single
+        xs_by_row = {y: float(x) for y, x in tr.items()}
+        lv = DL.decode(xs_by_row, fam)                 # row → level
+        if not lv:
+            return single
+        # сегменты по СМЕНЕ УРОВНЯ, НЕ по разрывам строк (пропуски внутри уровня = NULL в xs).
+        # Незаданные строки наследуют последний уровень — сегмент непрерывен по глубине.
+        tops, bots, levs = [], [], []
+        last = lv.get(top_y, 0); s = top_y
+        for y in range(top_y + 1, top_y + n):
+            cur = lv.get(y, last)
+            if cur != last:
+                tops.append(s); bots.append(y - 1); levs.append(int(last))
+                s = y; last = cur
+        tops.append(s); bots.append(top_y + n - 1); levs.append(int(last))
+        return tops, bots, levs
+    except Exception:
+        return single
+
+
 def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                     image=None, las=False):
     """Инъекция AUTO-трасс в лёгкую рамку NeuraLOG → _auto.nlgx(+bck). Рамка НЕ фабрикуется."""
@@ -166,10 +198,11 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
             continue
         k = idxs[0]
         set_tag(ifds, k, 35490, 4, new_xs)
-        # одношкальный сегмент level 0 (значения/уровни — эксперт в NeuraLOG, §6.6.9);
-        # без 35492>0 NeuraLOG НЕ рисует кривую.
-        set_tag(ifds, k, 35492, 4, [1]); set_tag(ifds, k, 35494, 4, [int(top_y)])
-        set_tag(ifds, k, 35496, 4, [int(top_y + n - 1)]); set_tag(ifds, k, 35498, 4, [0])
+        # сегменты масштаба: decode_levels раскладывает 5х-перевыносы, ЕСЛИ каркас несёт цепочку
+        # масштабов (base→next); иначе один сегмент level 0. Без 35492>0 NeuraLOG НЕ рисует кривую.
+        tops, bots, levs = _level_segments(tr, model, c, top_y, n)
+        set_tag(ifds, k, 35492, 4, [len(tops)]); set_tag(ifds, k, 35494, 4, tops)
+        set_tag(ifds, k, 35496, 4, bots); set_tag(ifds, k, 35498, 4, levs)
         vx = [(i, x) for i, x in enumerate(new_xs) if x != NULL]
         rws = [top_y + i for i, _ in vx]; xsv = [x for _, x in vx]
         set_tag(ifds, k, 35478, 4, [min(xsv)]); set_tag(ifds, k, 35480, 4, [min(rws)])
