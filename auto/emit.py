@@ -167,7 +167,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     """Инъекция AUTO-трасс в лёгкую рамку NeuraLOG → _auto.nlgx(+bck). Рамка НЕ фабрикуется."""
     import struct
     from extract_nlgx import extract
-    from write_nlgx import read_full, write_full, write_bck, set_tag, find_ifd
+    from write_nlgx import read_full, write_full, set_tag, find_ifd
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     model = extract(str(frame_nlgx))
     mapping = _map_lines_to_slots(traces, model, frame, mnemonics_path)
@@ -215,7 +215,10 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
     open(dst, "wb").write(data)
-    open(out / f"{stem}_auto.bck", "wb").write(write_bck(data))
+    # .bck = ТОЧНАЯ копия .nlgx (предыдущее сохранение NeuraLOG). Старый write_bck флипал байт
+    # на off=5489 — артефакт одного файла, в других попадает ВНУТРЬ тега 35490 и молча портит
+    # трассу (write_nlgx docstring, депрекейт).
+    open(out / f"{stem}_auto.bck", "wb").write(data)
     res = {"nlgx": str(dst), "written": written}
     if las:
         try:
