@@ -143,12 +143,29 @@ def expected_color(name: str) -> Optional[str]:
 
 
 def curve_info(name: str, mnemonics_path) -> dict:
-    """Сводка приоров на мнемонику: класс поведения, ожид. цвет, единицы/группа из словаря."""
-    root = mnem_root(name).upper()
+    """Сводка приоров на мнемонику: класс поведения, ожид. цвет, единицы/группа из словаря.
+    Корень — ДЛИННЕЙШЕЕ совпадение со словарём (слот NeuraLOG 'SP21' = SP2 №1, а не SP №21;
+    голое отбрасывание цифр давало SP и теряло оранжевую SP2)."""
     d = load_mnemonics(mnemonics_path)
     aliases = d.get("aliases", {})
-    root = aliases.get(root, root)
-    info = d.get("curves", {}).get(root, {})
+    curves = d.get("curves", {})
+    base = str(name).split()[0].upper() if name else ""
+    m_dig = re.search(r"\d+$", base)
+    root = None
+    if m_dig:
+        # слот NeuraLOG = <мнемоника><№экземпляра>: цифру экземпляра отбрасываем ОБЯЗАТЕЛЬНО,
+        # затем длиннейший префикс из словаря ('SP21'→SP2, 'GZ31'→GZ3, 'GZ1'→GZ — иначе слот
+        # 'GZ1' на STK-каркасе ловил словарную мнемонику GZ1 (зонд БКЗ) и терял цвет green)
+        digs = len(m_dig.group())
+        for k in range(1, digs + 1):
+            cand = aliases.get(base[:-k], base[:-k])
+            if cand in curves:
+                root = cand; break
+    if root is None:
+        cand = aliases.get(base, base)
+        root = cand if cand in curves else aliases.get(mnem_root(name).upper(),
+                                                       mnem_root(name).upper())
+    info = curves.get(root, {})
     # цвет: словарь (экспертное знание, напр. STK: PZ чёрная/GZ зелёная/SP красная) > встроенный приор
     return {"root": root, "class": curve_class(root), "color": info.get("color") or expected_color(root),
             "unit": info.get("unit"), "group": info.get("group"), "comment": info.get("comment")}

@@ -21,7 +21,7 @@ from . import meta as meta_mod
 
 NULL = 0xFFFFFFFF
 COLOR_RGB = {"black": (255, 0, 255), "red": (255, 0, 0), "green": (0, 200, 0),
-             "blue": (60, 120, 255)}
+             "blue": (60, 120, 255), "orange": (255, 140, 0)}
 
 
 # ---------- понимание: JSON + overlay ----------
@@ -92,9 +92,11 @@ def _slot_track(model, curve, frame):
 
 def _map_lines_to_slots(traces, model, frame, mnemonics_path):
     """Автономный маппинг AUTO-линий → слоты кривых рамки: тот же трек + совместимый цвет/класс +
-    порядок слева-направо (идентичность = СЧЁТ, §6.6.11). Возвращает {slot_name: (Line, trace)}."""
-    import dataset as ds
-    slots = ds.real_curves(model) if model.get("curves") else []
+    порядок слева-направо (идентичность = СЧЁТ, §6.6.11). Возвращает {slot_name: (Line, trace)}.
+    Слоты берём ПО ИМЕНИ (все кривые кроме оси DA*): в ЛЁГКОМ каркасе слоты пусты, а
+    dataset.real_curves требует ≥50 точек и выкидывал их ВСЕ (G4-баг: written=[] на BK_4020)."""
+    slots = [c for c in model.get("curves", [])
+             if meta_mod.mnem_root(c.get("name", "")) != "DA"]
     # слоты по треку, с приором цвета/класса из мнемоники
     slot_info = []
     for c in slots:
@@ -103,25 +105,28 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path):
                           "color": info["color"], "class": info["class"],
                           "root": info["root"]})
     used = set(); mapping = {}
-    # внутри трека: сортируем линии и слоты по x, паруем с предпочтением цвет/класс
+    # внутри трека: назначение по ГЛОБАЛЬНОМУ score (не жадно по слотам — иначе первый слот
+    # забирает единственную линию при полном несовпадении: G4-баг STK_4020, оранжевая ушла в
+    # красный SP1 вместо SP21). score: цвет 0/2 + класс 0/1; 3 = ничего не совпало → НЕ назначать.
     for ti in {s["track"] for s in slot_info}:
         tslots = [s for s in slot_info if s["track"] == ti]
         tlines = [(L, tr) for L, tr in traces if L.track_index == ti]
-        tlines.sort(key=lambda lt: lt[0].x_center)
+        pairs = []
         for s in tslots:
-            best, bd = None, None
             for L, tr in tlines:
-                if id(L) in used:
-                    continue
-                # совместимость: цвет совпал (если задан) ИЛИ класс по поведению совпал
                 color_ok = (s["color"] is None) or (s["color"] == L.color)
                 cls = "SP" if L.behavior == "smooth" else "RES"
                 class_ok = (s["class"] in (cls, "OTHER", "CALI"))
                 score = (0 if color_ok else 2) + (0 if class_ok else 1)
-                if best is None or score < bd:
-                    best, bd = (L, tr), score
-            if best is not None:
-                used.add(id(best[0])); mapping[s["curve"]["name"]] = best
+                if score < 3:
+                    pairs.append((score, s, L, tr))
+        pairs.sort(key=lambda q: (q[0], q[2].x_center))
+        taken_slots = set()
+        for score, s, L, tr in pairs:
+            nm = s["curve"]["name"]
+            if nm in taken_slots or id(L) in used:
+                continue
+            taken_slots.add(nm); used.add(id(L)); mapping[nm] = (L, tr)
     return mapping
 
 

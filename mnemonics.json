@@ -5,6 +5,7 @@
     "GZ":   {"unit": "Ohmm", "comment": "градієнт-зонд", "sheet": "GZ(A2.0M0.5N або ін.) Omm", "group": "СК", "color": "green"},
     "PZ":   {"unit": "Ohmm", "comment": "потенціал-зонд", "sheet": "PZ(N11M0.5A або ін.) Omm", "group": "СК", "color": "black"},
     "SP":   {"unit": "mV", "comment": "потенціал самочинної поляризації", "sheet": "PS, mV", "group": "СК", "color": "red"},
+    "SP2":  {"unit": "mV", "comment": "друга SP (виняток: Semeguniv STK_4020 — оранжева)", "sheet": "PS2, mV", "group": "СК", "color": "orange"},
     "REZ":  {"unit": "Ohmm", "comment": "резистивіметрія", "sheet": "Резистивіметрія (Omm)", "group": "СК"},
     "GZ1":  {"unit": "Ohmm", "comment": "градієнт зонд A0.4M0.1N", "sheet": "GZ1(A0.4M0.1N) Omm", "group": "БКЗ"},
     "GZ2":  {"unit": "Ohmm", "comment": "градієнт зонд A1.0M0.1N", "sheet": "GZ2(A1.0M0.1N) Omm", "group": "БКЗ"},

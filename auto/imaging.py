@@ -32,15 +32,20 @@ def dark_mask(rgb, p):
 
 
 def color_channels(rgb, p):
-    """Цветные штрихи по разнице каналов (исключая светлую сетку). dict bool-масок red/blue/green."""
+    """Цветные штрихи по разнице каналов (исключая светлую сетку).
+    dict bool-масок red/orange/green/blue. Оранжевая (SP2, Эдуард 10.07) отделяется от красной
+    по G−B: замер STK_4020 — оранж G−B>30 (medRGB ~204,149,104), красная ≤30 (B выше);
+    на лентах с ТОЛЬКО красной доля G−B>30 = 0-1% → порог не расщепляет настоящую красную."""
     R, G, B = [rgb[..., i].astype(np.int16) for i in range(3)]
     mx = rgb.max(2).astype(np.int16); mn = rgb.min(2).astype(np.int16)
     sat = mx - mn
     colored = (sat >= p.sat_thr) & (mx < 245)            # не пере-светлое
-    red = colored & (R - G > p.rg_thr) & (R >= B)
+    red_base = colored & (R - G > p.rg_thr) & (R >= B)
+    orange = red_base & (G - B > p.orange_gb)
+    red = red_base & ~orange
     green = colored & (G - R > p.rg_thr) & (G > B)
     blue = colored & (B - R > 8) & (B >= G - 4) & ~green
-    return {"red": red, "green": green, "blue": blue}
+    return {"red": red, "orange": orange, "green": green, "blue": blue}
 
 
 def structure_mask(rgb, p, min_len=None):
