@@ -141,13 +141,25 @@ def _level_segments(tr, model, curve, top_y, n):
     single = ([int(top_y)], [int(top_y + n - 1)], [0])
     try:
         import decode_levels as DL
+        from . import refine
+        from .config import DEFAULT
         if not DL.is_resistive(curve["name"]):
             return single
         fam = DL.build_family(model, curve)
         if len(fam) < 2:
             return single
         xs_by_row = {y: float(x) for y, x in tr.items()}
-        lv = DL.decode(xs_by_row, fam)                 # row → level
+        # 2-шкальное семейство (1х+5х) — ПРАВИЛО РЕЛЬСА (Эдуард 12.07: 1х по умолч., 5х на упоре),
+        # чище generic-DP по перескокам. 3+ уровня (×5×25) — прежний decode_levels.
+        if len(fam) == 2:
+            xl, xr = fam[0]["x_left"], fam[0]["x_right"]
+            v1 = abs(fam[0]["v_right"] - fam[0]["v_left"]) or 1.0
+            v5 = abs(fam[1]["v_right"] - fam[1]["v_left"]) or v1
+            ratio = max(1.5, v5 / v1)              # 5х-шкала / 1х-шкала (обычно 5)
+            lv = refine.decode_rail(xs_by_row, xl, xr, ratio=ratio,
+                                    min_run=DEFAULT.cv.level_min_run)
+        else:
+            lv = refine.enforce_min_run(DL.decode(xs_by_row, fam), DEFAULT.cv.level_min_run)
         if not lv:
             return single
         # сегменты по СМЕНЕ УРОВНЯ, НЕ по разрывам строк (пропуски внутри уровня = NULL в xs).

@@ -82,8 +82,11 @@ def _extend_ends(tr, fg, lo, hi, slmax, max_gap=25):
 
 
 def trace_auto(rgb, sheet, p=None):
-    """Трассировать все AUTO-линии листа. Возвращает list[(Line, {row:x})]."""
+    """Трассировать все AUTO-линии листа. Возвращает list[(Line, {row:x})].
+    Каждая трасса ДЕСПАЙКается (refine.despike): изолированные выбросы-спайки (перескок на рамку/
+    сосед на 1-2 строки) заменяются локальной медианой; устойчивый пик кривой сохраняется."""
     from .config import DEFAULT
+    from . import refine
     p = p or DEFAULT.cv
     out = []
     fg_cache = {}
@@ -94,5 +97,7 @@ def trace_auto(rgb, sheet, p=None):
             fg_cache[L.color] = _color_fg(rgb, L.color, p)
         tr = trace_line(fg_cache[L.color], L, sheet.frame, p)
         if len(tr) >= 30:
+            tr, _ = refine.despike(tr, win=p.despike_win, k=p.despike_k,
+                                   min_jump=p.despike_min_jump)
             out.append((L, tr))
     return out
