@@ -149,17 +149,12 @@ def _level_segments(tr, model, curve, top_y, n):
         if len(fam) < 2:
             return single
         xs_by_row = {y: float(x) for y, x in tr.items()}
-        # 2-шкальное семейство (1х+5х) — ПРАВИЛО РЕЛЬСА (Эдуард 12.07: 1х по умолч., 5х на упоре),
-        # чище generic-DP по перескокам. 3+ уровня (×5×25) — прежний decode_levels.
-        if len(fam) == 2:
-            xl, xr = fam[0]["x_left"], fam[0]["x_right"]
-            v1 = abs(fam[0]["v_right"] - fam[0]["v_left"]) or 1.0
-            v5 = abs(fam[1]["v_right"] - fam[1]["v_left"]) or v1
-            ratio = max(1.5, v5 / v1)              # 5х-шкала / 1х-шкала (обычно 5)
-            lv = refine.decode_rail(xs_by_row, xl, xr, ratio=ratio,
-                                    min_run=DEFAULT.cv.level_min_run)
-        else:
-            lv = refine.enforce_min_run(DL.decode(xs_by_row, fam), DEFAULT.cv.level_min_run)
+        # DP decode_levels (непрерывность лог-значения) + min-run сглаживание. Калибровка на
+        # Archive GT (12.07): на ЧИСТОЙ трассе DP даёт level-acc мед 0.99 (lam=0.4) против 0.48 у
+        # правила-рельса — DP ловит обороты гораздо точнее; мельтешение, что видел Эдуард, было от
+        # ШУМА трассы (снят despike в trace2d), не от DP. min_run гасит остаточные короткие сегменты.
+        lv = refine.enforce_min_run(DL.decode(xs_by_row, fam, lam=DEFAULT.cv.level_lam),
+                                    DEFAULT.cv.level_min_run)
         if not lv:
             return single
         # сегменты по СМЕНЕ УРОВНЯ, НЕ по разрывам строк (пропуски внутри уровня = NULL в xs).

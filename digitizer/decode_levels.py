@@ -42,6 +42,42 @@ def scale_map(sa):
     return lambda x: vL + (x - xL) * (vR - vL) / span
 
 
+def demote_representable(lv, xs_by_row, family, margin=1.02):
+    """ПОСТ-ПРОХОД (Эдуард 12.07: «приоритет 1х, 5х только когда значение за границей»): сегмент
+    уровня k, чьи значения ЦЕЛИКОМ влезают в уровень k-1 (|v_k(x)| ≤ v_{k-1}^max), понижается —
+    перо не упиралось в рельс, значит не оборачивалось. Убирает «застревание» DP на 5х в зоне
+    перекрытия (STK PZ: value~20 ложно на 5х), НЕ трогая реальные 5х (там v>1х-макс, замер Archive).
+    Итеративно сверху вниз до фикспоинта."""
+    maps = [scale_map(s) for s in family]
+    K = len(family)
+    if K < 2:
+        return lv
+    vmax = [max(abs(s["v_left"]), abs(s["v_right"])) for s in family]   # потолок значения на уровне
+    lv = dict(lv)
+    changed = True
+    while changed:
+        changed = False
+        # сегменты по уровню
+        rows = sorted(lv)
+        s = rows[0]; cur = lv[rows[0]]; prev = rows[0]
+        segs = []
+        for y in rows[1:]:
+            if lv[y] != cur:
+                segs.append((s, prev, cur)); s = y; cur = lv[y]
+            prev = y
+        segs.append((s, prev, cur))
+        for a, b, k in segs:
+            if k <= 0:
+                continue
+            vals = [abs(maps[k](xs_by_row[y])) for y in range(a, b + 1) if y in xs_by_row]
+            if vals and max(vals) <= margin * vmax[k - 1]:   # весь сегмент влезает в уровень k-1
+                for y in range(a, b + 1):
+                    if y in lv:
+                        lv[y] = k - 1
+                changed = True
+    return lv
+
+
 def build_family(m, curve):
     """Цепочка масштабов кривой: base (имя-суффикс) → next → … (level 0..K)."""
     key = " ".join(curve["name"].split()[1:])
@@ -61,14 +97,19 @@ def logv(maps, k, x):
     return math.log(abs(maps[k](x)) + 1.0)
 
 
-def decode(xs_by_row, family, lam=0.7, dxfrac=0.12, gate_w=4.0):
+def decode(xs_by_row, family, lam=0.7, dxfrac=0.12, gate_w=4.0, level_bias=0.0, rail_gate=0.0):
     """xs_by_row: dict row->x; family: список scale-словарей. -> dict row->level.
     НАПРАВЛЕННЫЙ wrap-гейт: шкалы перекрываются, поэтому уровень меняется НЕ у потолка,
     а на ОБОРОТЕ пера, видимом как РЕЗКИЙ СДВИГ x в определённую сторону:
       level вверх (k>kp) ⟺ x резко ПАДАЕТ (перо ушло вправо → перенесли влево);
       level вниз  (k<kp) ⟺ x резко РАСТЁТ.
     Переход дёшев лишь если |Δx| велик И знак согласован с направлением уровня; иначе дорог.
-    dxthr = dxfrac·ширина_шкалы; цена перехода = lam·|Δlevel| + gate_w·lam·(1-consistency)."""
+    dxthr = dxfrac·ширина_шкалы; цена перехода = lam·|Δlevel| + gate_w·lam·(1-consistency).
+
+    level_bias — ПРИОР К НИЗКОМУ УРОВНЮ (Эдуард 12.07: «приоритет чаще 1х»): штраф bias·k на
+    строку. В зоне перекрытия значений (низкое значение представимо и на 1х, и на 5х) DP без
+    приора «плавает» на 5х (STK PZ: 73% ложно-5х при value~20); bias удерживает на 1х, пока
+    непрерывность значения строго не потребует выше."""
     maps = [scale_map(s) for s in family]
     K = len(family)
     rows = sorted(xs_by_row)
@@ -76,7 +117,9 @@ def decode(xs_by_row, family, lam=0.7, dxfrac=0.12, gate_w=4.0):
         return {y: 0 for y in rows}
     width = abs(family[0]["x_right"] - family[0]["x_left"])
     dxthr = max(1.0, dxfrac * width)
-    dp = [0.0] * K
+    xl = min(family[0]["x_left"], family[0]["x_right"])
+    rail_x = xl + rail_gate * width          # «упор»: переход ВВЕРХ дёшев только если xp ≥ этого
+    dp = [level_bias * k for k in range(K)]
     back = []
     for i in range(1, len(rows)):
         x = xs_by_row[rows[i]]; xp = xs_by_row[rows[i-1]]; dx = x - xp
@@ -95,7 +138,12 @@ def decode(xs_by_row, family, lam=0.7, dxfrac=0.12, gate_w=4.0):
                     mag = min(1.0, abs(dx) / dxthr)
                     consistency = mag if aligned else 0.0
                     tc = lam * abs(nlev) + gate_w * lam * (1.0 - consistency)
-                c = dp[kp] + (vk - lvp[kp])**2 + tc
+                    # РЕЛЬС-ГЕЙТ (Эдуард 12.07): оборот ВВЕРХ физически только когда перо упёрлось
+                    # в правый край (xp у рельса). Переход вверх вдали от рельса = ложный (шум
+                    # трассы) → дорог. Не трогает переход вниз (возврат плавный).
+                    if nlev > 0 and rail_gate > 0 and xp < rail_x:
+                        tc += gate_w * lam * nlev
+                c = dp[kp] + (vk - lvp[kp])**2 + tc + level_bias * k
                 if c < best:
                     best = c; bki = kp
             ndp[k] = best; bk[k] = bki
