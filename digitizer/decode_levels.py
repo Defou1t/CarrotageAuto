@@ -97,7 +97,8 @@ def logv(maps, k, x):
     return math.log(abs(maps[k](x)) + 1.0)
 
 
-def decode(xs_by_row, family, lam=0.7, dxfrac=0.12, gate_w=4.0, level_bias=0.0, rail_gate=0.0):
+def decode(xs_by_row, family, lam=0.7, dxfrac=0.12, gate_w=4.0, level_bias=0.0, rail_gate=0.0,
+           down_mult=1.0):
     """xs_by_row: dict row->x; family: список scale-словарей. -> dict row->level.
     НАПРАВЛЕННЫЙ wrap-гейт: шкалы перекрываются, поэтому уровень меняется НЕ у потолка,
     а на ОБОРОТЕ пера, видимом как РЕЗКИЙ СДВИГ x в определённую сторону:
@@ -143,6 +144,12 @@ def decode(xs_by_row, family, lam=0.7, dxfrac=0.12, gate_w=4.0, level_bias=0.0, 
                     # трассы) → дорог. Не трогает переход вниз (возврат плавный).
                     if nlev > 0 and rail_gate > 0 and xp < rail_x:
                         tc += gate_w * lam * nlev
+                    # АСИММЕТРИЯ ВНИЗ (калибровка GT Эдуарда 12.07): смена масштаба на 5х часто по
+                    # СОГЛАШЕНИЮ записи (глубже пишут 5х), а не по упору — вернуться на 1х перо не
+                    # должно, пока не настоящий оборот вправо. DP слишком легко падал вниз (BK: ушёл
+                    # с 5х на 2107, а GT держит до 2795). down_mult удорожает переход ВНИЗ.
+                    if nlev < 0:
+                        tc *= down_mult
                 c = dp[kp] + (vk - lvp[kp])**2 + tc + level_bias * k
                 if c < best:
                     best = c; bki = kp
