@@ -151,7 +151,85 @@ def decode_rail(rows_xs, x_left, x_right, ratio=5.0, rail_frac=0.85, min_jump_fr
     return enforce_min_run(lv, min_run)
 
 
-def refine_trace(fg, line, frame, p, trace_line, track):
+def _rolling_median(xs, win):
+    n = len(xs); h = win // 2; out = np.empty(n)
+    for i in range(n):
+        out[i] = np.median(xs[max(0, i - h):min(n, i + h + 1)])
+    return out
+
+
+def robust_baseline(xs, base_win=301, frac=0.10, track_w=736):
+    """Робастная оценка положения МАЖОРИТАРНОЙ линии (rolling-median, 2-й проход по нефлагнутым).
+    Возвращает (base, flag): flag — строки, устойчиво отошедшие от базлайна (кандидаты свапа)."""
+    xs = np.asarray(xs, float)
+    thr = max(50.0, frac * track_w)
+    base = _rolling_median(xs, base_win)
+    flag = np.abs(xs - base) > thr
+    if flag.any() and (~flag).sum() > 2:
+        idx = np.arange(len(xs))
+        xc = xs.copy(); xc[flag] = np.interp(idx[flag], idx[~flag], xs[~flag])
+        base = _rolling_median(xc, base_win); flag = np.abs(xs - base) > thr
+    return base, flag
+
+
+def _swap_blocks(flag, min_len, merge_gap=8):
+    """Блоки подряд-флагнутых строк длиной ≥ min_len (короче = спайк, чинит despike)."""
+    blocks = []; i = 0; n = len(flag)
+    while i < n:
+        if not flag[i]:
+            i += 1; continue
+        j = i
+        while j + 1 < n and (flag[j + 1] or (j + 1 - i < merge_gap and flag[min(n - 1, j + merge_gap)])):
+            j += 1
+        if j - i + 1 >= min_len:
+            blocks.append((i, j))
+        i = j + 1
+    return blocks
+
+
+def repair_swaps(rows_xs, fg, p, n_same_color=1):
+    """РЕМОНТ УСТОЙЧИВЫХ СВАПОВ (Эдуард 12.07): трасса латчится на ПАРАЛЛЕЛЬНУЮ одноцветную кривую
+    на десятки-сотни строк (не спайк — деспайк это не ловит; PZ чёрный ↔ DS/DN чёрные). Признак
+    свапа (только по трассе + черниле, БЕЗ эксперта):
+      (1) блок устойчиво далеко от робастного базлайна (положения мажоритарной линии);
+      (2) у БАЗЛАЙНА есть чернило того же цвета (реальная линия там присутствует, доля ≥ ink_frac);
+      (3) наша трасса на ДРУГОМ черниле, чем базлайн (|трасса−базлайн| ≥ gap_min) — иначе это
+          РЕАЛЬНЫЙ вынос пера к рельсу (BK), не латч → НЕ ТРОГАЕМ.
+    КУРС-ГЕЙТ: одинокая широко-качающаяся резистивная (BK: базлайн≠истина) → repair НЕ применяем.
+    n_same_color — сколько кривых листа этого цвета (латч возможен только при ≥2). Возвращает
+    (dict row→x, n_fixed)."""
+    rows = sorted(rows_xs)
+    if len(rows) < 3 * p.swap_min_len:
+        return dict(rows_xs), 0
+    xs = np.array([rows_xs[y] for y in rows], float)
+    W = fg.shape[1]
+    base, flag = robust_baseline(xs, p.swap_base_win, p.swap_frac, W)
+    spread = (np.percentile(base, 85) - np.percentile(base, 15)) / W
+    if spread >= p.swap_max_spread and n_same_color < 2:   # одинокая широкая (BK) → базлайн≠истина
+        return dict(rows_xs), 0
+    blocks = _swap_blocks(flag, p.swap_min_len)
+    out = xs.copy(); fixed = 0
+    for (i0, i1) in blocks:
+        if float(np.median(np.abs(xs[i0:i1 + 1] - base[i0:i1 + 1]))) < p.swap_gap_min:
+            continue                                   # трасса ~на базлайне → реальный вынос, не свап
+        snaps = []; ink = 0
+        for k in range(i0, i1 + 1):
+            tgt = base[k]; y = rows[k]
+            a = max(0, int(tgt) - p.swap_band); b = min(W, int(tgt) + p.swap_band + 1)
+            cols = np.where(fg[y, a:b])[0]
+            if len(cols):
+                snaps.append((k, float(a + cols[np.argmin(np.abs(cols + a - tgt))]))); ink += 1
+            else:
+                snaps.append((k, float(tgt)))
+        if ink / (i1 - i0 + 1) < p.swap_ink_frac:      # у базлайна чернила нет → реальный вынос
+            continue
+        for k, sx in snaps:
+            out[k] = sx
+        fixed += 1
+    return {y: float(out[i]) for i, y in enumerate(rows)}, fixed
+
+
+def refine_trace(fg, line, frame, p, trace_line, track, n_same_color=1):
     """REFINE-ПЕТЛЯ трассы одной AUTO-линии (Эдуард 12.07): трасса → верификатор → перетрасс.
     (1) тесный band (полоса линии). (2) детект НЕДОТЯГА: у правого/левого края band есть чернило
     того же цвета за границей (перо ушло к упору, а трасса не догнала — калибровка: BK терял выносы
@@ -180,6 +258,9 @@ def refine_trace(fg, line, frame, p, trace_line, track):
             if xw.max() > xt.max() + 5 or xw.min() < xt.min() - 5:
                 tr = tr_wide
     tr, _ = despike(tr, win=p.despike_win, k=p.despike_k, min_jump=p.despike_min_jump)
+    # ремонт устойчивого латча на параллельную одноцветную (не спайк); курс-гейт внутри защищает
+    # одинокую широко-качающуюся резистивную (BK) — калибровка session2 на GT: PZ 0.82→0.96, BK safe
+    tr, _ = repair_swaps(tr, fg, p, n_same_color=n_same_color)
     return tr
 
 
