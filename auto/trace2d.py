@@ -27,12 +27,17 @@ def _color_fg(rgb, color, p):
     return cm & ~im.structure_mask(rgb, p)
 
 
-def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14):
+def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_range=None):
     """Трасса одной AUTO-линии как x(row). fg — bool-маска цвета линии.
     band_pad — допуск вокруг x-полосы линии (анти-перескок на соседа). slmax — кламп скорости.
-    wide_run — ран шире этого = горизонтальный спайк → берём ВЕРШИНУ (дальний край), не центр."""
+    wide_run — ран шире этого = горизонтальный спайк → берём ВЕРШИНУ (дальний край), не центр.
+    x_range=(lo,hi) — ЯВНЫЙ band (для refine: расширение до трека, чтобы догнать выносы к упору;
+    у цвето-уникальной AUTO соседа того же цвета нет → расширение безопасно, связность держит нить)."""
     H, W = fg.shape
-    lo = max(0, int(line.x_lo) - band_pad); hi = min(W, int(line.x_hi) + band_pad + 1)
+    if x_range is not None:
+        lo = max(0, int(x_range[0])); hi = min(W, int(x_range[1]) + 1)
+    else:
+        lo = max(0, int(line.x_lo) - band_pad); hi = min(W, int(line.x_hi) + band_pad + 1)
     base = line.x_center            # ориентир базлайна (вершину пика тянем ОТ него)
     x = None; v = 0.0
     tr = {}
@@ -95,9 +100,9 @@ def trace_auto(rgb, sheet, p=None):
             continue
         if L.color not in fg_cache:
             fg_cache[L.color] = _color_fg(rgb, L.color, p)
-        tr = trace_line(fg_cache[L.color], L, sheet.frame, p)
+        track = sheet.frame.tracks[L.track_index]
+        # refine-петля: тесная→широкая трасса при недотяге до упора + деспайк (refine.refine_trace)
+        tr = refine.refine_trace(fg_cache[L.color], L, sheet.frame, p, trace_line, track)
         if len(tr) >= 30:
-            tr, _ = refine.despike(tr, win=p.despike_win, k=p.despike_k,
-                                   min_jump=p.despike_min_jump)
             out.append((L, tr))
     return out

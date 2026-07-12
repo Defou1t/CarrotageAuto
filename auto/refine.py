@@ -151,6 +151,38 @@ def decode_rail(rows_xs, x_left, x_right, ratio=5.0, rail_frac=0.85, min_jump_fr
     return enforce_min_run(lv, min_run)
 
 
+def refine_trace(fg, line, frame, p, trace_line, track):
+    """REFINE-ПЕТЛЯ трассы одной AUTO-линии (Эдуард 12.07): трасса → верификатор → перетрасс.
+    (1) тесный band (полоса линии). (2) детект НЕДОТЯГА: у правого/левого края band есть чернило
+    того же цвета за границей (перо ушло к упору, а трасса не догнала — калибровка: BK терял выносы
+    к рельсу). (3) при недотяге — перетрасс с band ДО ТРЕКА (можно за Scale Axis, Эдуард: значения
+    экстраполируются). (4) деспайк. Берём вариант с бОльшим охватом упора без роста спайков."""
+    import numpy as np
+    tr = trace_line(fg, line, frame, p)
+    if len(tr) < 30:
+        return tr
+    band_pad = 8
+    lo = max(0, int(line.x_lo) - band_pad); hi = min(fg.shape[1], int(line.x_hi) + band_pad + 1)
+    tl, tr_ = max(0, track.x_left), min(fg.shape[1], track.x_right)
+    # НЕДОТЯГ = band отрезал чернило: доля строк трассы, где ТОГО ЖЕ ЦВЕТА чернило есть ЗА band
+    # (перо ушло к упору, band это срезал). Не «трасса у края» (недотяг = трасса НЕ дошла).
+    rows = sorted(tr)
+    beyond = 0
+    for y in rows:
+        if (hi < tr_ and fg[y, hi:tr_].any()) or (tl < lo and fg[y, tl:lo].any()):
+            beyond += 1
+    if beyond / max(1, len(rows)) >= 0.03:       # ≥3% строк с чернилом за band → band до трека
+        tr_wide = trace_line(fg, line, frame, p, x_range=(tl, tr_))
+        if len(tr_wide) >= 0.8 * len(tr):
+            xw = np.array([tr_wide[y] for y in sorted(tr_wide)])
+            xt = np.array([tr[y] for y in rows])
+            # расширенная лучше, если реально достаёт дальше к упору (охват вырос)
+            if xw.max() > xt.max() + 5 or xw.min() < xt.min() - 5:
+                tr = tr_wide
+    tr, _ = despike(tr, win=p.despike_win, k=p.despike_k, min_jump=p.despike_min_jump)
+    return tr
+
+
 def verify_line(rows_xs, levels_by_row=None, scale=None, win=8, k=4.0,
                 min_jump=12.0, min_run=20):
     """Полная проверка одной линии. scale=(x_left,x_right) для метрики выхода за рамку.
