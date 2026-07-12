@@ -95,18 +95,14 @@ def trace_auto(rgb, sheet, p=None):
     p = p or DEFAULT.cv
     out = []
     fg_cache = {}
-    col_counts = {}                              # сколько кривых листа каждого цвета (для гейта свапов)
-    for L in sheet.lines:
-        col_counts[L.color] = col_counts.get(L.color, 0) + 1
     for L in sheet.lines:
         if L.confidence != "AUTO":
             continue
         if L.color not in fg_cache:
             fg_cache[L.color] = _color_fg(rgb, L.color, p)
         track = sheet.frame.tracks[L.track_index]
-        # refine-петля: тесная→широкая трасса при недотяге + деспайк + ремонт латча (refine.refine_trace)
-        tr = refine.refine_trace(fg_cache[L.color], L, sheet.frame, p, trace_line, track,
-                                 n_same_color=col_counts[L.color])
+        # refine-петля: тесная→широкая трасса при недотяге до упора + деспайк (refine.refine_trace)
+        tr = refine.refine_trace(fg_cache[L.color], L, sheet.frame, p, trace_line, track)
         if len(tr) >= 30:
             out.append((L, tr))
     return out
