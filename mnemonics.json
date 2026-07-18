@@ -358,6 +358,36 @@
    "MCALI",
    "MGZ",
    "MPZ"
+  ],
+  "BKZ|D1": [
+   "GZ1",
+   "GZ2",
+   "GZ3"
+  ],
+  "BKZ|D2": [
+   "GZ4",
+   "GZ5",
+   "OGZ"
+  ],
+  "BKZ|D11": [
+   "GZ1",
+   "GZ2",
+   "GZ3"
+  ],
+  "BKZ|D1B1": [
+   "GZ1",
+   "GZ2",
+   "GZ3",
+   "OGZ"
+  ],
+  "BKZ|D12": [
+   "GZ4",
+   "GZ5"
+  ],
+  "MK|D1B1": [
+   "MGZ",
+   "MPZ",
+   "SP"
   ]
  },
  "aliases": {

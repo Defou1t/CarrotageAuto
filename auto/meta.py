@@ -80,12 +80,18 @@ def parse_filename(path, mnemonics_path=None) -> FileMeta:
     curves_token = toks[cidx - 1] if cidx >= 1 else ""
     well = "_".join(toks[:cidx - 1]) if cidx >= 2 else (toks[0] if toks else stem)
     scale = int(float(toks[after])) if after < len(toks) and re.fullmatch(_NUM, toks[after]) else None
+    # ЧАСТЬ бланка. Delivery: `…_200_D1`. Archive: часть стоит ПОСЛЕ ДАТЫ и разбита на токены —
+    # `…_200_1984-01-24_D_1_B_1` → D1B1, `…_1996-09-02_D_11` → D11 (замер 19.07: раньше часть
+    # архивных имён не парсилась ВООБЩЕ, part=""; а именно она говорит, какие зонды оцифрованы
+    # в этом файле — D_11 = зонды 1-3+OGZ, D_12 = зонды 4-5+SP+CALI).
     part = ""
-    if scale is not None and after + 1 < len(toks) and re.fullmatch(r"[A-Za-zД]+\d*", toks[after + 1]):
-        part = toks[after + 1]                     # D1/D2-подобный токен (не дата)
+    if scale is not None:
+        tail = [t for t in toks[after + 1:] if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", t)]
+        if tail and re.fullmatch(r"[A-Za-zД]+\d*", tail[0]):
+            part = "".join(tail)                   # D_1_B_1 → D1B1; D1 остаётся D1
     m = FileMeta(well=well, curves_token=curves_token, top_depth=top, bottom_depth=bot,
                  scale=scale, part=part, raw_stem=stem)
-    m.expected_curves = expected_curves(curves_token, mnemonics_path)
+    m.expected_curves = expected_curves(curves_token, mnemonics_path, part=part)
     return m
 
 
@@ -100,8 +106,12 @@ def load_mnemonics(path) -> dict:
     return _mnem_cache[path]
 
 
-def expected_curves(curves_token: str, mnemonics_path=None) -> list:
-    """Тип в имени (BKZ/BK+MBK/SK/MK/…) → ожидаемые мнемоники (filename_hints)."""
+def expected_curves(curves_token: str, mnemonics_path=None, part: str = "") -> list:
+    """Тип в имени (BKZ/BK+MBK/SK/MK/…) → ожидаемые мнемоники (filename_hints).
+    part (D1/D2/…) уточняет набор: БКЗ-бланк режется на части, и часть задаёт, КАКИЕ зонды
+    оцифрованы в ЭТОМ файле (замер 19.07: D1 → GZ1-GZ3, D2 → GZ4,GZ5,OGZ; без части
+    «самый частый набор» стабилен лишь на 25%, с частью — 46-55%). Ключ «ТОКЕН|ЧАСТЬ»
+    ищется первым, затем «ТОКЕН», затем расщепление."""
     if not curves_token:
         return []
     hints = {}
@@ -112,12 +122,13 @@ def expected_curves(curves_token: str, mnemonics_path=None) -> list:
     # цифруют зонды 4-5, а зонды 1-3 уходят в файл-брат «BKZ»). Без этой ветки составной ключ
     # в filename_hints недостижим — токен режется на части раньше, чем ищется в словаре.
     whole = curves_token.strip().upper()
-    if whole in hints:
-        out, seen = [], set()
-        for c in hints[whole]:
-            if c not in seen:
-                seen.add(c); out.append(c)
-        return out
+    for key in ((f"{whole}|{part.strip().upper()}",) if part else ()) + (whole,):
+        if key in hints:
+            out, seen = [], set()
+            for c in hints[key]:
+                if c not in seen:
+                    seen.add(c); out.append(c)
+            return out
     out, seen = [], set()
     # разделители: «+», «-», «_» и ЗАПЯТАЯ/ПРОБЕЛ (18.07). Мульти-лист приходит одним токеном
     # «BK, IK» / «MBK, MDS, MK» (в имени файла запятая, а split по «_» её не делит) — без этого

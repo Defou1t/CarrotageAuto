@@ -36,7 +36,17 @@ def test_meta():
     a = M.parse_filename("BOGAT_011_BKZ_3630-3896_200_1984-04-17_D_1_B_1.jpg", mn)
     check("archive(dash): well", a.well == "BOGAT_011", a.well)
     check("archive(dash): depths", (a.top_depth, a.bottom_depth) == (3630.0, 3896.0), (a.top_depth, a.bottom_depth))
-    check("archive(dash): BKZ→zonds", a.expected_curves == ["GZ1", "GZ2", "GZ3", "GZ4", "GZ5", "OGZ"], a.expected_curves)
+    # ЧАСТЬ бланка уточняет набор зондов (замер 19.07): D_1_B_1 → зонды 1-3 + OGZ, а зонды 4-5
+    # уходят в файл-брат. Раньше часть архивных имён не парсилась (стоит ПОСЛЕ даты) и приор
+    # выдавал все шесть зондов сразу.
+    check("archive(dash): part=D1B1", a.part == "D1B1", a.part)
+    check("archive(dash): BKZ|D1B1→зонды 1-3+OGZ",
+          a.expected_curves == ["GZ1", "GZ2", "GZ3", "OGZ"], a.expected_curves)
+    b = M.parse_filename("YULIIV_107_BKZ_2090-3550_200_1996-09-02_D_12.jpg", mn)
+    check("archive: BKZ|D12→зонды 4-5", b.expected_curves == ["GZ4", "GZ5"], b.expected_curves)
+    check("BKZ без части → весь набор зондов",
+          M.expected_curves("BKZ", mn) == ["GZ1", "GZ2", "GZ3", "GZ4", "GZ5", "OGZ"],
+          M.expected_curves("BKZ", mn))
 
     # МУЛЬТИ-ЛИСТ (P0-2, 18.07): в имени кривые перечислены ЧЕРЕЗ ЗАПЯТУЮ и приходят ОДНИМ
     # токеном (split по «_» запятую не делит) — без расщепления лист выглядел однокривым.
