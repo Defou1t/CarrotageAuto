@@ -133,11 +133,22 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path):
     return mapping
 
 
-def _level_segments(tr, model, curve, top_y, n):
+def _is_mbk_name(curve_name):
+    """MBK-мнемоника (первый токен без хвостовых цифр). Для ленивой загрузки скана в emit."""
+    import re
+    return re.sub(r"\d+$", "", curve_name.split()[0]).upper() == "MBK"
+
+
+def _level_segments(tr, model, curve, top_y, n, gray=None):
     """Уровни-перевыносы (×5/×25) из НАШЕЙ трассы через decode_levels, если каркас несёт цепочку
     масштабов (base→next). Возвращает (tops, bottoms, levels) для тегов 35494/35496/35498.
     Одношкальный каркас / не-резистивная кривая → один сегмент level 0 (текущее поведение).
-    5х-переход декодируется, ТОЛЬКО когда эксперт задал 5х-шкалу в каркасе (как в Archive BKZ)."""
+    5х-переход декодируется, ТОЛЬКО когда эксперт задал 5х-шкалу в каркасе (как в Archive BKZ).
+
+    MBK (скоуп СТРОГО MBK): уровень = не value/wrap, а траектория одной свингующей линии.
+    При наличии картинки (gray) используем decode_img_mbk (DP + image off-scale rail-гейт):
+    MBK 0.538→0.595 на Archive (сессия 3, 17.07). Без картинки — обычный DP (безопасный fallback).
+    GZ/OGZ/PZ/BK НЕ трогаем (у них чистый wrap; image-гейт их регрессирует)."""
     single = ([int(top_y)], [int(top_y + n - 1)], [0])
     try:
         import decode_levels as DL
@@ -153,8 +164,16 @@ def _level_segments(tr, model, curve, top_y, n):
         # Archive GT (12.07): на ЧИСТОЙ трассе DP даёт level-acc мед 0.99 (lam=0.4) против 0.48 у
         # правила-рельса — DP ловит обороты гораздо точнее; мельтешение, что видел Эдуард, было от
         # ШУМА трассы (снят despike в trace2d), не от DP. min_run гасит остаточные короткие сегменты.
-        lv = refine.enforce_min_run(DL.decode(xs_by_row, fam, lam=DEFAULT.cv.level_lam),
-                                    DEFAULT.cv.level_min_run)
+        try:
+            import decode_img_mbk as MBK
+            use_mbk = MBK.is_mbk(curve["name"]) and gray is not None
+        except Exception:
+            use_mbk = False
+        if use_mbk:
+            raw = MBK.mbk_levels(xs_by_row, fam, gray, lam=DEFAULT.cv.level_lam)
+        else:
+            raw = DL.decode(xs_by_row, fam, lam=DEFAULT.cv.level_lam)
+        lv = refine.enforce_min_run(raw, DEFAULT.cv.level_min_run)
         if not lv:
             return single
         # сегменты по СМЕНЕ УРОВНЯ, НЕ по разрывам строк (пропуски внутри уровня = NULL в xs).
@@ -193,6 +212,23 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
             return nm == short or nm.startswith(short.split()[0] + " ")
         return is_this
 
+    # gray скана грузим ЛЕНИВО и ОДИН раз — только если есть MBK-кривая (для image off-scale
+    # декода уровней). Большие сканы (до 62k px) не грузим зря.
+    _gray = {"arr": None, "loaded": False}
+
+    def _get_gray():
+        if not _gray["loaded"]:
+            _gray["loaded"] = True
+            try:
+                if image:
+                    from PIL import Image as _Im
+                    _Im.MAX_IMAGE_PIXELS = None
+                    import numpy as _np
+                    _gray["arr"] = _np.asarray(_Im.open(image).convert("L"))
+            except Exception:
+                _gray["arr"] = None
+        return _gray["arr"]
+
     written = []
     for c in model.get("curves", []):
         name = c["name"]
@@ -210,7 +246,8 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         set_tag(ifds, k, 35490, 4, new_xs)
         # сегменты масштаба: decode_levels раскладывает 5х-перевыносы, ЕСЛИ каркас несёт цепочку
         # масштабов (base→next); иначе один сегмент level 0. Без 35492>0 NeuraLOG НЕ рисует кривую.
-        tops, bots, levs = _level_segments(tr, model, c, top_y, n)
+        _g = _get_gray() if _is_mbk_name(name) else None
+        tops, bots, levs = _level_segments(tr, model, c, top_y, n, gray=_g)
         set_tag(ifds, k, 35492, 4, [len(tops)]); set_tag(ifds, k, 35494, 4, tops)
         set_tag(ifds, k, 35496, 4, bots); set_tag(ifds, k, 35498, 4, levs)
         vx = [(i, x) for i, x in enumerate(new_xs) if x != NULL]
