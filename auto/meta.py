@@ -108,7 +108,10 @@ def expected_curves(curves_token: str, mnemonics_path=None) -> list:
     if mnemonics_path:
         hints = load_mnemonics(mnemonics_path).get("filename_hints", {})
     out, seen = [], set()
-    for part in re.split(r"[+\-_]", curves_token):
+    # разделители: «+», «-», «_» и ЗАПЯТАЯ/ПРОБЕЛ (18.07). Мульти-лист приходит одним токеном
+    # «BK, IK» / «MBK, MDS, MK» (в имени файла запятая, а split по «_» её не делит) — без этого
+    # expected_curves = ['BK, IK'] одной строкой, и лист считался однокривым (P0-2, 548/953 листов).
+    for part in re.split(r"[+\-_,;\s]+", curves_token):
         p = part.strip().upper()
         if not p:
             continue

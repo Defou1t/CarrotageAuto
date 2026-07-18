@@ -38,6 +38,23 @@ def test_meta():
     check("archive(dash): depths", (a.top_depth, a.bottom_depth) == (3630.0, 3896.0), (a.top_depth, a.bottom_depth))
     check("archive(dash): BKZ→zonds", a.expected_curves == ["GZ1", "GZ2", "GZ3", "GZ4", "GZ5", "OGZ"], a.expected_curves)
 
+    # МУЛЬТИ-ЛИСТ (P0-2, 18.07): в имени кривые перечислены ЧЕРЕЗ ЗАПЯТУЮ и приходят ОДНИМ
+    # токеном (split по «_» запятую не делит) — без расщепления лист выглядел однокривым.
+    c = M.parse_filename("BEZLUD_051_BK, IK_2680-3404_200_1998-09-14_D_1.jpg", mn)
+    check("мульти: well", c.well == "BEZLUD_051", c.well)
+    check("мульти: токен цел", c.curves_token == "BK, IK", c.curves_token)
+    check("мульти: «BK, IK»→2", c.expected_curves == ["BK", "IK"], c.expected_curves)
+    check("мульти: «MBK, MDS, MK»→4",
+          M.expected_curves("MBK, MDS, MK", mn) == ["MBK", "MDS", "MGZ", "MPZ"],
+          M.expected_curves("MBK, MDS, MK", mn))
+    check("мульти: «GK, NGK»→2", M.expected_curves("GK, NGK", mn) == ["GK", "NGK"],
+          M.expected_curves("GK, NGK", mn))
+    check("мульти: «BKZ, DS»→BKZ-набор+DS,DN",
+          M.expected_curves("BKZ, DS", mn) == ["GZ1", "GZ2", "GZ3", "GZ4", "GZ5", "OGZ", "DS", "DN"],
+          M.expected_curves("BKZ, DS", mn))
+    check("одиночный токен не тронут", M.expected_curves("MBK", mn) == ["MBK"],
+          M.expected_curves("MBK", mn))
+
     check("alias МБК→MBK", M.curve_info("МБК", mn)["root"] == "MBK")
     check("SP expected red", M.curve_info("SP", mn)["color"] == "red")
     check("class GZ31=RES", M.curve_class("GZ31") == "RES", M.curve_class("GZ31"))
