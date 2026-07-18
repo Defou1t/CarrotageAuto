@@ -497,7 +497,11 @@ def _single_curve_rescue(sheet, frame, meta, fg_full, p):
     полоса безопасна (соседей нет), trace2d ведёт по связности (гейт на GT: cov 0.71,
     med 2px против cov 0.10, med 186px). Мультикривые листы не трогаем."""
     expected = getattr(meta, "expected_curves", None) or []
-    if len(expected) != 1 or len(frame.tracks) != 1:
+    # ровно одна мнемоника: токен «MBK, MDS, MK» приходит НЕРАСЩЕПЛЁННЫМ (len==1, но кривых 3) —
+    # запятая/пробел в токене = мульти-кривый лист, спасение не применять (гейт KREMEN_083 18.07)
+    if len(expected) != 1 or ("," in expected[0]) or (" " in expected[0].strip()):
+        return
+    if len(frame.tracks) != 1:
         return
     t = frame.tracks[0]
     fh = max(1, frame.bottom_y - frame.top_y)
