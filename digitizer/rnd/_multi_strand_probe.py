@@ -25,12 +25,64 @@ from auto.config import Config
 
 MN = r"F:\nds\Auto\mnemonics.json"
 ARCHIVE = Path(r"F:\nds\projects\Archive")
+
+
+def chain_fragments(strands, min_len=5, max_gap_rows=40, tol=25.0):
+    """СБОРКА фрагментов в кривую по НЕПРЕРЫВНОСТИ. Замер 19.07: линкер даёт куски, попадающие
+    в кривую с med 1px, но покрывающие лишь ~10% её длины — значит проблема не в геометрии, а в
+    том, что нить рвётся. Здесь куски сшиваются: следующий начинается ниже конца предыдущего
+    (в пределах max_gap_rows) и его старт согласован с ЭКСТРАПОЛЯЦИЕЙ конца по наклону (tol).
+    Жадно от самого длинного куска. Возвращает список цепочек (dict row->x)."""
+    frs = [s for s in strands if len(s) >= min_len]
+    frs.sort(key=len, reverse=True)
+    used = [False] * len(frs)
+    ends = []
+    for s in frs:
+        rows = sorted(s)
+        k = max(1, len(rows) // 10)
+        slope = (s[rows[-1]] - s[rows[-1 - k]]) / max(1, rows[-1] - rows[-1 - k])
+        ends.append((rows[0], s[rows[0]], rows[-1], s[rows[-1]], slope))
+    out = []
+    for i in range(len(frs)):
+        if used[i]:
+            continue
+        used[i] = True
+        cur = dict(frs[i])
+        y_end, x_end, sl = ends[i][2], ends[i][3], ends[i][4]
+        while True:
+            best, bd = -1, 1e9
+            for j in range(len(frs)):
+                if used[j]:
+                    continue
+                y0j, x0j = ends[j][0], ends[j][1]
+                dy = y0j - y_end
+                if not (0 < dy <= max_gap_rows):
+                    continue
+                d = abs(x0j - (x_end + sl * dy))         # отклонение от экстраполяции
+                if d < bd:
+                    bd, best = d, j
+            if best < 0 or bd > tol:
+                break
+            used[best] = True
+            cur.update(frs[best])
+            y_end, x_end, sl = ends[best][2], ends[best][3], ends[best][4]
+        out.append(cur)
+    out.sort(key=len, reverse=True)
+    return out
 ap = argparse.ArgumentParser()
 ap.add_argument("n", nargs="?", type=int, default=12)
 ap.add_argument("--tok", default="BK, IK|GK, NGK|BKZ, DS|MBK, MDS|STK+DS|BK+IK|MK, MDS")
 ap.add_argument("--per-well", type=int, default=1)
 ap.add_argument("--prob", default="")
 ap.add_argument("--min-cov", type=float, default=0.2, help="доля высоты рамки для «длинной» нити")
+ap.add_argument("--chain", action="store_true", help="сшивать фрагменты по непрерывности")
+ap.add_argument("--chain-gap", type=int, default=60, help="макс. разрыв сшивки в строках скана")
+ap.add_argument("--chain-tol", type=float, default=25.0, help="допуск на отклонение от экстраполяции")
+ap.add_argument("--gap", type=int, default=12, help="max_gap_x НА СТРОКУ (умножается на step)")
+ap.add_argument("--skip", type=int, default=12, help="max_skip_y в строках скана")
+ap.add_argument("--step", type=int, default=4, help="прореживание строк: link_strands на чистом "
+                "Python идёт по строкам и на скане 47000x3161 не считается за разумное время; "
+                "для ЗАМЕРА ПОТОЛКА геометрия при шаге 3-4 не теряется")
 a = ap.parse_args()
 TOKS = [t.strip().upper() for t in a.tok.split("|")]
 p = Config().cv
@@ -47,6 +99,11 @@ for wlg in sorted(ARCHIVE.glob("*/wlg")):
             continue
         cands.append((well, n, find_image(n), m))
         per_well[well] = per_well.get(well, 0) + 1
+# link_strands — чистый Python по строкам, и число АКТИВНЫХ нитей растёт с числом ранов
+# (каждый неиспользованный ран порождает нить). На 47000x3161 с 60 ранами/строку это не считается.
+# Для замера потолка берём САМЫЕ МЕЛКИЕ листы — вывод о геометрии от размера скана не зависит.
+from PIL import Image
+cands.sort(key=lambda c: Image.open(c[2]).size[0] * Image.open(c[2]).size[1])
 cands = cands[:a.n]
 print(f"листов: {len(cands)}")
 
@@ -73,8 +130,19 @@ for well, n, img, m in cands:
     y0, y1 = int(fr.top_y), int(fr.bottom_y)
     lo, hi = int(t.x_left) + 3, int(t.x_right) - 3
     H = max(1, y1 - y0)
-    strands = link_strands(fg.astype(bool), lo, hi, y0, y1)
-    long_s = [s for s in strands if len(s) >= a.min_cov * H]
+    st = max(1, a.step)
+    sub = np.ascontiguousarray(fg[y0:y1:st].astype(bool))       # прореженные строки
+    # ПАРАМЕТРЫ ЛИНКЕРА масштабируются шагом: они заданы «на строку», а при прореживании скачок
+    # x между соседними обработанными строками в step раз больше. Плюс перо мульти-листа
+    # свипует на десятки px за строку — БКЗ-шный max_gap_x=10 рвёт нить на каждом взмахе.
+    raw = link_strands(sub, lo, hi, 0, sub.shape[0],
+                       max_gap_x=a.gap * st, max_skip_y=max(2, a.skip // st))
+    strands = [{y0 + r * st: x for r, x in s.items()} for s in raw]   # обратно в строки скана
+    long_s = [s for s in strands if len(s) * st >= a.min_cov * H]
+    if a.chain:
+        long_s = chain_fragments(strands, min_len=max(3, int(0.01 * H / st)),
+                                 max_gap_rows=a.chain_gap // st, tol=a.chain_tol)
+        long_s = [s for s in long_s if len(s) * st >= a.min_cov * H]
     K = len(gts)
     line = f"{well:<14} {m.curves_token:<12} K={K} нитей={len(strands):>4} длинных={len(long_s):>3}  "
     for c in gts:
