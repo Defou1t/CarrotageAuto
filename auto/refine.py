@@ -51,6 +51,35 @@ def hampel_spikes(xs, win=8, k=4.0, min_jump=12.0):
     return spikes
 
 
+def drop_transits(rows_xs, min_span=150.0, max_rows=8):
+    """Выбросить строки ТРАНЗИТА пера (свипующее перо, MBK). Транзит = перо ЕДЕТ через трек,
+    а не измеряет: ОДНОСТОРОННИЙ (монотонный) ход по x с суммарным смещением ≥min_span за ≤max_rows
+    строк. Настоящий ПИК так не выглядит — он «туда-обратно» (смена знака), поэтому сохраняется.
+
+    Домен (замер эталона Yatskivska MBK 18.07): в строке РОВНО ОДИН ран (отдельной линии перевыноса
+    НЕ нарисовано), а точки эксперта лежат на туши лишь 58-67% — на транзитах он перо НЕ ведёт,
+    а проводит хорду. Значит транзит = НЕ измерение, его корректно не оцифровывать (NULL = cut point).
+    Интерполяция дыр ПРОБОВАНА И ОТВЕРГНУТА (≤3px 63→51%): хорда через транзит идёт не туда, куда
+    ведёт эксперт (он переходит на перевынос).
+    Гейт: шипы(>50px от эксперта) 85→31 эпизодов, ≤3px 60→68%, ×1-строки ≤3px 73→79%, cov 0.70→0.54."""
+    import numpy as np
+    ys = sorted(rows_xs)
+    n = len(ys)
+    drop = set()
+    for i in range(n):
+        for k in range(2, max_rows + 1):
+            j = i + k
+            if j >= n or ys[j] - ys[i] > max_rows * 2:
+                break
+            seg = [rows_xs[ys[q]] for q in range(i, j + 1)]
+            d = np.diff(seg)
+            if len(d) < 2:
+                continue
+            if ((d > 0).all() or (d < 0).all()) and abs(seg[-1] - seg[0]) >= min_span:
+                drop.update(ys[q] for q in range(i, j + 1))
+    return {y: x for y, x in rows_xs.items() if y not in drop}, len(drop)
+
+
 def despike(rows_xs, win=8, k=4.0, min_jump=12.0):
     """rows_xs: dict row→x → та же трасса без спайков (выброс заменён локальной медианой).
     Возвращает (очищенный dict, число убранных)."""
@@ -269,6 +298,10 @@ def refine_trace(fg, line, frame, p, trace_line, track, n_same_color=1):
             if xw.max() > xt.max() + 5 or xw.min() < xt.min() - 5:
                 tr = tr_wide
     tr, _ = despike(tr, win=p.despike_win, k=p.despike_k, min_jump=p.despike_min_jump)
+    if getattr(line, "prefer_body", False):
+        # свипующее перо: Hampel по MAD тут бессилен (кривая качается на сотни px → порог k·MAD
+        # огромен, транзиты проходят). Убираем транзиты явным геом. признаком.
+        tr, _ = drop_transits(tr, min_span=p.transit_min_span)
     # ПРИМ (session2): repair_swaps НЕ вызывается в продакшн-пути. На узкой выборке (40 планшетов
     # BEZLUD/BOGAT_002) выглядел net-плюсом (PZ 0.82→0.96), но широкая проверка (130 планшетов,
     # плашки BOGAT BKZ с 7 слипшимися чёрными GZ) дала net −1.71пп и КАТАСТРОФЫ (GZ31 0.90→0.28
