@@ -16,21 +16,37 @@ from auto.config import Config
 
 MN = r"F:\nds\Auto\mnemonics.json"
 p = Config().cv
-for arg in sys.argv[1:]:
+# --prob DIR: подмешать prob-карты recall-модели (ML НА ФОН) — карты кладёт _prob_batch.py.
+# Смысл: правила теряют бледное/пунктир, а под GT-точками чернил «нет» — модель поднимает recall.
+PROBDIR = None
+if "--prob" in sys.argv:
+    PROBDIR = Path(sys.argv[sys.argv.index("--prob") + 1])
+for arg in [x for x in sys.argv[1:] if not x.startswith("--")
+            and (PROBDIR is None or Path(x) != PROBDIR)]:
     n = Path(arg)
     img = find_image(n)
     mo = extract(str(n))
     m = M.parse_filename(n.name, MN)
     rgb = im.load_rgb(str(img))
     fr = F.frame_from_nlgx(str(n), m, p, rgb=rgb)
-    fg = im.ink_foreground(rgb, p)
+    prob = None
+    if PROBDIR is not None:
+        np_path = PROBDIR / f"{Path(img).stem}_prob.npy"
+        if np_path.is_file():
+            from auto.prob import prob_from_npy
+            prob = prob_from_npy(np_path)(rgb)
+        else:
+            print(f"  (нет prob-карты {np_path.name} — считаю по правилам)")
+    fg = im.ink_foreground(rgb, p, prob=prob)
     gts = [c for c in mo["curves"] if sum(1 for x in c["xs"] if x != NULL) >= 100
            and M.mnem_root(c["name"]) != "DA"]
     tid = Counter(E._slot_track(mo, c, fr) for c in gts)
     best = tid.most_common(1)[0][0]
     gts = [c for c in gts if E._slot_track(mo, c, fr) == best]
     t = fr.tracks[best if best is not None else 0]
-    ser = [{c["top_y"] + i: x for i, x in enumerate(c["xs"]) if x != NULL} for c in gts]
+    # ⚠ GT = ВЕРШИНЫ полилинии (4-14% строк) — интерполируем, иначе сравнение по строкам врёт
+    from _multi_replica_probe import dense
+    ser = [dense(c) for c in gts]
     K = len(gts)
     lo, hi = int(t.x_left) + 3, int(t.x_right) - 3
     cnt = Counter(); extra_rel = []; unmatched_gt = 0; matched = 0

@@ -29,7 +29,9 @@ ap.add_argument("n", nargs="?", type=int, default=12)
 ap.add_argument("--tok", default="BK, IK|GK, NGK|BKZ, DS|MK, MBK, MDS|MBK, MDS, MK|STK+DS|BK+IK")
 ap.add_argument("--per-well", type=int, default=1)
 ap.add_argument("--json", default="")
+ap.add_argument("--prob", default="", help="папка prob-карт (_prob_batch.py) — ML НА ФОН")
 a = ap.parse_args()
+PROBDIR = Path(a.prob) if a.prob else None
 TOKS = [t.strip().upper() for t in a.tok.split("|")]
 
 cands, per_well = [], {}
@@ -58,10 +60,17 @@ print(f"кандидатов: {len(cands)}; беру {min(a.n, len(cands))}")
 rows, sheets = [], []
 for well, n, img, m, gts in cands[:a.n]:
     cfg = Config(); cfg.out = OUT
+    npy = None
+    if PROBDIR is not None:
+        cand = PROBDIR / f"{Path(img).stem}_prob.npy"
+        npy = str(cand) if cand.is_file() else None
+        if npy is None:
+            print(f"  (нет prob-карты для {Path(img).stem[:40]} — по правилам)")
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            sheet, traces, res = pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
+            sheet, traces, res = pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False,
+                                          prob_npy=npy)
     except Exception as e:
         print(f"{well}/{m.curves_token:<14} ERR {type(e).__name__}: {e}")
         sheets.append({"well": well, "stem": n.stem, "err": f"{type(e).__name__}: {e}"})

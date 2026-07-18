@@ -421,6 +421,18 @@ def _lines_for_track(rgb, frame, t, p, fg_full):
     for cm in chans.values():
         dark = dark & ~cm                                   # чёрный = тёмное минус цветное
     chans["black"] = dark
+    # ML НА ФОН (19.07). `ink_foreground` подмешивает recall-модель ОБЪЕДИНЕНИЕМ, но каналы выше
+    # берутся ПРАВИЛАМИ (dark_v / цветовые пороги) и лишь пересекаются с fg_full — поэтому всё,
+    # что добавила модель (бледное/пунктир ниже порога темноты и вне цветов), тут же терялось, и
+    # prob-карта не меняла разбор НИ НА ПИКСЕЛЬ (замер: гейт с --prob дал те же цифры бит-в-бит).
+    # Отдаём «ничейный» передний план чёрному каналу. БЕЗ prob-карты это множество ПУСТО
+    # (fg_full = dark|цвета минус структура) — путь правил не меняется.
+    claimed = np.zeros_like(dark)
+    for cm in chans.values():
+        claimed |= cm
+    extra = (fg_full > 0) & sub & ~claimed
+    if extra.any():
+        chans["black"] = dark | extra
     track_lines, excluded = [], []
     for color, cmask in chans.items():
         # ЦВЕТНЫЕ каналы малошумны (цвет — уже фильтр): разреженная/пунктирная кривая (SP2 оранж,
