@@ -25,6 +25,46 @@ from bkz_groups import build_groups, group_trace
 ET = Path(r"F:\nds\projects\Archive\Yatskivska_001\wlg")
 
 
+def predicted_twin_x(fam, ka, kb, x):
+    """x-позиция ДВОЙНИКА той же точки на другой шкале: то же значение, другая шкала.
+    Все шкалы листа делят один пиксельный диапазон ⇒ двойник детерминирован."""
+    sa, sb = fam[ka], fam[kb]
+    v = sa["v_left"] + (x - sa["x_left"]) * (sa["v_right"] - sa["v_left"]) / \
+        ((sa["x_right"] - sa["x_left"]) or 1)
+    return sb["x_left"] + (v - sb["v_left"]) * (sb["x_right"] - sb["x_left"]) / \
+        ((sb["v_right"] - sb["v_left"]) or 1)
+
+
+def find_twin_strands(strands, fam, tol=6.0, min_rows=40, topn=25):
+    """ЦЕЛЕВОЙ поиск двойника (вместо O(N²) перебора пар): для странда i и пары шкал (ka,kb)
+    считаем ПРЕДСКАЗАННУЮ траекторию двойника и ищем странд, лежащий на ней (медиана |Δx| ≤ tol).
+    Зачем: перебор пар не находит короткие двойники — они не попадают в топ-N по длине
+    (BKZ D2 3474/3866: 0 рёбер при том, что странды на GT лежат точно). Гейт 18.07."""
+    edges = []
+    N = min(topn, len(strands))
+    for i in range(N):
+        si = strands[i]
+        rows_i = sorted(si)
+        if len(rows_i) < min_rows:
+            continue
+        for ka in range(len(fam)):
+            for kb in range(len(fam)):
+                if ka == kb:
+                    continue
+                pred = {y: predicted_twin_x(fam, ka, kb, si[y]) for y in rows_i}
+                for j in range(len(strands)):
+                    if j == i:
+                        continue
+                    sj = strands[j]
+                    common = [y for y in pred if y in sj]
+                    if len(common) < min_rows:
+                        continue
+                    d = np.array([abs(pred[y] - sj[y]) for y in common])
+                    if float(np.median(d)) <= tol:
+                        edges.append((i, j, ka, kb, float(np.median(d)), len(common)))
+    return edges
+
+
 def gt_values(m, c):
     gl = gt_levels(c); gt = BT.curve_rows(c)
     fam = build_family(m, c)
