@@ -70,6 +70,26 @@ def test_meta():
     check("одиночный токен не тронут", M.expected_curves("MBK", mn) == ["MBK"],
           M.expected_curves("MBK", mn))
 
+    # ВТОРАЯ КОНВЕНЦИЯ ИМЕНИ (скважины RYBAL, 19% архива): дата первой, интервал в скобках И СВОЙ
+    # у каждой группы, хвост после интервала = явные имена кривых. Раньше из такого имени не
+    # бралось НИЧЕГО (well='1966.01.12', токен пуст) — приор был пуст у пятой части архива.
+    r = M.parse_filename("1966.01.12_Rybal_058_GK_(0012-1395)_NGK_(1300-1395)_500.nlgx", mn)
+    check("скобки: ветка разбора", r.naming == "paren", r.naming)
+    check("скобки: well", r.well == "Rybal_058", r.well)
+    check("скобки: общий интервал", (r.top_depth, r.bottom_depth) == (12.0, 1395.0),
+          (r.top_depth, r.bottom_depth))
+    check("скобки: масштаб", r.scale == 500, r.scale)
+    check("скобки: кривые", r.expected_curves == ["GK", "NGK"], r.expected_curves)
+    # ★ ГЛАВНОЕ, чего нет в основной конвенции: интервал У КАЖДОЙ кривой свой.
+    check("скобки: интервал ПОКРИВОЙ", r.curve_spans.get("NGK") == (1300.0, 1395.0),
+          r.curve_spans)
+    # хвостовые имена проходят через словарь: в имени пишут PS, слот в nlgx — SP (37 файлов)
+    q = M.parse_filename("1963.06.02_Rybal_017_BKZ3_(1264-1468)_GZ3_PS.nlgx", mn)
+    check("скобки: PS→SP через словарь", q.expected_curves == ["GZ3", "SP"], q.expected_curves)
+    # основная конвенция НЕ должна уходить в скобочную ветку
+    check("основная конвенция цела", M.parse_filename(
+        "Semeguniv_20_BK+MBK_3080_3520_200_D1.jpg", mn).naming == "main")
+
     check("alias МБК→MBK", M.curve_info("МБК", mn)["root"] == "MBK")
     check("SP expected red", M.curve_info("SP", mn)["color"] == "red")
     check("class GZ31=RES", M.curve_class("GZ31") == "RES", M.curve_class("GZ31"))

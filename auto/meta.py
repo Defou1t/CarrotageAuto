@@ -34,6 +34,11 @@ class FileMeta:
     part: str                         # «D1», «D2», …
     expected_curves: list = field(default_factory=list)   # мнемоники из filename_hints
     raw_stem: str = ""
+    # ИНТЕРВАЛ ПОКРИВОЙ (только скобочная конвенция, §6.10): {мнемоника: (верх, низ)}.
+    # Прямой приор «где кривая живёт по глубине» — в основной конвенции его нет. Нужен, потому
+    # что «K=2 в файле» ≠ «две кривые на всю глубину»: RYBAL_058 NGK размечена на 7% интервала.
+    curve_spans: dict = field(default_factory=dict)
+    naming: str = "main"              # «main» | «paren» (какая ветка разбора сработала)
 
     @property
     def depth_span(self):
@@ -67,6 +72,71 @@ def _depth_marker(toks):
     return None
 
 
+_DATE = r"\d{4}\.\d{2}\.\d{2}"
+_PAREN = re.compile(r"\((\d{2,5})-(\d{2,5})\)")
+
+
+def _parse_paren_convention(stem, mnemonics_path=None):
+    """ВТОРАЯ КОНВЕНЦИЯ ИМЕНИ (скважины RYBAL, 227 из 1180 планшетов = 19% архива, §6.10):
+      `1966.01.12_Rybal_058_GK_(0012-1395)_NGK_(1300-1395)_500`
+      `1973.12.05_Rybal_045_BKZ2_(3100-3360)_GZ5_OGZ`
+      `1963.06.02_Rybal_017_BKZ3_(1264-1468)_GZ3_PS`
+    Дата первой, интервал В СКОБКАХ И СВОЙ У КАЖДОЙ ГРУППЫ, масштаб в конце (может отсутствовать),
+    а ХВОСТ ПОСЛЕ ИНТЕРВАЛА — это ЯВНЫЕ ИМЕНА КРИВЫХ (GZ5, OGZ, GZ3, PS). Основной парсер брал
+    отсюда НИЧЕГО (well='1966.01.12', токен пуст) — приор был пуст у пятой части архива.
+    Здесь состав известен ТОЧНО, статистический приор filename_hints не нужен.
+    Возвращает FileMeta или None."""
+    toks = stem.split("_")
+    if not toks or not re.fullmatch(rf"{_DATE}(?:-{_DATE})?", toks[0]):
+        return None
+    par = [i for i, t in enumerate(toks) if _PAREN.fullmatch(t)]
+    if not par:
+        return None
+    # скважина: токены между датой и первой группой имён — «Rybal_058»
+    well_end = 2 if len(toks) > 2 and re.fullmatch(r"\d+", toks[2]) else 1
+    well = "_".join(toks[1:well_end + 1])
+    groups, prev = [], well_end + 1
+    for i in par:
+        names = [t for t in toks[prev:i] if re.fullmatch(r"[A-Za-zА-Яа-я][\w\-]*", t)]
+        mm = _PAREN.fullmatch(toks[i])
+        groups.append((names, float(mm.group(1)), float(mm.group(2))))
+        prev = i + 1
+    tail = toks[par[-1] + 1:]
+    scale = next((int(t) for t in tail if re.fullmatch(r"\d{2,4}", t)), None)
+    # хвостовые буквенные токены = ЯВНЫЕ мнемоники кривых этого файла
+    explicit = [t.upper() for t in tail if re.fullmatch(r"[A-Za-zА-Яа-я][\w]*", t)]
+    tops = [g[1] for g in groups]; bots = [g[2] for g in groups]
+    token = ",".join(n for names, _, _ in groups for n in names)
+    m = FileMeta(well=well, curves_token=token, top_depth=min(tops), bottom_depth=max(bots),
+                 scale=scale, part="", raw_stem=stem, naming="paren")
+    spans = {}
+    for names, t0, t1 in groups:
+        for nm in names:
+            spans[nm.upper()] = (t0, t1)
+    if explicit:
+        # Имена даны прямо, НО их всё равно надо прогнать через словарь: в именах пишут «PS»,
+        # а слот в nlgx называется «SP» (замер: 37 файлов), «IK» разворачивается в IKA+IKR.
+        # Сырые имена давали 47% точных совпадений состава, через словарь — см. §6.10.
+        out = []
+        for nm in explicit:
+            for c in expected_curves(nm, mnemonics_path) or [nm]:
+                if c not in out:
+                    out.append(c)
+        m.expected_curves = out
+        for nm in out:
+            spans.setdefault(nm, (groups[-1][1], groups[-1][2]))
+    else:
+        out = []
+        for names, _, _ in groups:
+            for nm in names:
+                for c in expected_curves(nm, mnemonics_path):
+                    if c not in out:
+                        out.append(c)
+        m.expected_curves = out
+    m.curve_spans = spans
+    return m
+
+
 def parse_filename(path, mnemonics_path=None) -> FileMeta:
     """Разобрать имя планшета `Well[_NN]_CURVES_from[-_]to_scale[_part]`. Терпимо к хвостам.
     mnemonics_path — раскрыть тип-планшета (BKZ→GZ1..OGZ) через filename_hints."""
@@ -74,6 +144,10 @@ def parse_filename(path, mnemonics_path=None) -> FileMeta:
     toks = stem.split("_")
     dm = _depth_marker(toks)
     if not dm:
+        # основная конвенция не сработала — пробуем скобочную (RYBAL, §6.10)
+        alt = _parse_paren_convention(stem, mnemonics_path)
+        if alt is not None:
+            return alt
         return FileMeta(well=toks[0] if toks else stem, curves_token="",
                         top_depth=None, bottom_depth=None, scale=None, part="", raw_stem=stem)
     top, bot, cidx, after = dm
