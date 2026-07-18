@@ -1,68 +1,376 @@
 {
-  "_source": "Мнемоніка робоча версія.docx, получено от заказчика 11.06.2026",
-  "_usage": "Канонические имена кривых LAS, единицы и расшифровка имен файлов планшетов. Используется Блоком 2 (имена/юниты) и Блоком 3 (настройка кривых в NeuraLOG).",
-  "curves": {
-    "GZ":   {"unit": "Ohmm", "comment": "градієнт-зонд", "sheet": "GZ(A2.0M0.5N або ін.) Omm", "group": "СК", "color": "green"},
-    "PZ":   {"unit": "Ohmm", "comment": "потенціал-зонд", "sheet": "PZ(N11M0.5A або ін.) Omm", "group": "СК", "color": "black"},
-    "SP":   {"unit": "mV", "comment": "потенціал самочинної поляризації", "sheet": "PS, mV", "group": "СК", "color": "red"},
-    "SP2":  {"unit": "mV", "comment": "друга SP (виняток: Semeguniv STK_4020 — оранжева)", "sheet": "PS2, mV", "group": "СК", "color": "orange"},
-    "REZ":  {"unit": "Ohmm", "comment": "резистивіметрія", "sheet": "Резистивіметрія (Omm)", "group": "СК"},
-    "GZ1":  {"unit": "Ohmm", "comment": "градієнт зонд A0.4M0.1N", "sheet": "GZ1(A0.4M0.1N) Omm", "group": "БКЗ"},
-    "GZ2":  {"unit": "Ohmm", "comment": "градієнт зонд A1.0M0.1N", "sheet": "GZ2(A1.0M0.1N) Omm", "group": "БКЗ"},
-    "GZ3":  {"unit": "Ohmm", "comment": "градієнт зонд A2.0M0.5N", "sheet": "GZ3(A2.0M0.5N) Omm", "group": "БКЗ"},
-    "GZ4":  {"unit": "Ohmm", "comment": "градієнт зонд A4.0M0.5N", "sheet": "GZ4(A4.0M0.5N) Omm", "group": "БКЗ"},
-    "GZ5":  {"unit": "Ohmm", "comment": "градієнт зонд A8.0M0.5N", "sheet": "GZ5(A8.0M1.0N) Omm", "group": "БКЗ"},
-    "OGZ":  {"unit": "Ohmm", "comment": "обернений градієнт зонд N0.5M2.0A", "sheet": "OGZ(N0.5M2.0A) Omm", "group": "БКЗ"},
-    "BK":   {"unit": "Ohmm", "comment": "Боковий каротаж", "sheet": "BK, Omm", "group": "БК"},
-    "IK":   {"unit": "mS/m", "comment": "індукційний каротаж", "sheet": "IK (mS/m)", "group": "ІК"},
-    "IKA":  {"unit": "mS/m", "comment": "індукційний каротаж активна складова", "sheet": "IKA (mS/m)", "group": "ІК"},
-    "IKR":  {"unit": "mS/m", "comment": "індукційний каротаж реактивна складова", "sheet": "IKR (mS/m)", "group": "ІК"},
-    "MGZ":  {"unit": "Ohmm", "comment": "мікроградієнт-зонд", "sheet": "MGZ, Omm", "group": "Мікрокаротаж"},
-    "MPZ":  {"unit": "Ohmm", "comment": "мікропотенціал-зонд", "sheet": "MPZ, Omm", "group": "Мікрокаротаж"},
-    "MBK":  {"unit": "Ohmm", "comment": "боковий мікрокаротаж", "sheet": "MBK Omm", "group": "Мікрокаротаж"},
-    "MDS":  {"unit": "m", "comment": "мікрокаверномір", "sheet": "MKV (м)", "group": "Мікрокаротаж"},
-    "DS":   {"unit": "m", "comment": "Середній діаметр свердловини", "sheet": "DS (m)", "group": "Каверномір", "color": "black"},
-    "DN":   {"unit": "m", "comment": "номінальний діаметр свердловини (пряма-референс, вокруг неё вьётся DS)", "sheet": "DN (m)", "group": "Каверномір", "color": "black"},
-    "GGKb": {"unit": "UE", "comment": "Великий зонд ГГКщ", "sheet": "GGKb (імп/хв)", "group": "Радіометрія"},
-    "GGKm": {"unit": "UE", "comment": "Малий зонд ГГКщ", "sheet": "GGKm (імп/хв)", "group": "Радіометрія"},
-    "RHOB": {"unit": "g/cm3", "comment": "Щільність ГГКщ", "sheet": "GGKp (g/cm3)", "group": "Радіометрія"},
-    "GK":   {"unit": "uR/h", "comment": "Гамма Каротаж", "sheet": "GK, mkR/h", "group": "Радіометрія"},
-    "NNKb": {"unit": "UE", "comment": "Великий зонд 2ННКт", "sheet": "NNKb (y.e.)", "group": "Радіометрія"},
-    "NNKm": {"unit": "UE", "comment": "Малий зонд 2ННКт", "sheet": "NNKm (y.e.)", "group": "Радіометрія"},
-    "NGK":  {"unit": "UE", "comment": "НГК", "sheet": "NGK (y.e.)", "group": "Радіометрія"},
-    "TAU":  {"unit": "I/m", "comment": "Час життя теплових нейтронів (мкс)", "sheet": "TAU", "group": "ІННК"},
-    "A1":   {"unit": "UE", "comment": "Амплітуда по першому каналу", "sheet": "A1 (y.e.)", "group": "АК"},
-    "A2":   {"unit": "UE", "comment": "Амплітуда по другому каналу", "sheet": "A2 (y.e.)", "group": "АК"},
-    "AL":   {"unit": "dB/m", "comment": "Коефіцієнт затухання", "sheet": "AL (dB/m)", "group": "АК"},
-    "T1":   {"unit": "us", "comment": "Час приходу Р-хвилі до першого приймача", "sheet": "T1 (мкс)", "group": "АК"},
-    "T2":   {"unit": "us", "comment": "Час приходу Р-хвилі до другого приймача", "sheet": "T2 (mks)", "group": "АК"},
-    "DT":   {"unit": "us/m", "comment": "Інтервальний час", "sheet": "DT (mks)", "group": "АК"}
+ "_source": "Мнемоніка робоча версія.docx, получено от заказчика 11.06.2026",
+ "_usage": "Канонические имена кривых LAS, единицы и расшифровка имен файлов планшетов. Используется Блоком 2 (имена/юниты) и Блоком 3 (настройка кривых в NeuraLOG).",
+ "curves": {
+  "GZ": {
+   "unit": "Ohmm",
+   "comment": "градієнт-зонд",
+   "sheet": "GZ(A2.0M0.5N або ін.) Omm",
+   "group": "СК",
+   "color": "green"
   },
-  "filename_hints": {
-    "_comment": "Тип в имени файла планшета -> ожидаемый набор кривых LAS. БКЗ-планшеты содержат подмножество зондов (какие именно — определяется по изображению/шапке, напр. D1=GZ1-GZ3, D2=GZ4-GZ5+OGZ). STK (стандартный каротаж, Эдуард 10.07): PZ чёрная + GZ зелёная + SP красная, ИНОГДА ещё DS чёрная (вьётся вокруг прямой DN) — т.е. 3-4 кривые. MK-ленты (Эдуард 10.07): кроме MGZ/MPZ часто несут КРАСНУЮ SP — называть SP, задача U1 просто отличать её как линию; гейт-допуск +1.",
-    "STK": ["PZ", "GZ", "SP"],
-    "SK": ["GZ", "PZ", "SP", "REZ"],
-    "KS": ["GZ", "PZ", "SP", "REZ"],
-    "BKZ": ["GZ1", "GZ2", "GZ3", "GZ4", "GZ5", "OGZ"],
-    "BK": ["BK"],
-    "MBK": ["MBK"],
-    "IK": ["IK"],
-    "MK": ["MGZ", "MPZ"],
-    "DS": ["DS", "DN"],
-    "GK": ["GK"],
-    "RK": ["GK", "NGK"],
-    "NGK": ["NGK"],
-    "AK": ["DT", "T1", "T2", "A1", "A2", "AL"],
-    "SP": ["SP"],
-    "PS": ["SP"]
+  "PZ": {
+   "unit": "Ohmm",
+   "comment": "потенціал-зонд",
+   "sheet": "PZ(N11M0.5A або ін.) Omm",
+   "group": "СК",
+   "color": "black"
   },
-  "aliases": {
-    "ПС": "SP", "PS": "SP",
-    "ГК": "GK",
-    "КС": "GZ",
-    "БК": "BK", "МБК": "MBK",
-    "МКВ": "MDS", "MKV": "MDS",
-    "GGKP": "RHOB",
-    "ТЕРМ": "TM", "РЕЗ": "REZ"
+  "SP": {
+   "unit": "mV",
+   "comment": "потенціал самочинної поляризації",
+   "sheet": "PS, mV",
+   "group": "СК",
+   "color": "red"
+  },
+  "SP2": {
+   "unit": "mV",
+   "comment": "друга SP (виняток: Semeguniv STK_4020 — оранжева)",
+   "sheet": "PS2, mV",
+   "group": "СК",
+   "color": "orange"
+  },
+  "REZ": {
+   "unit": "Ohmm",
+   "comment": "резистивіметрія",
+   "sheet": "Резистивіметрія (Omm)",
+   "group": "СК"
+  },
+  "GZ1": {
+   "unit": "Ohmm",
+   "comment": "градієнт зонд A0.4M0.1N",
+   "sheet": "GZ1(A0.4M0.1N) Omm",
+   "group": "БКЗ"
+  },
+  "GZ2": {
+   "unit": "Ohmm",
+   "comment": "градієнт зонд A1.0M0.1N",
+   "sheet": "GZ2(A1.0M0.1N) Omm",
+   "group": "БКЗ"
+  },
+  "GZ3": {
+   "unit": "Ohmm",
+   "comment": "градієнт зонд A2.0M0.5N",
+   "sheet": "GZ3(A2.0M0.5N) Omm",
+   "group": "БКЗ"
+  },
+  "GZ4": {
+   "unit": "Ohmm",
+   "comment": "градієнт зонд A4.0M0.5N",
+   "sheet": "GZ4(A4.0M0.5N) Omm",
+   "group": "БКЗ"
+  },
+  "GZ5": {
+   "unit": "Ohmm",
+   "comment": "градієнт зонд A8.0M0.5N",
+   "sheet": "GZ5(A8.0M1.0N) Omm",
+   "group": "БКЗ"
+  },
+  "OGZ": {
+   "unit": "Ohmm",
+   "comment": "обернений градієнт зонд N0.5M2.0A",
+   "sheet": "OGZ(N0.5M2.0A) Omm",
+   "group": "БКЗ"
+  },
+  "BK": {
+   "unit": "Ohmm",
+   "comment": "Боковий каротаж",
+   "sheet": "BK, Omm",
+   "group": "БК"
+  },
+  "IK": {
+   "unit": "mS/m",
+   "comment": "індукційний каротаж",
+   "sheet": "IK (mS/m)",
+   "group": "ІК"
+  },
+  "IKA": {
+   "unit": "mS/m",
+   "comment": "індукційний каротаж активна складова",
+   "sheet": "IKA (mS/m)",
+   "group": "ІК"
+  },
+  "IKR": {
+   "unit": "mS/m",
+   "comment": "індукційний каротаж реактивна складова",
+   "sheet": "IKR (mS/m)",
+   "group": "ІК"
+  },
+  "MGZ": {
+   "unit": "Ohmm",
+   "comment": "мікроградієнт-зонд",
+   "sheet": "MGZ, Omm",
+   "group": "Мікрокаротаж"
+  },
+  "MPZ": {
+   "unit": "Ohmm",
+   "comment": "мікропотенціал-зонд",
+   "sheet": "MPZ, Omm",
+   "group": "Мікрокаротаж"
+  },
+  "MBK": {
+   "unit": "Ohmm",
+   "comment": "боковий мікрокаротаж",
+   "sheet": "MBK Omm",
+   "group": "Мікрокаротаж"
+  },
+  "MDS": {
+   "unit": "m",
+   "comment": "мікрокаверномір",
+   "sheet": "MKV (м)",
+   "group": "Мікрокаротаж"
+  },
+  "DS": {
+   "unit": "m",
+   "comment": "Середній діаметр свердловини",
+   "sheet": "DS (m)",
+   "group": "Каверномір",
+   "color": "black"
+  },
+  "DN": {
+   "unit": "m",
+   "comment": "номінальний діаметр свердловини (пряма-референс, вокруг неё вьётся DS)",
+   "sheet": "DN (m)",
+   "group": "Каверномір",
+   "color": "black"
+  },
+  "GGKb": {
+   "unit": "UE",
+   "comment": "Великий зонд ГГКщ",
+   "sheet": "GGKb (імп/хв)",
+   "group": "Радіометрія"
+  },
+  "GGKm": {
+   "unit": "UE",
+   "comment": "Малий зонд ГГКщ",
+   "sheet": "GGKm (імп/хв)",
+   "group": "Радіометрія"
+  },
+  "RHOB": {
+   "unit": "g/cm3",
+   "comment": "Щільність ГГКщ",
+   "sheet": "GGKp (g/cm3)",
+   "group": "Радіометрія"
+  },
+  "GK": {
+   "unit": "uR/h",
+   "comment": "Гамма Каротаж",
+   "sheet": "GK, mkR/h",
+   "group": "Радіометрія"
+  },
+  "NNKb": {
+   "unit": "UE",
+   "comment": "Великий зонд 2ННКт",
+   "sheet": "NNKb (y.e.)",
+   "group": "Радіометрія"
+  },
+  "NNKm": {
+   "unit": "UE",
+   "comment": "Малий зонд 2ННКт",
+   "sheet": "NNKm (y.e.)",
+   "group": "Радіометрія"
+  },
+  "NGK": {
+   "unit": "UE",
+   "comment": "НГК",
+   "sheet": "NGK (y.e.)",
+   "group": "Радіометрія"
+  },
+  "TAU": {
+   "unit": "I/m",
+   "comment": "Час життя теплових нейтронів (мкс)",
+   "sheet": "TAU",
+   "group": "ІННК"
+  },
+  "A1": {
+   "unit": "UE",
+   "comment": "Амплітуда по першому каналу",
+   "sheet": "A1 (y.e.)",
+   "group": "АК"
+  },
+  "A2": {
+   "unit": "UE",
+   "comment": "Амплітуда по другому каналу",
+   "sheet": "A2 (y.e.)",
+   "group": "АК"
+  },
+  "AL": {
+   "unit": "dB/m",
+   "comment": "Коефіцієнт затухання",
+   "sheet": "AL (dB/m)",
+   "group": "АК"
+  },
+  "T1": {
+   "unit": "us",
+   "comment": "Час приходу Р-хвилі до першого приймача",
+   "sheet": "T1 (мкс)",
+   "group": "АК"
+  },
+  "T2": {
+   "unit": "us",
+   "comment": "Час приходу Р-хвилі до другого приймача",
+   "sheet": "T2 (mks)",
+   "group": "АК"
+  },
+  "DT": {
+   "unit": "us/m",
+   "comment": "Інтервальний час",
+   "sheet": "DT (mks)",
+   "group": "АК"
   }
+ },
+ "filename_hints": {
+  "_comment": "Тип в имени файла планшета -> ожидаемый набор кривых LAS. БКЗ-планшеты содержат подмножество зондов (какие именно — определяется по изображению/шапке, напр. D1=GZ1-GZ3, D2=GZ4-GZ5+OGZ). STK (стандартный каротаж, Эдуард 10.07): PZ чёрная + GZ зелёная + SP красная, ИНОГДА ещё DS чёрная (вьётся вокруг прямой DN) — т.е. 3-4 кривые. MK-ленты (Эдуард 10.07): кроме MGZ/MPZ часто несут КРАСНУЮ SP — называть SP, задача U1 просто отличать её как линию; гейт-допуск +1. ▶ 19.07: набор по токену ВЫВЕДЕН ИЗ АРХИВА (digitizer/rnd/_token_curveset.py, 37 токенов n>=3, медианная стабильность 86%); заменены только токены со стабильностью >=70%. Нестабильные (BKZ 25%, MK 52%, AK 38%, INNK 39%, TM, TK, GDD, «GK-PVR, LM, TM, VM», «RK, AK, DS», «SK, DS, RK», «GK, LM», «MBK, MDS», 00) оставлены как были — у них состав плавает от файла к файлу, нужен разбор по картинке. Мнемоники CALI/TMSS/MNSS/AP/TP/G_SUM/MCALI встречены в архиве, но в разделе curves не описаны.",
+  "STK": [
+   "PZ",
+   "GZ",
+   "SP"
+  ],
+  "SK": [
+   "GZ",
+   "PZ",
+   "SP",
+   "REZ"
+  ],
+  "KS": [
+   "GZ",
+   "PZ",
+   "SP",
+   "REZ"
+  ],
+  "BKZ": [
+   "GZ1",
+   "GZ2",
+   "GZ3",
+   "GZ4",
+   "GZ5",
+   "OGZ"
+  ],
+  "BK": [
+   "BK"
+  ],
+  "MBK": [
+   "MBK"
+  ],
+  "IK": [
+   "IK"
+  ],
+  "MK": [
+   "MGZ",
+   "MPZ"
+  ],
+  "DS": [
+   "CALI"
+  ],
+  "GK": [
+   "GK"
+  ],
+  "RK": [
+   "GK",
+   "NGK"
+  ],
+  "NGK": [
+   "NGK"
+  ],
+  "AK": [
+   "DT",
+   "T1",
+   "T2",
+   "A1",
+   "A2",
+   "AL"
+  ],
+  "SP": [
+   "SP"
+  ],
+  "PS": [
+   "SP"
+  ],
+  "PRM": [
+   "CALI"
+  ],
+  "BKZ, DS": [
+   "CALI",
+   "GZ4",
+   "GZ5",
+   "SP"
+  ],
+  "GK, NGK": [
+   "GK",
+   "NGK"
+  ],
+  "GZK": [
+   "G_SUM"
+  ],
+  "BK, IK": [
+   "BK",
+   "IKA",
+   "IKR"
+  ],
+  "BK+IK": [
+   "BK",
+   "IK"
+  ],
+  "STK+DS": [
+   "DS",
+   "GZ",
+   "PZ",
+   "SP"
+  ],
+  "GK-PVR": [
+   "GK"
+  ],
+  "DS, TM": [
+   "CALI",
+   "TMSS"
+  ],
+  "GK-P, LM": [
+   "GK"
+  ],
+  "ZSK": [
+   "GZ",
+   "PZ",
+   "SP"
+  ],
+  "BK+MBK": [
+   "BK",
+   "MBK"
+  ],
+  "AKC": [
+   "AK",
+   "AP",
+   "TP"
+  ],
+  "OCK": [
+   "TMSS"
+  ],
+  "M": [
+   "MNSS"
+  ],
+  "GGK": [
+   "GGK"
+  ],
+  "RK, LM": [
+   "GK",
+   "NGK"
+  ],
+  "MK, MDS": [
+   "MCALI",
+   "MGZ",
+   "MPZ"
+  ]
+ },
+ "aliases": {
+  "ПС": "SP",
+  "PS": "SP",
+  "ГК": "GK",
+  "КС": "GZ",
+  "БК": "BK",
+  "МБК": "MBK",
+  "МКВ": "MDS",
+  "MKV": "MDS",
+  "GGKP": "RHOB",
+  "ТЕРМ": "TM",
+  "РЕЗ": "REZ"
+ }
 }

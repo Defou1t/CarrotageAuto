@@ -30,12 +30,27 @@ ap.add_argument("--tok", default="BK, IK|GK, NGK|BKZ, DS|MK, MBK, MDS|MBK, MDS, 
 ap.add_argument("--per-well", type=int, default=1)
 ap.add_argument("--json", default="")
 ap.add_argument("--prob", default="", help="папка prob-карт (_prob_batch.py) — ML НА ФОН")
+ap.add_argument("--files", nargs="*", default=None, help="явные .nlgx вместо отбора по токену")
 a = ap.parse_args()
 PROBDIR = Path(a.prob) if a.prob else None
 TOKS = [t.strip().upper() for t in a.tok.split("|")]
 
 cands, per_well = [], {}
-for wlg in sorted(ARCHIVE.glob("*/wlg")):
+if a.files:                                   # явный список nlgx (A/B-прогон на конкретных листах)
+    for f in a.files:
+        n = Path(f)
+        img = find_image(n)
+        if not img:
+            print(f"нет картинки для {n.name}"); continue
+        m = M.parse_filename(n.name, MN)
+        try:
+            mo = extract(str(n))
+        except Exception as e:
+            print(f"{n.name}: {type(e).__name__}"); continue
+        gts = [c for c in ds.real_curves(mo) if any(x != NULL for x in c["xs"])]
+        cands.append((n.parent.parent.name, n, img, m, gts))
+    a.n = len(cands)
+for wlg in (sorted(ARCHIVE.glob("*/wlg")) if not a.files else []):
     well = wlg.parent.name
     for n in sorted(wlg.glob("*.nlgx")):
         if "_auto" in n.stem or per_well.get(well, 0) >= a.per_well:

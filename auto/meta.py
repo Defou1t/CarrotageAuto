@@ -107,6 +107,17 @@ def expected_curves(curves_token: str, mnemonics_path=None) -> list:
     hints = {}
     if mnemonics_path:
         hints = load_mnemonics(mnemonics_path).get("filename_hints", {})
+    # ЦЕЛЫЙ токен имеет ПРИОРИТЕТ над расщеплением (19.07): набор кривых замерен ПО ТОКЕНУ
+    # ЦЕЛИКОМ («BKZ, DS» → CALI,GZ4,GZ5,SP — это НЕ объединение наборов BKZ и DS: в этом файле
+    # цифруют зонды 4-5, а зонды 1-3 уходят в файл-брат «BKZ»). Без этой ветки составной ключ
+    # в filename_hints недостижим — токен режется на части раньше, чем ищется в словаре.
+    whole = curves_token.strip().upper()
+    if whole in hints:
+        out, seen = [], set()
+        for c in hints[whole]:
+            if c not in seen:
+                seen.add(c); out.append(c)
+        return out
     out, seen = [], set()
     # разделители: «+», «-», «_» и ЗАПЯТАЯ/ПРОБЕЛ (18.07). Мульти-лист приходит одним токеном
     # «BK, IK» / «MBK, MDS, MK» (в имени файла запятая, а split по «_» её не делит) — без этого

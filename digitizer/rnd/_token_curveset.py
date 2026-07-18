@@ -23,6 +23,7 @@ ARCHIVE = Path(r"F:\nds\projects\Archive")
 ap = argparse.ArgumentParser()
 ap.add_argument("--min", type=int, default=3, help="печатать токены, встреченные не реже")
 ap.add_argument("--by-part", action="store_true", help="различать части (D_11 vs D_12)")
+ap.add_argument("--core", action="store_true", help="ядро (в 80 проц. файлов) + спутники")
 ap.add_argument("--json", default="")
 a = ap.parse_args()
 
@@ -50,6 +51,27 @@ for wlg in sorted(ARCHIVE.glob("*/wlg")):
             continue
         key = f"{m.curves_token}|{m.part}" if a.by_part else m.curves_token
         sets[key][",".join(cs)] += 1
+
+if "--core" in sys.argv:
+    # ЯДРО + СПУТНИКИ вместо «самого частого набора»: набор кривых листа = обязательные зонды
+    # (есть почти всегда) плюс необязательные попутчики (SP/CALI/MDS…). Именно поэтому
+    # «стабильность самого частого набора» низкая у BKZ/MK/AK — ядро там устойчиво, плавают
+    # спутники. Приор должен быть таким: имена ядра точные, K — диапазон.
+    freq = defaultdict(Counter)
+    for key, c in sets.items():
+        for names, cnt in c.items():
+            for nm in names.split(","):
+                freq[key][nm.split("×")[0]] += cnt
+    print(f"{'токен':<20} {'n':>4}  ЯДРО (>=80% файлов)              | СПУТНИКИ (20-80%)")
+    for key, c in sorted(sets.items(), key=lambda kv: -sum(kv[1].values())):
+        tot = sum(c.values())
+        if tot < a.min:
+            continue
+        core = [nm for nm, k in sorted(freq[key].items()) if k / tot >= 0.8]
+        opt = [f"{nm}{int(100*k/tot)}%" for nm, k in sorted(freq[key].items(), key=lambda kv: -kv[1])
+               if 0.2 <= k / tot < 0.8]
+        print(f"{key:<20} {tot:>4}  {','.join(core) or '—':<32} | {','.join(opt) or '—'}")
+    sys.exit(0)
 
 rows = []
 print(f"{'токен':<20} {'n':>4} {'стаб':>5}  самый частый набор   |  сейчас в filename_hints")

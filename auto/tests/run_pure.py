@@ -43,15 +43,20 @@ def test_meta():
     c = M.parse_filename("BEZLUD_051_BK, IK_2680-3404_200_1998-09-14_D_1.jpg", mn)
     check("мульти: well", c.well == "BEZLUD_051", c.well)
     check("мульти: токен цел", c.curves_token == "BK, IK", c.curves_token)
-    check("мульти: «BK, IK»→2", c.expected_curves == ["BK", "IK"], c.expected_curves)
+    # ЦЕЛЫЙ токен важнее расщепления (19.07): набор замерен по архиву ПО ТОКЕНУ ЦЕЛИКОМ.
+    # «BK, IK» несёт BK + ИКА/ИКР (не «IK»); «BKZ, DS» — зонды 4-5 + CALI + SP, а зонды 1-3
+    # уходят в файл-брат «BKZ» (один бланк цифруется несколькими nlgx).
+    check("мульти: «BK, IK»→BK,IKA,IKR", c.expected_curves == ["BK", "IKA", "IKR"], c.expected_curves)
     check("мульти: «MBK, MDS, MK»→4",
           M.expected_curves("MBK, MDS, MK", mn) == ["MBK", "MDS", "MGZ", "MPZ"],
           M.expected_curves("MBK, MDS, MK", mn))
     check("мульти: «GK, NGK»→2", M.expected_curves("GK, NGK", mn) == ["GK", "NGK"],
           M.expected_curves("GK, NGK", mn))
-    check("мульти: «BKZ, DS»→BKZ-набор+DS,DN",
-          M.expected_curves("BKZ, DS", mn) == ["GZ1", "GZ2", "GZ3", "GZ4", "GZ5", "OGZ", "DS", "DN"],
+    check("мульти: «BKZ, DS»→зонды 4-5+CALI+SP",
+          M.expected_curves("BKZ, DS", mn) == ["CALI", "GZ4", "GZ5", "SP"],
           M.expected_curves("BKZ, DS", mn))
+    check("расщепление живо для токена вне словаря",
+          M.expected_curves("BK+MGZ", mn) == ["BK", "MGZ"], M.expected_curves("BK+MGZ", mn))
     check("одиночный токен не тронут", M.expected_curves("MBK", mn) == ["MBK"],
           M.expected_curves("MBK", mn))
 
