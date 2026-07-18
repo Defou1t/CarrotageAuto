@@ -236,12 +236,20 @@ def refine_trace(fg, line, frame, p, trace_line, track, n_same_color=1):
     к рельсу). (3) при недотяге — перетрасс с band ДО ТРЕКА (можно за Scale Axis, Эдуард: значения
     экстраполируются). (4) деспайк. Берём вариант с бОльшим охватом упора без роста спайков."""
     import numpy as np
-    tr = trace_line(fg, line, frame, p)
+    # ЖЁСТКИЙ предел полосы (understand._single_curve_rescue): свипующее перо (MBK) — «дотяг до
+    # упора» ниже расширял band ДО ТРЕКА и затаскивал трассу на вертикаль рамки (QC 18.07).
+    hlo = getattr(line, "x_hard_lo", None); hhi = getattr(line, "x_hard_hi", None)
+    hard = hlo is not None and hhi is not None
+    tr = (trace_line(fg, line, frame, p, x_range=(int(hlo), int(hhi))) if hard
+          else trace_line(fg, line, frame, p))
     if len(tr) < 30:
         return tr
     band_pad = 8
     lo = max(0, int(line.x_lo) - band_pad); hi = min(fg.shape[1], int(line.x_hi) + band_pad + 1)
     tl, tr_ = max(0, track.x_left), min(fg.shape[1], track.x_right)
+    if hard:
+        lo = max(lo, int(hlo)); hi = min(hi, int(hhi))
+        tl = max(tl, int(hlo)); tr_ = min(tr_, int(hhi))
     # НЕДОТЯГ = band отрезал чернило: доля строк трассы, где ТОГО ЖЕ ЦВЕТА чернило есть ЗА band
     # (перо ушло к упору, band это срезал). Не «трасса у края» (недотяг = трасса НЕ дошла).
     rows = sorted(tr)

@@ -43,6 +43,10 @@ class Line:
     #                                        даже выцветшая кривая ≥1.8px (G2-замер Semeguniv)
     confidence: Optional[str] = None       # 'AUTO' | 'FLAG' (заполняет confidence.classify)
     flag_reason: Optional[str] = None
+    # ЖЁСТКИЙ предел полосы: refine-петля НЕ имеет права расширяться за него (иначе «дотяг до
+    # упора» затаскивает трассу на вертикаль рамки — QC Эдуарда 18.07 по MBK). None = без ограничения.
+    x_hard_lo: Optional[float] = None
+    x_hard_hi: Optional[float] = None
 
     @property
     def x_band(self):
@@ -522,6 +526,7 @@ def _single_curve_rescue(sheet, frame, meta, fg_full, p):
              thickness=4.0, rough_n=None, behavior="peaky",
              n_strokes=1, density=float(cols.max() / max(1, y1 - y0)))
     L.row_cov = float(covered.mean())
+    L.x_hard_lo, L.x_hard_hi = float(lo), float(hi)   # refine не расширяется на вертикали рамки
     L.n_runs_med = _row_multiplicity(fg_full, y0, y1, lo, hi)
     if frame.px_per_m:
         L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)
