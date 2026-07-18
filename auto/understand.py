@@ -47,6 +47,10 @@ class Line:
     # упора» затаскивает трассу на вертикаль рамки — QC Эдуарда 18.07 по MBK). None = без ограничения.
     x_hard_lo: Optional[float] = None
     x_hard_hi: Optional[float] = None
+    # ТЕЛО вместо ВЕРШИНЫ при выборе точки в широком ране. Замер разметки эксперта (MBK
+    # Yatskivska, 18.07): медиана позиции GT внутри рана rel=0.50 (центр), «вершинных» лишь 13%
+    # ⇒ для свипующего пера правило «спайк до вершины» (трек 2) промахивается на большинстве строк.
+    prefer_body: bool = False
 
     @property
     def x_band(self):
@@ -527,6 +531,7 @@ def _single_curve_rescue(sheet, frame, meta, fg_full, p):
              n_strokes=1, density=float(cols.max() / max(1, y1 - y0)))
     L.row_cov = float(covered.mean())
     L.x_hard_lo, L.x_hard_hi = float(lo), float(hi)   # refine не расширяется на вертикали рамки
+    L.prefer_body = True                              # свипующее перо: точка = ТЕЛО рана, не вершина
     L.n_runs_med = _row_multiplicity(fg_full, y0, y1, lo, hi)
     if frame.px_per_m:
         L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)

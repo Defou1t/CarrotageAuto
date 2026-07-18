@@ -240,8 +240,11 @@ def refine_trace(fg, line, frame, p, trace_line, track, n_same_color=1):
     # упора» ниже расширял band ДО ТРЕКА и затаскивал трассу на вертикаль рамки (QC 18.07).
     hlo = getattr(line, "x_hard_lo", None); hhi = getattr(line, "x_hard_hi", None)
     hard = hlo is not None and hhi is not None
-    tr = (trace_line(fg, line, frame, p, x_range=(int(hlo), int(hhi))) if hard
-          else trace_line(fg, line, frame, p))
+    # prefer_body: точка в ране = ЦЕНТР (тело), а не вершина выноса. Замер разметки эксперта на
+    # свипующем MBK: rel=0.50 медиана (тело), вершинных 13% ⇒ дефолт wide_run=14 промахивался.
+    kw = {"wide_run": 10 ** 6} if getattr(line, "prefer_body", False) else {}
+    tr = (trace_line(fg, line, frame, p, x_range=(int(hlo), int(hhi)), **kw) if hard
+          else trace_line(fg, line, frame, p, **kw))
     if len(tr) < 30:
         return tr
     band_pad = 8
@@ -258,7 +261,7 @@ def refine_trace(fg, line, frame, p, trace_line, track, n_same_color=1):
         if (hi < tr_ and fg[y, hi:tr_].any()) or (tl < lo and fg[y, tl:lo].any()):
             beyond += 1
     if beyond / max(1, len(rows)) >= 0.03:       # ≥3% строк с чернилом за band → band до трека
-        tr_wide = trace_line(fg, line, frame, p, x_range=(tl, tr_))
+        tr_wide = trace_line(fg, line, frame, p, x_range=(tl, tr_), **kw)
         if len(tr_wide) >= 0.8 * len(tr):
             xw = np.array([tr_wide[y] for y in sorted(tr_wide)])
             xt = np.array([tr[y] for y in rows])
