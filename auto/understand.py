@@ -482,6 +482,45 @@ def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
         sheet.lines += track_lines
         i += 1
     frame.tracks = tracks
+    _single_curve_rescue(sheet, frame, meta, fg_full, p)
     sheet.diag.update({"n_tracks": len(frame.tracks), "prob_used": prob is not None,
                        "expected_n_curves": len(getattr(meta, "expected_curves", []) or [])})
     return sheet
+
+
+def _single_curve_rescue(sheet, frame, meta, fg_full, p):
+    """СПАСЕНИЕ ОДНОКРИВОГО ЛИСТА (MBK Yatskivska, 18.07): свипующее перо (микро-зонд хлещет
+    почти горизонтально на всю ширину трека) НЕ образует столбцовой полосы → band-детект видит
+    лишь стабильный ОГРЫЗОК (11м у рамки из 300м листа), trace2d честно трассирует 3% строк.
+    Когда из имени файла ожидается РОВНО ОДНА кривая, а лучшая линия покрывает <30% высоты
+    кадра — пересобираем её как полно-полосную линию всего трека: одна кривая = вся тушь её,
+    полоса безопасна (соседей нет), trace2d ведёт по связности (гейт на GT: cov 0.71,
+    med 2px против cov 0.10, med 186px). Мультикривые листы не трогаем."""
+    expected = getattr(meta, "expected_curves", None) or []
+    if len(expected) != 1 or len(frame.tracks) != 1:
+        return
+    t = frame.tracks[0]
+    fh = max(1, frame.bottom_y - frame.top_y)
+    best_cov = max(((L.y1 - L.y0) / fh for L in sheet.lines), default=0.0)
+    if best_cov >= 0.30:
+        return
+    # рамка трека — вертикали x_left/x_right: сузить полосу, чтобы трасса не липла на рамку
+    lo = int(t.x_left) + 3; hi = int(t.x_right) - 12
+    y0, y1 = int(frame.top_y), int(frame.bottom_y)
+    band = fg_full[y0:y1, lo:hi]
+    if band.mean() < 0.002:                        # туши нет — спасать нечего
+        return
+    cols = band.sum(0)
+    xc = lo + int(np.argmax(np.convolve(cols, np.ones(31), "same")))
+    covered = band.any(1)
+    L = Line(track_index=t.index, color="black", x_center=float(xc),
+             x_lo=float(lo), x_hi=float(hi), y0=y0, y1=y1,
+             thickness=4.0, rough_n=None, behavior="peaky",
+             n_strokes=1, density=float(cols.max() / max(1, y1 - y0)))
+    L.row_cov = float(covered.mean())
+    L.n_runs_med = _row_multiplicity(fg_full, y0, y1, lo, hi)
+    if frame.px_per_m:
+        L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)
+    sheet.lines = [L]
+    sheet.per_track[t.index] = 1
+    sheet.diag["single_curve_rescue"] = {"prev_best_cov": round(best_cov, 3)}
