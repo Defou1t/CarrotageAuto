@@ -133,8 +133,12 @@ print(f"листов {len(sheets)}, кривых-слотов {allc}, измер
 if ok:
     med = np.median([r["med"] for r in ok])
     print(f"по измеренным: med(med)={med:.1f}px  med(cov)={np.median([r['cov'] for r in ok]):.2f}  "
-          f"<=3px avg {np.mean([r['p3'] for r in ok]):.0f}%  <=10px avg {np.mean([r['p10'] for r in ok]):.0f}%  "
-          f"кривых med<=3px: {sum(1 for r in ok if r['med']<=3)}/{len(ok)}")
+          f"<=3px avg {np.mean([r['p3'] for r in ok]):.0f}%  <=10px avg {np.mean([r['p10'] for r in ok]):.0f}%")
+    # ⚠ med СЧИТАЕТСЯ ТОЛЬКО ПО ПЕРЕСЕЧЕНИЮ наших строк с экспертными: «med 1.0px» на кривой,
+    # где взята четверть, — не успех. Заголовок обязан связывать точность И покрытие.
+    good = sum(1 for r in ok if r["med"] <= 3 and r["cov"] >= 0.9)
+    print(f"ВЗЯТО ЧЕСТНО (med<=3px И cov>=0.9): {good}/{len(ok)}   "
+          f"(только med<=3px, без покрытия: {sum(1 for r in ok if r['med']<=3)} — так СЧИТАТЬ НЕЛЬЗЯ)")
 if a.json:
     Path(a.json).write_text(json.dumps(sheets, ensure_ascii=False, indent=1), encoding="utf-8")
     print("json →", a.json)

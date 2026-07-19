@@ -123,8 +123,15 @@ print(f"листов {len(rows)}, слотов {len(allc)}: измерено {le
       f"missing {sum(1 for c in allc if c['state']=='missing')}")
 if ok:
     med = np.array([c["med"] for c in ok])
-    print(f"med(med)={np.median(med):.1f}px  кривых med≤3px: {(med<=3).sum()}/{len(med)}  "
-          f"≤3px сред {np.mean([c['p3'] for c in ok]):.0f}%  покрытие сред {np.mean([c['cov'] for c in ok]):.2f}")
+    cov = np.array([c["cov"] for c in ok])
+    # ⚠ ЧЕСТНЫЙ ЗАГОЛОВОК = med И покрытие ВМЕСТЕ. Замер 19.07: med считается только по
+    # ПЕРЕСЕЧЕНИЮ наших строк с экспертными, поэтому «med 1.0px» на кривой, где взята четверть,
+    # выглядит как успех и им НЕ является (RYBAL_137 IKA1: med 1.0 при cov 0.25).
+    good = int(((med <= 3) & (cov >= 0.9)).sum())
+    print(f"med(med)={np.median(med):.1f}px  ≤3px сред {np.mean([c['p3'] for c in ok]):.0f}%  "
+          f"покрытие сред {cov.mean():.2f}")
+    print(f"ВЗЯТО ЧЕСТНО (med≤3px И cov≥0.9): {good}/{len(ok)}   "
+          f"(только med≤3px, без учёта покрытия: {(med<=3).sum()} — так СЧИТАТЬ НЕЛЬЗЯ)")
 if a.json:
     Path(a.json).write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     print("json →", a.json)
