@@ -27,7 +27,8 @@ def _color_fg(rgb, color, p):
     return cm & ~im.structure_mask(rgb, p)
 
 
-def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_range=None):
+def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_range=None,
+               jump_limit=None):
     """Трасса одной AUTO-линии как x(row). fg — bool-маска цвета линии.
     band_pad — допуск вокруг x-полосы линии (анти-перескок на соседа). slmax — кламп скорости.
     wide_run — ран шире этого = горизонтальный спайк → берём ВЕРШИНУ (дальний край), не центр.
@@ -54,8 +55,19 @@ def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_range=
         pred = x + float(np.clip(v, -slmax, slmax))
         # выбрать РАН, перекрывающий предсказание (связность штриха), иначе ближайший по центру
         cont = [r for r in runs if r[0] - 2 <= pred <= r[1] + 2]
-        a, b, c = (min(cont, key=lambda r: abs(r[2] - pred)) if cont
-                   else min(runs, key=lambda r: abs(r[2] - pred)))
+        if cont:
+            a, b, c = min(cont, key=lambda r: abs(r[2] - pred))
+        else:
+            a, b, c = min(runs, key=lambda r: abs(r[2] - pred))
+            # ПРЫЖОК НА СОСЕДА (19.07). Ветка «нет рана под предсказанием» НИЧЕМ не ограничена по
+            # расстоянию: если чернил своей кривой на строке нет (пересечение, разрыв, бледное
+            # место), трасса садится на ближайший ран хоть за сотни px и ТАМ ОСТАЁТСЯ — отсюда
+            # «странные скачки» в QC. Замер: трасса на своей кривой лишь 32% строк, латч 32%.
+            # В соседней _extend_ends такой предохранитель ЕСТЬ, в основном цикле его не было.
+            # jump_limit=None — прежнее поведение; число — коастим по инерции и НЕ пишем строку
+            # (честное «здесь не знаю» вместо выдуманного значения).
+            if jump_limit is not None and abs(c - pred) > jump_limit + (b - a):
+                x = pred; continue
         if (b - a) >= wide_run:                        # горизонтальный спайк → вершина выноса
             nx = b if abs(b - base) >= abs(a - base) else a
         else:
