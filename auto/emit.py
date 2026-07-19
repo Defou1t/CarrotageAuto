@@ -251,6 +251,15 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                 _gray["arr"] = None
         return _gray["arr"]
 
+    # ПУТЬ К СКАНУ (тег 34878) — ПАТЧИМ ВСЕГДА, ДО цикла по кривым (19.07, отчёт Эдуарда
+    # «не находит изображение»). Раньше патч стоял ВНУТРИ цикла и выполнялся только если хоть
+    # одна кривая записалась: на листе с пустой выдачей в файле оставался путь из ИСХОДНОЙ рамки,
+    # а он в архиве бывает мёртвый (RYBAL_179: `C:\nds\projects\RYBAL_179_MBK_1096\img\...`,
+    # такого диска/раскладки нет) ⇒ NeuraLOG не открывал скан и QC был невозможен ИМЕННО ТАМ,
+    # где он нужнее всего — на листах, где мы ничего не выдали.
+    if image:
+        for i in find_ifd(ifds, lambda tags: 34878 in tags):
+            set_tag(ifds, i, 34878, 2, str(image))
     written = []
     for c in model.get("curves", []):
         name = c["name"]
@@ -276,9 +285,6 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         rws = [top_y + i for i, _ in vx]; xsv = [x for _, x in vx]
         set_tag(ifds, k, 35478, 4, [min(xsv)]); set_tag(ifds, k, 35480, 4, [min(rws)])
         set_tag(ifds, k, 35482, 4, [max(xsv)]); set_tag(ifds, k, 35484, 4, [max(rws)])
-        if image:
-            for i in find_ifd(ifds, lambda tags: 34878 in tags):
-                set_tag(ifds, i, 34878, 2, str(image))
         written.append(name.split()[0])
 
     data = write_full(ifds)
