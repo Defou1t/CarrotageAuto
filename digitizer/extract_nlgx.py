@@ -94,6 +94,18 @@ def extract(path):
             model["top_depth"] = val(t, 35006)
             model["bottom_depth"] = val(t, 35008)
         elif kind == 4:  # Depth Axis
+            # ⚠ ЛИСТ МОЖЕТ НЕСТИ НЕСКОЛЬКО ОСЕЙ ГЛУБИН (DA1, DA2, …): замер 19.07 — 100 из 1180
+            # планшетов, и у 99 из них оси РАЗЛИЧАЮТСЯ по y-диапазону/глубинам. Присваивание ниже
+            # оставляет только ПОСЛЕДНЮЮ, т.е. на этих листах берётся чужая система координат.
+            # Здесь копим ВСЕ в depth_axes (аддитивно, поведение не меняется); какую выбирать —
+            # отдельный вопрос с гейтом, потому что смена ломает координаты 99 листов молча.
+            model.setdefault("depth_axes", []).append({
+                "name": val(t, 35168), "units": val(t, 35170),
+                "top_y": val(t, 35184), "bottom_y": val(t, 35188),
+                "top_depth": val(t, 35190), "bottom_depth": val(t, 35192),
+                "span_depth": val(t, 35194), "span_px": val(t, 35196),
+                "x_top": val(t, 35182), "x_bot": val(t, 35186),
+            })
             model["depth_axis"] = {
                 "name": val(t, 35168), "units": val(t, 35170),
                 "top_y": val(t, 35184), "bottom_y": val(t, 35188),

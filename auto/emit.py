@@ -76,10 +76,21 @@ def _overlay(rgb, sheet, traces, out, stem):
 # ---------- nlgx: инъекция в лёгкую рамку ----------
 
 def _slot_track(model, curve, frame):
-    """Какому треку (индекс) принадлежит слот кривой — по x его scale-семейства vs колонки U0."""
-    key = curve["name"].split()[-1]
+    """Какому треку (индекс) принадлежит слот кривой — по x его scale-семейства vs колонки U0.
+
+    КЛЮЧ = ПОЛНЫЙ суффикс имени («GZ11 DA1 SA1» → «DA1 SA1»), а не последний токен (19.07).
+    Хвостовой токен «SA1» одинаков у РАЗНЫХ DA-семейств («DA1 SA1» и «DA2 SA1»), поэтому
+    median(x_left) усреднялась по осям разных колонок и слот уезжал в чужой трек.
+    Замер по архиву (многотрековые листы, 323 кривые): трек не содержал даже медиану самой
+    кривой у 144 (44.6%); с полным ключом — 57 (17.6%). Тот же ключ уже применяет
+    decode_levels.build_family. Фолбэк на старое поведение — если точного имени оси нет."""
+    full = " ".join(curve["name"].split()[1:])
     xs = [s["x_left"] for s in model["scale_axes"]
-          if s["name"].split()[-1] == key and s.get("x_left") is not None]
+          if s.get("name") == full and s.get("x_left") is not None]
+    if not xs:
+        key = curve["name"].split()[-1]
+        xs = [s["x_left"] for s in model["scale_axes"]
+              if s["name"].split()[-1] == key and s.get("x_left") is not None]
     if not xs or not frame.tracks:
         return 0
     sx = float(np.median(xs))
