@@ -361,6 +361,19 @@ def frame_from_nlgx(nlgx_path, meta=None, p=None, rgb=None) -> Frame:
     H, W = (rgb.shape[:2] if rgb is not None else (0, 0))
     top_y = int(da.get("top_y") or 0)
     bottom_y = int(da.get("bottom_y") or (H - 1 if H else 0))
+    # ОКНО АНАЛИЗА = ОБЪЕДИНЕНИЕ ВСЕХ ОСЕЙ ГЛУБИН (19.07). Лист может нести несколько DA с РАЗНЫМ
+    # охватом (замер: 100 листов из 1180, у 99 оси расходятся; >100px у 33). extract() до сих пор
+    # оставлял ПОСЛЕДНЮЮ, и окно могло накрыть лишь часть планшета: RYBAL_137 IK — DA1 y847..14614
+    # (весь лист), DA2 y847..6337 (37%), бралась DA2 ⇒ 63% кривой IKA1 (её трасса идёт до строки
+    # 14549) НЕ АНАЛИЗИРОВАЛИСЬ ВОВСЕ. Метрика этого не видела: med считался по покрытой четверти
+    # (cov 0.27 при med 1.0px) — поймано ТОЛЬКО обзором всего планшета (durable-правило QC).
+    # Расширяем ОКНО, глубины оставляем от выбранной оси: разные DA бывают с разным масштабом
+    # px/м (тут 19.9 против 8.07), и одна пара top/bottom_depth их не описывает — это отдельная
+    # задача (трек-специфичный Frame), здесь только перестаём терять полпланшета.
+    das = [d for d in (model.get("depth_axes") or []) if d.get("top_y") is not None]
+    if len(das) > 1:
+        top_y = min(int(d["top_y"]) for d in das)
+        bottom_y = max(int(d["bottom_y"]) for d in das if d.get("bottom_y") is not None)
     # глубины: приоритет калибровке рамки, фолбэк — имя файла (meta)
     td, bd = da.get("top_depth"), da.get("bottom_depth")
     if td is None or bd is None or td == bd:
