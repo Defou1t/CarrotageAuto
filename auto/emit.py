@@ -260,7 +260,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     if image:
         for i in find_ifd(ifds, lambda tags: 34878 in tags):
             set_tag(ifds, i, 34878, 2, str(image))
-    written = []
+    written, wrote_ifd = [], set()
     for c in model.get("curves", []):
         name = c["name"]
         if name not in mapping:
@@ -281,11 +281,33 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         tops, bots, levs = _level_segments(tr, model, c, top_y, n, gray=_g)
         set_tag(ifds, k, 35492, 4, [len(tops)]); set_tag(ifds, k, 35494, 4, tops)
         set_tag(ifds, k, 35496, 4, bots); set_tag(ifds, k, 35498, 4, levs)
+        wrote_ifd.add(k)
         vx = [(i, x) for i, x in enumerate(new_xs) if x != NULL]
         rws = [top_y + i for i, _ in vx]; xsv = [x for _, x in vx]
         set_tag(ifds, k, 35478, 4, [min(xsv)]); set_tag(ifds, k, 35480, 4, [min(rws)])
         set_tag(ifds, k, 35482, 4, [max(xsv)]); set_tag(ifds, k, 35484, 4, [max(rws)])
         written.append(name.split()[0])
+
+    # ⚠ ЧУЖИЕ ТРАССЫ ИЗ РАМКИ — ВЫЧИСТИТЬ (19.07). Инцидент QC: Эдуард разбирал MBK в нашем
+    # KREMEN_089 и находил её «странной» — а файл побайтово повторял ЕГО ЖЕ рамку, мы там не
+    # записали НИЧЕГО (U1 нашёл 0 линий). Смешанный файл неотличим на глаз: эксперт рецензирует
+    # собственную трассу, считая её нашей, и тратит время впустую. Наша выдача обязана содержать
+    # ТОЛЬКО нашу работу. Слот, который мы не заполнили, отдаём ПУСТЫМ: xs=NULL и 35492=0
+    # (без сегментов NeuraLOG кривую не рисует). В продакшне рамка ЛЁГКАЯ (трасс нет) — там это
+    #но-оп; эффект только на тестах по архивным рамкам, где трассы эксперта присутствуют.
+    cleared = []
+    for c in model.get("curves", []):
+        if meta_mod.mnem_root(c.get("name", "")) == "DA":       # ось глубин — не трасса, не трогаем
+            continue
+        idxs = find_ifd(ifds, curve_pred(c["name"]))
+        if not idxs or idxs[0] in wrote_ifd:
+            continue
+        k = idxs[0]
+        if not any(x != NULL for x in c["xs"]):                 # и так пустой
+            continue
+        set_tag(ifds, k, 35490, 4, [NULL] * c["n_rows"])
+        set_tag(ifds, k, 35492, 4, [0])
+        cleared.append(c["name"].split()[0])
 
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
@@ -294,7 +316,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     # на off=5489 — артефакт одного файла, в других попадает ВНУТРЬ тега 35490 и молча портит
     # трассу (write_nlgx docstring, депрекейт).
     open(out / f"{stem}_auto.bck", "wb").write(data)
-    res = {"nlgx": str(dst), "written": written}
+    res = {"nlgx": str(dst), "written": written, "cleared": cleared}
     if las:
         try:
             import export_las
