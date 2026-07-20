@@ -26,6 +26,33 @@ from auto.config import Config
 from _u1_gate import sheets_for       # та же выборка, что U1-гейт
 
 OUT = Path(r"F:\nds\output\taskS\prod")
+ARCH = Path(r"F:\nds\projects\Archive")
+
+
+def archive_sample(per_well, seed_shift=0):
+    """Стратифицированная выборка АРХИВА: до per_well листов с каждой скважины, round-robin по
+    скважинам (не по алфавиту — иначе первые скважины перевешивают). Даёт широту по 46 скважинам
+    и по классам сразу. Детерминизм без random: берём каждый k-й лист скважины."""
+    wells = sorted([d for d in ARCH.iterdir() if d.is_dir()])
+    picks = []
+    for w in wells:
+        sheets = sorted((w / "wlg").glob("*.nlgx")) if (w / "wlg").is_dir() else sorted(w.glob("*.nlgx"))
+        if not sheets:
+            continue
+        step = max(1, len(sheets) // per_well)
+        sel = sheets[seed_shift % max(1, step)::step][:per_well]
+        picks.append((w.name, sel))
+    # round-robin: по одному листу с каждой скважины за круг
+    out, i = [], 0
+    while True:
+        added = False
+        for _, sel in picks:
+            if i < len(sel):
+                out.append(sel[i]); added = True
+        if not added:
+            break
+        i += 1
+    return out
 
 
 def gate_sheet(n):
@@ -79,26 +106,40 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", default="all")
     ap.add_argument("--tag", default="run")
+    ap.add_argument("--per-well", type=int, default=4, help="листов на скважину для --set archive")
+    ap.add_argument("--max-mpx", type=float, default=120.0, help="пропускать сканы крупнее (по nlgx-габаритам нельзя, по картинке)")
     a = ap.parse_args()
-    rows = []
     from collections import Counter
+    import cv2
+    sheets = archive_sample(a.per_well) if a.set == "archive" else sheets_for(a.set)
+    OUT.mkdir(parents=True, exist_ok=True)
+    fp = OUT / f"prod_{a.set}_{a.tag}.json"
+    rows = []
     tot = Counter()
-    for n in sheets_for(a.set):
+    skipped_big = []
+    for n in sheets:
+        img = find_image(n)
+        if img and a.max_mpx:                       # ГАРД РАЗМЕРА: не топить прогон одним 300-Мпикс листом
+            hdr = cv2.imread(str(img), cv2.IMREAD_REDUCED_COLOR_8)
+            if hdr is not None and (hdr.shape[0] * hdr.shape[1] * 64) / 1e6 > a.max_mpx:
+                skipped_big.append(n.stem); continue
         r = gate_sheet(n)
         rows.append(r)
         if "err" in r:
-            print(f"  !! {r['sheet'][:50]:<52} {r['err']}"); continue
-        st = Counter(c["state"] for c in r["curves"])
-        tot.update(st)
-        honest = st.get("ЧЕСТНАЯ", 0)
-        brief = " ".join(f"{c['name']}:{c.get('med','-')}" for c in r["curves"])
-        print(f"  {r['sheet'][:50]:<52} {honest}/{r['n_curves']} честных  [{dict(st)}]  ({r['sec']}s)")
+            print(f"  !! {r['sheet'][:50]:<52} {r['err']}")
+        else:
+            st = Counter(c["state"] for c in r["curves"])
+            tot.update(st)
+            print(f"  {r['sheet'][:50]:<52} {st.get('ЧЕСТНАЯ',0)}/{r['n_curves']} честных  "
+                  f"[{dict(st)}]  ({r['sec']}s)")
+        fp.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")  # инкрементально
     ncur = sum(len(r.get("curves", [])) for r in rows if "err" not in r)
-    print(f"\n=== ИТОГО {sum(1 for r in rows if 'err' not in r)} листов, {ncur} кривых ===")
+    nsheet = sum(1 for r in rows if "err" not in r)
+    print(f"\n=== ИТОГО {nsheet} листов, {ncur} кривых ===")
     print(f"  ★ ЧЕСТНЫХ (med<=3 И cov>=0.9): {tot.get('ЧЕСТНАЯ',0)}/{ncur} = "
           f"{100.0*tot.get('ЧЕСТНАЯ',0)/max(1,ncur):.1f}%")
     print(f"  таксономия отказа: {dict(tot)}")
-    OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / f"prod_{a.set}_{a.tag}.json").write_text(
-        json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"  -> {OUT / f'prod_{a.set}_{a.tag}.json'}")
+    if skipped_big:
+        print(f"  ⚠ ПРОПУЩЕНО по размеру (>{a.max_mpx:.0f}Мпикс): {len(skipped_big)} листов "
+              f"— НЕ входят в проценты: {', '.join(skipped_big[:6])}{'...' if len(skipped_big)>6 else ''}")
+    print(f"  -> {fp}")
