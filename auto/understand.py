@@ -524,9 +524,86 @@ def understand(rgb, frame, meta=None, p=None, prob=None) -> Sheet:
         i += 1
     frame.tracks = tracks
     _single_curve_rescue(sheet, frame, meta, fg_full, p)
+    _band_rescue(sheet, frame, rgb, fg_full, p)
     sheet.diag.update({"n_tracks": len(frame.tracks), "prob_used": prob is not None,
                        "expected_n_curves": len(getattr(meta, "expected_curves", []) or [])})
     return sheet
+
+
+def _band_rescue(sheet, frame, rgb, fg_full, p):
+    """СПАСЕНИЕ ПУНКТИРНОГО ТРЕКА (§6.21, 20.07): на выцветших/пунктирных сканах тушь ЕСТЬ
+    (покрытие GT 30-55%), но это точки в 1-2 строки с дырами до 26 — CC-сборка даёт огрызки,
+    min_h убивает всё, трек остаётся с НУЛЁМ линий (класс «НОЛЬ» §6.17: KREMEN_089 0/8,
+    RYBAL_168 0/5). Морфология не лечит (свип ядра: инстансы 5→1212, слипание соседей).
+
+    ПЛОТНОСТЬ ПО СТОЛБЦАМ кривые при этом видит: горбы ровно на GT-медианах. Но амплитуда —
+    ~1% высоты трека (свипующая кривая размазывает плотность), поэтому prominence обязана быть
+    ОТНОСИТЕЛЬНОЙ (доля максимума профиля), а не долей H — пороги в долях H тут слепы (§6.21).
+
+    Гард максимально консервативен: ТОЛЬКО треки, где CC-путь не дал НИ ОДНОЙ линии, а тушь
+    есть. Листы, где U1 хоть что-то нашёл, не трогаются вовсе — регресс на EXACT невозможен.
+    Цвет полосы — доминирующий канал внутри неё (KREMEN: сепия уводит тушь в «красный», и
+    чёрная полоса трассировала бы мусор)."""
+    PROM_FRAC = 0.30        # пик ≥ этой доли максимума профиля
+    VALLEY_RATIO = 0.55     # долина глубже этой доли меньшего пика = граница полос (find_valleys)
+    EDGE_FRAC = 0.10        # внешний край полосы: плотность упала ниже этой доли пика
+    MIN_DIST = 40           # мин. расстояние между пиками, px
+    SMOOTH = 31             # сглаживание профиля
+    MIN_INK = 0.0005        # доля туши в треке, ниже которой спасать нечего
+    for t in frame.tracks:
+        if sheet.per_track.get(t.index, 0) > 0:
+            continue
+        lo = int(t.x_left) + 3; hi = int(t.x_right) - 12
+        y0, y1 = int(frame.top_y), int(frame.bottom_y)
+        if hi - lo < 3 * MIN_DIST or y1 - y0 < 100:
+            continue
+        band = fg_full[y0:y1, lo:hi] > 0
+        if band.mean() < MIN_INK:
+            continue
+        col = im.col_density(band, smooth=SMOOTH)
+        cmax = float(col.max())
+        if cmax <= 0:
+            continue
+        peaks = im.find_peaks(col, min_dist=MIN_DIST, prominence=PROM_FRAC * cmax)
+        if not len(peaks):
+            continue
+        # границы полос: долины между пиками (только достаточно глубокие — иначе один горб),
+        # внешние края — падение плотности ниже EDGE_FRAC пика
+        splits = [s[2] for s in im.find_valleys(col, peaks, VALLEY_RATIO)]
+        edges = [0] + sorted(splits) + [len(col)]
+        chans = None
+        for e0, e1 in zip(edges, edges[1:]):
+            seg = col[e0:e1]
+            pk = float(seg.max())
+            if pk < PROM_FRAC * cmax:
+                continue
+            nz = np.nonzero(seg >= EDGE_FRAC * pk)[0]
+            b0, b1 = e0 + int(nz[0]), e0 + int(nz[-1]) + 1
+            sub = band[:, b0:b1]
+            covered = sub.any(1)
+            if covered.mean() < 0.10:
+                continue
+            if chans is None:      # каналы один раз на трек (imaging кэширует карты по скану)
+                chans = {**im.color_channels(rgb, p), "black": im.dark_mask(rgb, p)}
+            cnt = {c: int(m[y0:y1, lo + b0:lo + b1].sum()) for c, m in chans.items()}
+            color = max(cnt, key=cnt.get)
+            cols_sub = sub.sum(0)
+            xc = lo + b0 + int(np.argmax(np.convolve(cols_sub, np.ones(31), "same")))
+            L = Line(track_index=t.index, color=color, x_center=float(xc),
+                     x_lo=float(lo + b0), x_hi=float(lo + b1), y0=y0, y1=y1,
+                     thickness=4.0, rough_n=None, behavior="peaky",
+                     n_strokes=1, density=float(cols_sub.max() / max(1, y1 - y0)))
+            L.row_cov = float(covered.mean())
+            L.x_hard_lo, L.x_hard_hi = float(lo + b0), float(lo + b1)
+            L.prefer_body = True
+            L.n_runs_med = _row_multiplicity(fg_full, y0, y1, lo + b0, lo + b1)
+            if frame.px_per_m:
+                L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)
+            sheet.lines.append(L)
+            sheet.per_track[t.index] = sheet.per_track.get(t.index, 0) + 1
+            sheet.diag.setdefault("band_rescue", []).append(
+                {"track": t.index, "x": [lo + b0, lo + b1], "color": color,
+                 "row_cov": round(float(covered.mean()), 3)})
 
 
 def _single_curve_rescue(sheet, frame, meta, fg_full, p):
