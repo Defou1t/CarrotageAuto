@@ -15,10 +15,11 @@ sys.path.insert(0, r"F:\nds\Auto\digitizer\rnd")
 from pathlib import Path
 import numpy as np
 import _relatch_bench as BE
-from _decoder_core import Logistic, make_tracer, FEAT_NAMES
+from _decoder_core import Logistic, make_tracer, FEAT_NAMES, expand
 
 _ap = argparse.ArgumentParser()
 _ap.add_argument("--data", default="train.npz")
+_ap.add_argument("--poly", action="store_true", help="полиномиальное расширение признаков (нелинейность)")
 _A = _ap.parse_args()
 OUT = Path(r"F:\nds\output\taskS\decoder")
 print(f"данные: {_A.data}")
@@ -60,14 +61,17 @@ print(f"  на multi-решениях база (ближайший) БЕРЁТ �
 # group-split 80/20 детерминированным хэшем группы
 rngkey = (g * 2654435761) % 100
 tr_mask = rngkey < 80
-model = Logistic().fit(X[tr_mask], y[tr_mask], iters=300)
-print(f"\nвеса: " + ", ".join(f"{n}={w:+.2f}" for n, w in zip(FEAT_NAMES, model.w)) + f"  b={model.b:+.2f}")
+Xf = expand(X) if _A.poly else X
+print(f"признаков: {Xf.shape[1]}" + (" (poly-расширение)" if _A.poly else ""))
+model = Logistic().fit(Xf[tr_mask], y[tr_mask], iters=300)
+if not _A.poly:
+    print("веса: " + ", ".join(f"{n}={w:+.2f}" for n, w in zip(FEAT_NAMES, model.w)) + f"  b={model.b:+.2f}")
 
 # accuracy на ОТЛОЖЕННЫХ multi-решениях: модель vs ближайший
 va = rngkey >= 80
-sc_mod = model.score(X)
+sc_mod = model.score(Xf)
 lm, gm = argmax_label_per_group(g[va], sc_mod[va], y[va])
-ln, gn = argmax_label_per_group(g[va], X[va][:, NEAR], y[va])
+ln, gn = argmax_label_per_group(g[va], Xf[va][:, NEAR], y[va])
 mm = np.isin(gm, multi_gids)
 print(f"\nОТЛОЖЕННЫЕ multi-решения ({int(mm.sum())}):")
 print(f"  берёт СВОЙ ран: модель {100*lm[mm].mean():.1f}%   база(ближайший) {100*ln[np.isin(gn,multi_gids)].mean():.1f}%")
@@ -76,6 +80,7 @@ print(f"  берёт СВОЙ ран: модель {100*lm[mm].mean():.1f}%   б
 
 print(f"\n{'='*66}\n=== ГЕЙТ на держанных скважинах (bench, 24 кривые) ===")
 BE.report("БАЗА (прод)", BE.run_strategy())
-BE.report("ОБУЧАЕМЫЙ селектор", BE.run_strategy(tracer=make_tracer(model)))
+BE.report("ОБУЧАЕМЫЙ селектор" + (" +poly" if _A.poly else ""),
+          BE.run_strategy(tracer=make_tracer(model, poly=_A.poly)))
 print("\nЧитать: честных > 3 И своя% > 34.9 без обвала med(cov) -> селектор бьёт латч на")
 print("держанных скважинах, что оправдывает переход к тяжёлому декодеру (torch, ComfyUI venv).")

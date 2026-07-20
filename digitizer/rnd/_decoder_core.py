@@ -61,6 +61,28 @@ def features(A, B, C, pred, x, v, base, n_pick=6):
     return order, X
 
 
+def expand(X):
+    """Полиномиальное расширение 10 базовых признаков взаимодействиями (тест нелинейности БЕЗ
+    переизвлечения: считается из уже сохранённой X, ИДЕНТИЧНО на train и inference). Индексы:
+    0 gap,1 signed_off,2 width,3 dist_x,4 dist_base,5 overlap,6 is_widest,7 is_nearest,8 n_cands,9 vsmooth."""
+    if X.shape[0] == 0:
+        return X
+    g, so, w, dx, db, ov, iw, inr, nc, vs = [X[:, i] for i in range(10)]
+    extra = np.stack([
+        g * inr,        # ближайший, но далёкий = неоднозначно
+        w * iw,         # самый широкий И широкий = сильный сигнал своей кривой
+        dx * vs,        # смещение × рывок скорости
+        g * ov,         # зазор при перекрытии (≈0)
+        so * so,        # квадрат смещения
+        dx * dx,
+        w * dx,         # широкий далёкий ран = чужой
+        ov * inr,       # перекрывает И ближайший = обычный cont
+        iw * inr,       # самый широкий И ближайший
+        vs * inr,       # рывок при взятии ближайшего
+    ], axis=1)
+    return np.concatenate([X, extra], axis=1)
+
+
 class Logistic:
     """Бинарная логистическая регрессия (numpy), L2, полный-батч градиент. Класс 1 = «этот
     кандидат — правильное продолжение экспертной кривой»."""
@@ -96,10 +118,11 @@ class Logistic:
         return Logistic(np.array(d["w"], float), float(d["b"]))
 
 
-def make_tracer(model, slmax=30.0, wide_run=14, n_pick=6):
+def make_tracer(model, slmax=30.0, wide_run=14, n_pick=6, poly=False):
     """Обучаемый трассировщик для стенда bench: на каждой строке скорит кандидатов моделью,
     берёт argmax. Структура (коаст пустых строк, вершина широкого рана, extend) — как в базе,
-    меняется ТОЛЬКО правило выбора рана. Плагается как BE.run_strategy(tracer=make_tracer(m))."""
+    меняется ТОЛЬКО правило выбора рана. Плагается как BE.run_strategy(tracer=make_tracer(m)).
+    poly=True — расширить признаки взаимодействиями (модель обучена на expand(X))."""
     import _relatch_bench as BE
 
     def tracer(rec, csr, H):
@@ -116,6 +139,8 @@ def make_tracer(model, slmax=30.0, wide_run=14, n_pick=6):
                 x = float(C[k]); v = 0.0; tr[y] = x; continue
             pred = x + float(np.clip(v, -slmax, slmax))
             idx, X = features(A, B, C, pred, x, v, base, n_pick)
+            if poly:
+                X = expand(X)
             k = int(idx[int(np.argmax(model.score(X)))])
             a, b, c = int(A[k]), int(B[k]), float(C[k])
             nx = (b if abs(b - base) >= abs(a - base) else a) if (b - a) >= wide_run else c
