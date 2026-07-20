@@ -625,12 +625,37 @@ def _single_curve_rescue(sheet, frame, meta, fg_full, p):
         return
     t = frame.tracks[0]
     fh = max(1, frame.bottom_y - frame.top_y)
-    best_cov = max(((L.y1 - L.y0) / fh for L in sheet.lines), default=0.0)
-    if best_cov >= 0.30:
-        return
-    # рамка трека — вертикали x_left/x_right: сузить полосу, чтобы трасса не липла на рамку
-    lo = int(t.x_left) + 3; hi = int(t.x_right) - 12
     y0, y1 = int(frame.top_y), int(frame.bottom_y)
+    best_cov = max(((L.y1 - L.y0) / fh for L in sheet.lines), default=0.0)
+    # ВТОРОЙ ТРИГГЕР (Semeguniv BK, 20.07): протяжённость по y слепа к «высокой тощей ложной
+    # линии» — CC свипующего BK рассыпался, выжила вертикальная кромка x[112..128] (16px) с
+    # y-extent 0.96, и rescue молчал, хотя кривая гуляет до x=583. Признак отказа — ДОЛЯ ТУШИ
+    # ТРЕКА под полосами линий: одна кривая владеет всей тушью, и если линии накрывают <50% —
+    # найдена не кривая. (BK_2410: линия накрывала 7% туши.)
+    # Тушь считается ПО ВСЕЙ ШИРИНЕ СКАНА, не по треку: на лентах BK 69% туши лежит ЗА треком
+    # (вылет за калибровочный пролёт, §6.11), и знаменатель «только трек» слеп к этому отказу.
+    # Один трек + одна кривая + структура вычтена ⇒ вся тушь зоны данных принадлежит кривой.
+    ink_cov = 1.0
+    zone = fg_full[y0:y1] > 0
+    tot_ink = int(zone.sum())
+    if sheet.lines and tot_ink:
+        m = np.zeros(zone.shape[1], bool)
+        for L in sheet.lines:
+            m[max(0, int(L.x_lo) - 8):min(len(m), int(L.x_hi) + 9)] = True
+        ink_cov = float(zone[:, m].sum()) / tot_ink
+    if best_cov >= 0.30 and ink_cov >= 0.50:
+        return
+    # Полоса спасения — по фактическому размаху ПЛОТНОЙ туши, а не по треку: x_left/x_right
+    # scale-оси — калибровочный пролёт, не граница рисования (§6.11), и на лентах Semeguniv BK
+    # 69% туши лежит ПРАВЕЕ трека (GT до x=566 при треке до 259). Рамка/структура из fg_full
+    # уже вычтена, поэтому расширение на весь скан безопасно для одиночной кривой.
+    W = fg_full.shape[1]
+    col_all = (fg_full[y0:y1] > 0).sum(0)
+    dense = np.nonzero(col_all > 0.005 * fh)[0]
+    lo = int(t.x_left) + 3; hi = int(t.x_right) - 12
+    if len(dense):
+        lo = min(lo, max(0, int(dense[0])))
+        hi = max(hi, min(W, int(dense[-1]) + 1))
     band = fg_full[y0:y1, lo:hi]
     if band.mean() < 0.002:                        # туши нет — спасать нечего
         return
@@ -649,4 +674,6 @@ def _single_curve_rescue(sheet, frame, meta, fg_full, p):
         L.depth_start = frame.depth_of(y0); L.depth_end = frame.depth_of(y1)
     sheet.lines = [L]
     sheet.per_track[t.index] = 1
-    sheet.diag["single_curve_rescue"] = {"prev_best_cov": round(best_cov, 3)}
+    sheet.diag["single_curve_rescue"] = {"prev_best_cov": round(best_cov, 3),
+                                         "prev_ink_cov": round(ink_cov, 3),
+                                         "band": [int(lo), int(hi)]}
