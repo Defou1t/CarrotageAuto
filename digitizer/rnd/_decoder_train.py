@@ -9,7 +9,7 @@ cov>=0.9), med(med), своя% (идентичность). База: 3/24, med 6
 
   python _decoder_train.py
 """
-import sys, json
+import sys, json, argparse
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 sys.path.insert(0, r"F:\nds\Auto\digitizer\rnd")
 from pathlib import Path
@@ -17,8 +17,12 @@ import numpy as np
 import _relatch_bench as BE
 from _decoder_core import Logistic, make_tracer, FEAT_NAMES
 
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--data", default="train.npz")
+_A = _ap.parse_args()
 OUT = Path(r"F:\nds\output\taskS\decoder")
-d = np.load(OUT / "train.npz")
+print(f"данные: {_A.data}")
+d = np.load(OUT / _A.data)
 X, y, g = d["X"], d["y"], d["g"].astype(np.int64)
 NEAR = FEAT_NAMES.index("is_nearest")
 

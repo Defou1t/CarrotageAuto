@@ -63,7 +63,7 @@ def train_sheets(limit):
     return out
 
 
-def extract_sheet(n, pad, p):
+def extract_sheet(n, pad, p, drift=0.0, rng=None):
     rgb = cv2.cvtColor(cv2.imread(str(find_image(n)), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
     H, W = rgb.shape[:2]
     mo = extract(str(n))
@@ -110,16 +110,26 @@ def extract_sheet(n, pad, p):
         allr = np.arange(rows.min(), rows.max() + 1)
         allx = np.interp(allr, rows, xsr)
         gmap = dict(zip(allr.tolist(), allx.tolist()))
+        dr = 0.0                                       # накопленный ДРЕЙФ состояния (латч-модель)
         for j, y in enumerate(allr):
             gt_x = allx[j]
             if prevx is None:
                 prevx = gt_x; v = 0.0; continue
-            pred = prevx + float(np.clip(v, -SLMAX, SLMAX))
+            # ДРИФТ (§6.20.2: латч случается со СНЕСЁННОГО состояния, не on-curve). Веримое
+            # положение x_hat блуждает вокруг истины; pred считается ОТ него, но правильный ран
+            # (label) — по ИСТИННОМУ gt_x. Модель учится восстанавливаться, а не брать ближайший.
+            if drift and rng is not None:
+                dr += rng.normal(0, drift * 0.4)
+                if rng.random() < 0.02:                # перезахват: иногда дрейф сбрасывается
+                    dr = 0.0
+                dr = float(np.clip(dr, -1.6 * drift, 1.6 * drift))
+            xhat = prevx + dr
+            pred = xhat + float(np.clip(v, -SLMAX, SLMAX))
             row = im.row_runs(fg[y, lo:hi])
             if row:
                 A = np.array([r[0] + lo for r in row]); B = np.array([r[1] + lo for r in row])
                 C = np.array([r[2] + lo for r in row], float)
-                emit(A, B, C, pred, prevx, v, base, gt_x)
+                emit(A, B, C, pred, xhat, v, base, gt_x)
             v = 0.6 * v + 0.4 * (gt_x - prevx); prevx = gt_x
     if not Xs:
         return None
@@ -130,17 +140,20 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--sheets", type=int, default=25)
     ap.add_argument("--pad", type=int, default=28)
+    ap.add_argument("--drift", type=float, default=0.0, help="σ инъекции дрейфа состояния (px); 0=teacher-forcing")
+    ap.add_argument("--out", default="train.npz")
     a = ap.parse_args()
     p = DEFAULT.cv
+    rng = np.random.default_rng(12345) if a.drift else None
     sheets = train_sheets(a.sheets)
-    print(f"обучающих листов: {len(sheets)} (held-out {sorted(HELD)} исключены)")
+    print(f"обучающих листов: {len(sheets)} (held-out {sorted(HELD)} исключены), дрейф σ={a.drift}")
     XA, yA, gA, wells = [], [], [], []
     gbase = 0
     for n in sheets:
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
-                r = extract_sheet(n, a.pad, p)
+                r = extract_sheet(n, a.pad, p, drift=a.drift, rng=rng)
         except Exception as e:
             print(f"  !! {n.name[:44]:<46} {type(e).__name__}: {e}"); continue
         if r is None:
@@ -151,8 +164,8 @@ if __name__ == "__main__":
         print(f"  {n.name[:44]:<46} {len(X):>7} канд, {int(y.sum()):>6} полож, реш {len(np.unique(g))}")
     X = np.vstack(XA); y = np.concatenate(yA); g = np.concatenate(gA)
     OUT.mkdir(parents=True, exist_ok=True)
-    np.savez(OUT / "train.npz", X=X, y=y, g=g)
+    np.savez(OUT / a.out, X=X, y=y, g=g)
     print(f"\nИТОГО: {len(X)} кандидатов, {int(y.sum())} положительных, {len(np.unique(g))} решений")
     print(f"  доля решений с ровно 1 положительным: "
           f"{np.mean([ (y[g==gi].sum()==1) for gi in np.unique(g)[:2000]]):.2f}")
-    print(f"  -> {OUT / 'train.npz'}")
+    print(f"  -> {OUT / a.out}")
