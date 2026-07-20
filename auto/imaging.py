@@ -11,6 +11,7 @@ imaging.py — общий CV-слой «карты разделимости ли
 
 Чистый OpenCV/NumPy (без scipy/skimage). Функции не знают про nlgx — работают по голому RGB.
 """
+import weakref
 import numpy as np
 import cv2
 
@@ -21,14 +22,46 @@ def load_rgb(path):
     return np.asarray(Image.open(path).convert("RGB"))
 
 
+# ── МЕМО-КЭШ чистых карт по identity скана (профиль 20.07: structure_mask с морфологией на
+# 59 Мпикс считался ДВАЖДЫ за лист — из understand через ink_foreground и из trace2d._color_fg,
+# color_channels трижды, value_channel 5 раз; это ~50% времени листа, а в гейтах, где
+# _color_fg зовётся на каждый цвет, больше). Функции ниже — чистые от (rgb, p); проверено
+# грепом: возвращённые маски никем не мутируются (understand строит новые через &).
+# Ключ — id(rgb) + shape; запись умирает ВМЕСТЕ с массивом (weakref.finalize), поэтому
+# переиспользование id после gc ложного попадания не даёт. p различается по id: конфиги
+# в проекте — долгоживущие синглтоны (DEFAULT.cv); новый объект p = честный пересчёт.
+_memo = {}
+
+
+def _mres(rgb):
+    k = id(rgb)
+    ent = _memo.get(k)
+    if ent is None or ent["shape"] != rgb.shape or ent["dtype"] != rgb.dtype:
+        ent = {"shape": rgb.shape, "dtype": rgb.dtype, "res": {}}
+        _memo[k] = ent
+        try:
+            weakref.finalize(rgb, _memo.pop, k, None)
+        except TypeError:          # на не-weakref-абельном объекте кэш просто не живёт
+            _memo.pop(k, None)
+            return {}
+    return ent["res"]
+
+
 def value_channel(rgb):
     """V = max(R,G,B) — яркость; сетка светлая (высокий V), чёрная кривая низкий V."""
-    return rgb.max(2)
+    res = _mres(rgb)
+    if "V" not in res:
+        res["V"] = rgb.max(2)
+    return res["V"]
 
 
 def dark_mask(rgb, p):
     """Чёрные кривые: АБСОЛЮТНАЯ темнота V<dark_v (≈94-95% чёрной кривой, ~7% сетки)."""
-    return (value_channel(rgb) < p.dark_v)
+    res = _mres(rgb)
+    key = ("dark", id(p))
+    if key not in res:
+        res[key] = (value_channel(rgb) < p.dark_v)
+    return res[key]
 
 
 def color_channels(rgb, p):
@@ -36,6 +69,10 @@ def color_channels(rgb, p):
     dict bool-масок red/orange/green/blue. Оранжевая (SP2, Эдуард 10.07) отделяется от красной
     по G−B: замер STK_4020 — оранж G−B>30 (medRGB ~204,149,104), красная ≤30 (B выше);
     на лентах с ТОЛЬКО красной доля G−B>30 = 0-1% → порог не расщепляет настоящую красную."""
+    res = _mres(rgb)
+    key = ("colors", id(p))
+    if key in res:
+        return res[key]
     R, G, B = [rgb[..., i].astype(np.int16) for i in range(3)]
     mx = rgb.max(2).astype(np.int16); mn = rgb.min(2).astype(np.int16)
     sat = mx - mn
@@ -45,7 +82,9 @@ def color_channels(rgb, p):
     red = red_base & ~orange
     green = colored & (G - R > p.rg_thr) & (G > B)
     blue = colored & (B - R > 8) & (B >= G - 4) & ~green
-    return {"red": red, "orange": orange, "green": green, "blue": blue}
+    out = {"red": red, "orange": orange, "green": green, "blue": blue}
+    res[key] = out
+    return out
 
 
 def structure_mask(rgb, p, min_len=None):
@@ -55,13 +94,19 @@ def structure_mask(rgb, p, min_len=None):
     H = rgb.shape[0]
     Lh = int(min_len or p.struct_open_len)                       # горизонталь: верх/низ-правила
     Lv = max(Lh, int(p.struct_vert_frac * H))                    # вертикаль: ТОЛЬКО полно-высотная
+    res = _mres(rgb)
+    key = ("struct", id(p), Lh, Lv)                              # ключ по ФАКТИЧЕСКИМ ядрам
+    if key in res:
+        return res[key]
     dark = (value_channel(rgb) < p.grid_v_hi).astype(np.uint8)   #   грань — не зубцы пиковой кривой
     vert = cv2.morphologyEx(dark, cv2.MORPH_OPEN,
                             cv2.getStructuringElement(cv2.MORPH_RECT, (1, Lv)))
     horiz = cv2.morphologyEx(dark, cv2.MORPH_OPEN,
                              cv2.getStructuringElement(cv2.MORPH_RECT, (Lh, 1)))
     s = (vert | horiz)
-    return cv2.dilate(s, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))) > 0
+    out = cv2.dilate(s, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))) > 0
+    res[key] = out
+    return out
 
 
 def ink_foreground(rgb, p, prob=None, prob_thr=0.5, drop_structure=True):

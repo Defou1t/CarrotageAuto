@@ -95,8 +95,26 @@ class Sheet:
 
 
 def _instances(mask, color, track_index, min_h, min_px=200):
-    """CC канала → линия-подобные инстансы (центр-трасса x(row), толщина). Без nlgx."""
-    m = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE,
+    """CC канала → линия-подобные инстансы (центр-трасса x(row), толщина). Без nlgx.
+
+    Быстрый путь (профиль 20.07, бит-в-бит эквивалентен наивному, гейт-хэш совпал):
+    - морфология и CC на BBOX-КРОПЕ маски, не на полном кадре 59 Мпикс: MORPH_CLOSE стоил
+      ~1.8с НА КАЖДЫЙ канал при маске, живущей в одном треке. Паддинг 4px >= радиуса влияния
+      ядра close 3x5 (dilate+erode: 2x4), за ним обе версии дают нули → результат идентичен;
+    - медиана по строкам компонента ВЕКТОРНО: np.where row-major, значит колонки каждой строки
+      уже отсортированы; медиана = средний элемент (нечёт) или полусумма двух средних (чёт) —
+      ровно то, что делает np.median. Наивный цикл xsx[ys==r] был O(h*N) и давал 513 тыс.
+      вызовов np.median на лист."""
+    rows_any = np.any(mask, axis=1)
+    if not rows_any.any():
+        return []
+    cols_any = np.any(mask, axis=0)
+    ry0 = int(np.argmax(rows_any)); ry1 = len(rows_any) - int(np.argmax(rows_any[::-1]))
+    cx0 = int(np.argmax(cols_any)); cx1 = len(cols_any) - int(np.argmax(cols_any[::-1]))
+    pad = 4
+    oy = max(0, ry0 - pad); ox = max(0, cx0 - pad)
+    crop = mask[oy:min(mask.shape[0], ry1 + pad), ox:min(mask.shape[1], cx1 + pad)]
+    m = cv2.morphologyEx(crop.astype(np.uint8), cv2.MORPH_CLOSE,
                          cv2.getStructuringElement(cv2.MORPH_RECT, (3, 5)))
     n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
     out = []
@@ -105,18 +123,21 @@ def _instances(mask, color, track_index, min_h, min_px=200):
         if h < min_h or area < min_px:
             continue
         sub = lab[y:y + h, x:x + w] == i
-        xs_row = np.full(h, np.nan)
-        th = []
-        ys, xsx = np.where(sub)
-        for r in range(h):
-            cols = xsx[ys == r]
-            if len(cols):
-                xs_row[r] = x + np.median(cols); th.append(len(cols))
-        if (~np.isnan(xs_row)).sum() < min_h * 0.3:
+        ys, xsx = np.where(sub)                    # row-major: в строке колонки отсортированы
+        cnt = np.bincount(ys, minlength=h)
+        nz = np.nonzero(cnt)[0]
+        if len(nz) < min_h * 0.3:
             continue
-        out.append({"color": color, "track": track_index, "y0": int(y), "y1": int(y + h),
-                    "xs_row": xs_row, "row0": int(y), "area": int(area),
-                    "thickness": float(np.median(th)) if th else 0.0})
+        ends = np.cumsum(cnt)
+        k = cnt[nz]; mid = ends[nz] - k + k // 2
+        xf = xsx.astype(np.float64)
+        med = np.where(k & 1, xf[mid], 0.5 * (xf[np.maximum(mid - 1, 0)] + xf[mid]))
+        xs_row = np.full(h, np.nan)
+        xs_row[nz] = (x + ox) + med
+        out.append({"color": color, "track": track_index,
+                    "y0": int(y + oy), "y1": int(y + oy + h),
+                    "xs_row": xs_row, "row0": int(y + oy), "area": int(area),
+                    "thickness": float(np.median(k))})
     return out
 
 
