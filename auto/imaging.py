@@ -94,11 +94,22 @@ def structure_mask(rgb, p, min_len=None):
     H = rgb.shape[0]
     Lh = int(min_len or p.struct_open_len)                       # горизонталь: верх/низ-правила
     Lv = max(Lh, int(p.struct_vert_frac * H))                    # вертикаль: ТОЛЬКО полно-высотная
+    v = value_channel(rgb)
+    # ★ ПОРОГ СЕТКИ — ОТ УРОВНЯ БУМАГИ, А НЕ АБСОЛЮТНЫЙ (§6.52). `grid_v_hi=205` откалиброван на
+    # БЕЛУЮ бумагу: у неё p90(V)=255, и 255-50 даёт ровно 205 — то есть сегодняшняя константа и
+    # есть «уровень бумаги минус 50». На пожелтевших сканах (RYBAL: p90≈194, медиана V 163-173)
+    # абсолютный порог накрывает ВЕСЬ лист: `dark` становится единицами везде, одномерное открытие
+    # возвращает всё, структура = 100% листа, и `fg &= ~struct` в ink_foreground обнуляет тушь
+    # ПОЛНОСТЬЮ. Замер: 19 листов с медианой V<200 давали 0.00 трасс на кривую, 11 из них — ноль
+    # трасс вообще. ⚠ Правка НЕ МОЖЕТ навредить светлым листам: min() оставляет им прежние 205
+    # (проверено — на здоровом листе трассы побитово те же).
+    paper = int(np.percentile(v[::4, ::4], 90))
+    v_hi = min(int(p.grid_v_hi), max(int(p.dark_v) + 10, paper - 50))
     res = _mres(rgb)
-    key = ("struct", id(p), Lh, Lv)                              # ключ по ФАКТИЧЕСКИМ ядрам
+    key = ("struct", id(p), Lh, Lv, v_hi)                        # ключ по ФАКТИЧЕСКИМ ядрам
     if key in res:
         return res[key]
-    dark = (value_channel(rgb) < p.grid_v_hi).astype(np.uint8)   #   грань — не зубцы пиковой кривой
+    dark = (v < v_hi).astype(np.uint8)                           #   грань — не зубцы пиковой кривой
     vert = _open_1d(dark, Lv, axis=0)
     horiz = _open_1d(dark, Lh, axis=1)
     s = (vert | horiz)

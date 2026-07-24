@@ -104,6 +104,15 @@ ap.add_argument("--diag", default="", help="подстрока листа: пе�
 ap.add_argument("--diag-pick", default="nl+npts", help="какой критерий показывать в --diag")
 ap.add_argument("--k2", type=int, default=0,
                 help="СБОРКА ТРАНША K=2 по содержимому рамки (§6.7), а не по train_sheets")
+ap.add_argument("--dark-from", default="",
+                help="ПЕРЕСБОРКА: взять из этих кэшей листы с медианой V < --dark-v и собрать их "
+                     "заново (для замера правки тона, §6.52)")
+ap.add_argument("--dark-v", type=int, default=200, help="порог медианы V «тёмная бумага»")
+ap.add_argument("--p90-band", default="", help="ПЕРЕСБОРКА по полосе p90(V): 'lo,hi'")
+ap.add_argument("--bridge", type=int, default=0,
+                help="МОСТИК: линейно заполнить разрывы трассы длиной <= N строк (§6.52). "
+                     "0 = как сейчас. Экспертная полилиния имеет вершины через 6-23 строки, "
+                     "поэтому разрыв короче этого в ЕЁ представлении вообще не существует")
 ap.add_argument("--cv", default="",
                 help="каталоги кэшей через запятую: перекрёстный замер по НЕЗАВИСИМЫМ наборам")
 ap.add_argument("--json", default=str(OUT / "res.json"))
@@ -112,6 +121,23 @@ a = ap.parse_args()
 if a.cache:
     CACHE = Path(a.cache)
 MINPTS = 30                      # как в _emit_traces: короче — не кандидат
+
+
+def bridge(t, maxgap):
+    """Заполнить ЛИНЕЙНО разрывы <= maxgap строк. Это не выдумывание данных: эксперт хранит
+    кривую ПОЛИЛИНИЕЙ с шагом вершин 6-23 строки (докстринг `dense`), и разрыв короче шага в его
+    представлении не существует вовсе. Длинные разрывы НЕ мостим — там кривая действительно
+    потеряна, и её надо оставить видимой в метрике."""
+    if maxgap <= 0 or len(t) < 2:
+        return t
+    ys = sorted(t); out = dict(t)
+    for y0, y1 in zip(ys, ys[1:]):
+        g = y1 - y0 - 1
+        if 0 < g <= maxgap:
+            x0, x1 = t[y0], t[y1]
+            for k in range(1, g + 1):
+                out[y0 + k] = x0 + (x1 - x0) * k / (g + 1)
+    return out
 
 
 # ─────────────────────────── общая геометрия трасс (без GT) ───────────────────────────
@@ -438,7 +464,7 @@ def evaluate(picks):
     print(f"{'лист':<44}{'N':>3}{'K':>3}{'GT':>4}  " + "".join(f"{mo:>9}" for mo in picks))
     for f in files:
         d = pickle.load(open(f, "rb"))
-        cand = [t for t in d["traces"] if len(t) >= MINPTS]
+        cand = [bridge(t, a.bridge) for t in d["traces"] if len(t) >= MINPTS]
         K = max(1, d["K"] or len(d["GM"]))
         row = f"{d['name'][:42]:<44}{len(d['traces']):>3}{K:>3}{len(d['GM']):>4}  "
         for mo in picks:
@@ -515,7 +541,7 @@ def cross(dirs, picks):
         rows = []
         for f in sorted(Path(d).glob("*.pkl")):
             dd = pickle.load(open(f, "rb"))
-            cand = [t for t in dd["traces"] if len(t) >= MINPTS]
+            cand = [bridge(t, a.bridge) for t in dd["traces"] if len(t) >= MINPTS]
             rows.append((cand, max(1, dd["K"] or len(dd["GM"])), dd["GM"], dd["raw"]))
         sets.append((Path(d).name, rows))
         print(f"набор {Path(d).name:<10} листов {len(rows):>3}  кривых "
@@ -553,7 +579,40 @@ if __name__ == "__main__":
     if a.build:
         from _decoder_data import train_sheets
         from _relatch_bench import SH, ARCH
-        if a.k2:
+        if a.dark_from:
+            # ★ ПЕРЕСБОРКА ТЁМНЫХ ЛИСТОВ. Берём из готовых кэшей те листы, у которых бумага
+            # тёмная, и гоняем их заново — так замер правки §6.52 идёт на ТЕХ ЖЕ листах,
+            # что и замер до неё, без подмешивания новых.
+            import cv2, pickle as _pk
+            idx = {}
+            for wlg in Path(r"F:\nds\projects\Archive").glob("*/wlg"):
+                for q in wlg.glob("*.nlgx"):
+                    idx.setdefault(q.name, q)
+            for extra in (r"F:\nds\projects\Semeguniv_001\wlg",
+                          r"F:\nds\projects\Semeguniv_020\wlg"):
+                if Path(extra).is_dir():
+                    for q in Path(extra).glob("*.nlgx"):
+                        idx.setdefault(q.name, q)
+            sheets = []
+            for d in a.dark_from.split(","):
+                for fp in sorted(Path(d).glob("*.pkl")):
+                    src = idx.get(_pk.load(open(fp, "rb"))["name"])
+                    if src is None or src in sheets:
+                        continue
+                    img = find_image(src)
+                    if not img:
+                        continue
+                    imz = cv2.imread(str(img), cv2.IMREAD_COLOR)
+                    if imz is None:
+                        continue
+                    vv = cv2.cvtColor(imz[::8, ::8], cv2.COLOR_BGR2HSV)[:, :, 2]
+                    if a.p90_band:
+                        lo, hi = (int(z) for z in a.p90_band.split(","))
+                        if lo <= int(np.percentile(vv, 90)) < hi:
+                            sheets.append(src)
+                    elif float(np.median(vv)) < a.dark_v:
+                        sheets.append(src)
+        elif a.k2:
             # ★ ТРАНШ K=2 ПО СОДЕРЖИМОМУ РАМКИ (отбор как в `_k2_gate.py`, §6.7), а НЕ по
             # порядку train_sheets. Нужен, чтобы проверить утверждение §6.50: не легче ли
             # двухкривые листы, чем выборка с приоритетом кроссинг-классов. По одному листу
