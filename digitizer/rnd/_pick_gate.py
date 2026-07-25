@@ -122,6 +122,9 @@ ap.add_argument("--dp", action="store_true",
                      "выбора рана. Дешёвая проверка постановки P2 §6.8 без обучения")
 ap.add_argument("--dp-lam", type=float, default=0.02, help="приор полосы для ДП")
 ap.add_argument("--dp-skip", type=float, default=6.0, help="штраф пропуска строки для ДП")
+ap.add_argument("--dp-wid", type=float, default=0.0,
+                help="ДП + ПРИЗНАК ИДЕНТИЧНОСТИ: вес штрафа за несоответствие ширины штриха "
+                     "(§6.64). 0 = чистая гладкость, как в §6.61")
 ap.add_argument("--cv", default="",
                 help="каталоги кэшей через запятую: перекрёстный замер по НЕЗАВИСИМЫМ наборам")
 ap.add_argument("--json", default=str(OUT / "res.json"))
@@ -419,6 +422,7 @@ def build(sheets):
         def _dp(*ar, **kw):
             kw.pop("jump_limit", None)
             kw.setdefault("lam", a.dp_lam); kw.setdefault("skip_cost", a.dp_skip)
+            kw.setdefault("wid", a.dp_wid)
             return dp_trace_line(*ar, **kw)
         _T.trace_line = _dp
     if a.jump_limit:

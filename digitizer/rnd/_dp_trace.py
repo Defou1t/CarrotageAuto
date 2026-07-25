@@ -33,7 +33,7 @@ MAXRUNS = 24            # больше — это уже не линия, а с�
 
 
 def dp_trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_range=None,
-                  jump_limit=None, lam=0.02, skip_cost=6.0, maxjump=None):
+                  jump_limit=None, lam=0.02, skip_cost=6.0, maxjump=None, wid=0.0):
     """Та же сигнатура, что `auto.trace2d.trace_line`, но выбор ранов — ГЛОБАЛЬНЫЙ ДП.
     Возвращает dict{row: x}. Строки, где выгоднее промолчать, НЕ пишутся (как и у жадного)."""
     H, W = fg.shape
@@ -47,20 +47,34 @@ def dp_trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_ran
     if y1 <= y0 or hi <= lo:
         return {}
 
-    rows, cands = [], []
+    rows, cands, widths = [], [], []
     for y in range(y0, y1):
         rr = im.row_runs(fg[y, lo:hi])
         if not rr:
             continue
-        pts = []
+        pts, wds = [], []
         for a, b, c in rr:
             a += lo; b += lo; c += lo
             # широкий ран = горизонтальный спайк: вершина, а не центр (правило жадного)
             x = (b if abs(b - base) >= abs(a - base) else a) if (b - a) >= wide_run else c
-            pts.append(float(x))
+            pts.append(float(x)); wds.append(float(b - a + 1))
+        order = np.argsort(pts)
+        pts = [pts[i] for i in order]; wds = [wds[i] for i in order]
         if len(pts) > MAXRUNS:
-            pts = sorted(pts, key=lambda x: abs(x - base))[:MAXRUNS]
-        rows.append(y); cands.append(np.array(sorted(pts), float))
+            keep = sorted(range(len(pts)), key=lambda i: abs(pts[i] - base))[:MAXRUNS]
+            keep.sort()
+            pts = [pts[i] for i in keep]; wds = [wds[i] for i in keep]
+        rows.append(y); cands.append(np.array(pts, float)); widths.append(np.array(wds, float))
+    # ★ ПРИЗНАК ИДЕНТИЧНОСТИ БЕЗ ОБУЧЕНИЯ (§6.64): ШИРИНА ШТРИХА. Перо одной кривой пишет своей
+    # толщиной; соседняя кривая, рамка или сетка обычно другой. §6.61 показал, что ГЛАДКОСТИ ОДНОЙ
+    # НЕ ХВАТАЕТ — глобально самый гладкий путь может целиком уйти на соседа. Ширина — самый
+    # дешёвый доступный признак «это тот же штрих», проверяемый БЕЗ обучения.
+    # Целевая ширина берётся робастно: медиана ширин ранов, ближайших к базлайну по каждой строке.
+    if wid > 0 and widths:
+        near = [w[int(np.argmin(np.abs(c - base)))] for c, w in zip(cands, widths) if len(c)]
+        w_target = float(np.median(near)) if near else 1.0
+    else:
+        w_target = None
     if not rows:
         return {}
 
@@ -73,6 +87,9 @@ def dp_trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_ran
     for i, xs in enumerate(cands):
         n = len(xs)
         prior = lam * np.abs(xs - base) / half * 100.0
+        if w_target:
+            # штраф за несоответствие ширины: относительный, чтобы не зависеть от масштаба скана
+            prior = prior + wid * np.abs(widths[i] - w_target) / max(1.0, w_target)
         if i == 0:
             cost = prior + np.abs(xs - base) * 0.0
             bk = np.full(n + 1, -2, int)
