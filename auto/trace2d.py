@@ -117,7 +117,8 @@ def trace_auto(rgb, sheet, p=None):
     out = []
     fg_cache = {}
     for L in sheet.lines:
-        if L.confidence != "AUTO":
+        # p.trace_flagged=True — вести и FLAG-линии тоже (§6.54-§6.55, смена контракта выдачи).
+        if L.confidence != "AUTO" and not getattr(p, "trace_flagged", False):
             continue
         if L.color not in fg_cache:
             fg_cache[L.color] = _color_fg(rgb, L.color, p)

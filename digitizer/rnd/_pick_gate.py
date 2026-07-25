@@ -117,6 +117,11 @@ ap.add_argument("--jump-limit", type=float, default=0,
                 help="СБОРКА С ПРЕДОХРАНИТЕЛЕМ ПРЫЖКА (§6.56): не садиться на ран дальше N px от "
                      "предсказания, а коастить по инерции и НЕ писать строку. 0 = как в проде "
                      "(предохранитель есть в trace2d, но НИКЕМ не передаётся)")
+ap.add_argument("--dp", action="store_true",
+                help="СБОРКА ДЕКОДЕРОМ ПУТИ (§6.61): глобальный ДП по колонке вместо жадного "
+                     "выбора рана. Дешёвая проверка постановки P2 §6.8 без обучения")
+ap.add_argument("--dp-lam", type=float, default=0.02, help="приор полосы для ДП")
+ap.add_argument("--dp-skip", type=float, default=6.0, help="штраф пропуска строки для ДП")
 ap.add_argument("--cv", default="",
                 help="каталоги кэшей через запятую: перекрёстный замер по НЕЗАВИСИМЫМ наборам")
 ap.add_argument("--json", default=str(OUT / "res.json"))
@@ -406,6 +411,16 @@ def n_slots(nlgx):
 def build(sheets):
     from auto.pipeline import run as pipe_run
     from auto.config import Config
+    if a.dp:
+        # ★ Подменяем ТОЛЬКО выбор пути; полоса, цвет, refine и всё остальное — прод.
+        from auto import trace2d as _T
+        from _dp_trace import dp_trace_line
+
+        def _dp(*ar, **kw):
+            kw.pop("jump_limit", None)
+            kw.setdefault("lam", a.dp_lam); kw.setdefault("skip_cost", a.dp_skip)
+            return dp_trace_line(*ar, **kw)
+        _T.trace_line = _dp
     if a.jump_limit:
         # ★ Предохранитель написан в auto/trace2d.py:69 и снабжён разбором дефекта (19.07), но
         # `jump_limit` не передаёт НИКТО — ни refine, ни конфиг. Здесь он включается обёрткой,

@@ -112,8 +112,8 @@ print(f"листов: {len(sheets)}   метрика §6.36 по ВЫДАННЫ�
 # ★ ВАРИАНТ C РАЗЛАГАЕТ ВЫИГРЫШ: настоящая classify (гейт РАБОТАЕТ) + эмиссия `emit_traces`.
 # A→C = вклад ЭМИССИИ (очистка слотов, своё окно строк, отбор §6.49, мостик §6.53),
 # C→B = вклад ВЫКЛЮЧЕННОГО ГЕЙТА. Это решает, что можно вносить без смены постановки.
-print(f"{'лист':<42}{'кривых':>7}{'ПРОД A':>8}{'C гейт+':>9}{'§6.33 B':>9}")
-tA = tB = tC = tc = 0
+print(f"{'лист':<42}{'кривых':>7}{'A прод':>8}{'C эмис':>8}{'D флаг':>8}{'B оба':>7}")
+tA = tB = tC = tD = tc = 0
 for n in sheets:
     img = find_image(n)
     if not img:
@@ -152,6 +152,20 @@ for n in sheets:
         hC, _ = honest_of_file(pc, GM, raw)
     except Exception as e:
         print(f"{n.name[:40]:<42} C ПАДЕНИЕ {type(e).__name__}: {e}")
+    # D: гейт ВЫКЛЮЧЕН флагом конфига, но эмиссия ШТАТНАЯ (`emit_into_frame`).
+    # ★ Недостающая клетка матрицы: если D ≈ B, весь выигрыш берётся одним флагом, без смены
+    # формата выдачи и без вопроса об именах.
+    CM.classify = _classify
+    cfg = Config(); cfg.out = OUT / "D" / n.stem[:30]; cfg.cv.trace_flagged = True
+    hD = 0
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            _, _, res = pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
+        pd_ = Path(res.get("nlgx", ""))
+        if pd_.is_file():
+            hD, _ = honest_of_file(pd_, GM, raw)
+    except Exception as e:
+        print(f"{n.name[:40]:<42} D ПАДЕНИЕ {type(e).__name__}: {e}")
     # B: §6.33 — форсированный AUTO + emit_traces
     CM.classify = allauto
     TR.clear()
@@ -164,8 +178,8 @@ for n in sheets:
         hB, _ = honest_of_file(pb, GM, raw)
     except Exception as e:
         print(f"{n.name[:40]:<42} B ПАДЕНИЕ {type(e).__name__}: {e}")
-    tA += hA; tB += hB; tC += hC; tc += len(GM)
-    print(f"{n.name[:40]:<42}{len(GM):>7}{hA:>8}{hC:>9}{hB:>9}"
+    tA += hA; tB += hB; tC += hC; tD += hD; tc += len(GM)
+    print(f"{n.name[:40]:<42}{len(GM):>7}{hA:>8}{hC:>8}{hD:>8}{hB:>7}"
           + ("   ★" if hB > hA else ("   ✗" if hB < hA else "")))
 CM.classify = _classify
 print(f"\n{'ИТОГО':<42}{tc:>7}{tA:>8}{tB:>9}")
