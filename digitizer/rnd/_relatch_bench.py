@@ -46,8 +46,15 @@ MAX_GAP = 25          # _extend_ends(max_gap=25)
 
 # ───────────────────────────── сборка кэша ─────────────────────────────
 
-def build():
-    """Один дорогой проход: скан → маски цветов → раны по строкам в полосе каждой кривой."""
+def build(pad=20, cache=None, shift=0):
+    """Один дорогой проход: скан → маски цветов → раны по строкам в полосе каждой кривой.
+
+    pad — насколько полоса ШИРЕ размаха экспертной кривой (20 = оракульная полоса, как в
+    `_latch_probe.py`). Прогон с бОльшим pad отвечает на вопрос «какую полосу обязан отдать U1»:
+    оракул и прод отличаются в 62× (§6.28.3), а между ними не мерено ничего.
+    cache — куда класть (по умолчанию штатный кэш; для других pad ОБЯЗАТЕЛЬНО свой каталог,
+    иначе `--verify` начнёт сверять чужие числа)."""
+    cache = Path(cache) if cache else CACHE
     import cv2
     from extract_nlgx import extract, NULL
     import dataset as ds
@@ -57,8 +64,7 @@ def build():
     from auto import imaging as im
     from auto.config import DEFAULT
     p = DEFAULT.cv
-    CACHE.mkdir(parents=True, exist_ok=True)
-    pad = 20                                        # как --pad в _latch_probe.py
+    cache.mkdir(parents=True, exist_ok=True)
 
     for rel in SH:
         n = ARCH / rel
@@ -92,16 +98,18 @@ def build():
             if len(own) < 50:
                 continue
             ys = sorted(own); xs = [own[y] for y in ys]
-            lo = max(0, int(min(xs) - pad) - BAND_PAD)
-            hi = min(W, int(max(xs) + pad) + BAND_PAD + 1)
+            # shift — полоса СМЕЩЕНА относительно кривой (модель отказа прода: U1 нашёл полосу,
+            # но она стоит на соседе). base тоже съезжает: он берётся из полосы, а не из GT.
+            lo = max(0, int(min(xs) - pad) - BAND_PAD + shift)
+            hi = min(W, int(max(xs) + pad) + BAND_PAD + 1 + shift)
             rec = {"name": g["name"], "short": g["name"].split()[0],
                    "lo": lo, "hi": hi, "y0": min(ys), "y1": max(ys),
-                   "base": float(np.median(xs)), "runs": {}}
+                   "base": float(np.median(xs)) + shift, "runs": {}}
             for c in colors:
                 rec["runs"][c] = _csr(fgs[c], lo, hi, H, im)
             sheet_rec["curves"].append(rec)
             print(f"   {well} {rec['short']:<8} полоса {hi-lo:>5}px  строки {rec['y0']}..{rec['y1']}")
-        with open(CACHE / f"{well}.pkl", "wb") as f:
+        with open(cache / f"{well}.pkl", "wb") as f:
             pickle.dump(sheet_rec, f, protocol=5)
         print(f"== {well}: {len(sheet_rec['curves'])} кривых, цвета {colors}")
 
@@ -120,11 +128,12 @@ def _csr(fg, lo, hi, H, im):
             np.array(Cc, np.float64), ptr)
 
 
-def load():
+def load(cache=None):
+    cache = Path(cache) if cache else CACHE
     out = []
     for rel in SH:
         well = (ARCH / rel).parent.parent.name
-        f = CACHE / f"{well}.pkl"
+        f = cache / f"{well}.pkl"
         if f.exists():
             with open(f, "rb") as fh:
                 out.append(pickle.load(fh))
@@ -255,10 +264,20 @@ def score_curve(tr, rec, sheet, tol=10.0):
             **{k: 100.0 * v / s for k, v in cnt.items()}}
 
 
-def run_strategy(chooser=None, tracer=None, tol=10.0):
-    """Прогнать стратегию по всем кривым. Как в _latch_probe: цвет выбирается ЛУЧШИЙ по med."""
+def run_strategy(chooser=None, tracer=None, tol=10.0, cache=None, color="oracle"):
+    """Прогнать стратегию по всем кривым.
+
+    ⚠ color="oracle" (умолчание, унаследовано от `_latch_probe.py`) — цвет маски выбирается ПО
+    ЛУЧШЕМУ med относительно эксперта. Это ОРАКУЛ: в проде цвет так выбрать нельзя. Замер 22.07:
+    оракульный цвет совпадает с доступным без GT критерием лишь у 38% кривых (на 3 листах из 5
+    оракул берёт black там, где «больше туши» указывает на red) ⇒ все числа стенда (§6.15, §6.20,
+    §6.25-§6.29) получены ПРИ ОРАКУЛЬНОМ ЦВЕТЕ, и это надо цитировать вместе с ними.
+
+    color="jitter" — честная альтернатива БЕЗ GT: берётся трасса с наименьшим типичным рывком
+    |Δx| между соседними строками (своя кривая идёт гладко, чужая маска даёт рванину).
+    """
     rows = []
-    for sheet in load():
+    for sheet in load(cache):
         H = sheet["H"]
         names, mat = _gt_matrix(sheet)
         for rec in sheet["curves"]:
@@ -274,9 +293,12 @@ def run_strategy(chooser=None, tracer=None, tol=10.0):
                 m = ~np.isnan(own_x)
                 if int(m.sum()) < 30:
                     continue
-                med = float(np.median(np.abs(xs[m] - own_x[m])))
-                if med < best_med:
-                    best_med, best = med, tr
+                if color == "jitter":
+                    key = float(np.median(np.abs(np.diff(xs)))) if len(xs) > 1 else 1e9
+                else:
+                    key = float(np.median(np.abs(xs[m] - own_x[m])))
+                if key < best_med:
+                    best_med, best = key, tr
             if best is None:
                 continue
             sc = score_curve(best, rec, sheet, tol)
@@ -326,9 +348,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--pad", type=int, default=20, help="полоса шире размаха GT на столько px")
+    ap.add_argument("--cache", default=None, help="каталог кэша (для pad != 20 — ОБЯЗАТЕЛЬНО свой)")
+    ap.add_argument("--shift", type=int, default=0, help="сдвиг полосы вбок, px (модель отказа прода)")
     a = ap.parse_args()
     if a.build:
-        build()
+        build(a.pad, a.cache, a.shift)
     elif a.verify:
         sys.exit(0 if verify() else 1)
     else:
