@@ -107,6 +107,9 @@ def _extend_ends(tr, fg, lo, hi, slmax, max_gap=25):
             x = c; tr[y] = float(c); gap = 0; y += direction
 
 
+_SEQ = {}                    # чекпойнт → готовый трассировщик (веса грузятся один раз)
+
+
 def trace_auto(rgb, sheet, p=None):
     """Трассировать все AUTO-линии листа. Возвращает list[(Line, {row:x})].
     Каждая трасса ДЕСПАЙКается (refine.despike): изолированные выбросы-спайки (перескок на рамку/
@@ -116,6 +119,14 @@ def trace_auto(rgb, sheet, p=None):
     p = p or DEFAULT.cv
     out = []
     fg_cache = {}
+    # ★ ОБУЧЕННЫЙ СЕЛЕКТОР (§6.66): подменяет ТОЛЬКО выбор рана, всё остальное (полоса, цвет,
+    # refine с границей Вороного, деспайк) остаётся прежним. Выключен, пока не задан seq_model.
+    tl = trace_line
+    if getattr(p, "seq_model", ""):
+        from . import trace_seq
+        if trace_seq.available(p.seq_model):
+            tl = _SEQ.get(p.seq_model) or _SEQ.setdefault(
+                p.seq_model, trace_seq.make_tracer(p.seq_model))
     for L in sheet.lines:
         # p.trace_flagged=True — вести и FLAG-линии тоже (§6.54-§6.55, смена контракта выдачи).
         if L.confidence != "AUTO" and not getattr(p, "trace_flagged", False):
@@ -126,7 +137,7 @@ def trace_auto(rgb, sheet, p=None):
         # refine-петля: тесная→широкая трасса при недотяге до упора + деспайк (refine.refine_trace)
         # siblings — все линии листа: refine ограничивает расширение полосы границами Вороного
         # до соседей ТОГО ЖЕ ЦВЕТА на том же треке (см. refine._neighbor_bounds).
-        tr = refine.refine_trace(fg_cache[L.color], L, sheet.frame, p, trace_line, track,
+        tr = refine.refine_trace(fg_cache[L.color], L, sheet.frame, p, tl, track,
                                  siblings=sheet.lines)
         if len(tr) >= 30:
             out.append((L, tr))
