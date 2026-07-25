@@ -258,7 +258,26 @@ def repair_swaps(rows_xs, fg, p, n_same_color=1):
     return {y: float(out[i]) for i, y in enumerate(rows)}, fixed
 
 
-def refine_trace(fg, line, frame, p, trace_line, track, n_same_color=1):
+def _neighbor_bounds(line, siblings):
+    """Границы Вороного до ближайших линий ТОГО ЖЕ ЦВЕТА на том же треке.
+
+    Именно они делят маску `fg` и реально конкурируют за тушь. Возвращает (lo, hi) или None там,
+    где соседа нет — тогда ограничение не применяется и поведение прежнее (одиночная линия на
+    треке, ради которой ветка дотяга и вводилась, не затрагивается ПО ПОСТРОЕНИЮ).
+    Констант не вводит: подстраивается под плотность кривых листа."""
+    lo = hi = None
+    for L in siblings or ():
+        if L is line or L.color != line.color or L.track_index != line.track_index:
+            continue
+        b = (L.x_center + line.x_center) / 2
+        if L.x_center < line.x_center:
+            lo = b if lo is None else max(lo, b)
+        elif L.x_center > line.x_center:
+            hi = b if hi is None else min(hi, b)
+    return lo, hi
+
+
+def refine_trace(fg, line, frame, p, trace_line, track, n_same_color=1, siblings=None):
     """REFINE-ПЕТЛЯ трассы одной AUTO-линии (Эдуард 12.07): трасса → верификатор → перетрасс.
     (1) тесный band (полоса линии). (2) детект НЕДОТЯГА: у правого/левого края band есть чернило
     того же цвета за границей (перо ушло к упору, а трасса не догнала — калибровка: BK терял выносы
@@ -282,6 +301,17 @@ def refine_trace(fg, line, frame, p, trace_line, track, n_same_color=1):
     if hard:
         lo = max(lo, int(hlo)); hi = min(hi, int(hhi))
         tl = max(tl, int(hlo)); tr_ = min(tr_, int(hhi))
+    # ★ ОГРАНИЧЕНИЕ ЗОНЫ РАСШИРЕНИЯ (гейт 22.07, `_esc_limit.py`, 26 листов / 90 кривых).
+    # Расширение ДО ГРАНИЦ ТРЕКА на многокривом листе затягивает в полосу соседние кривые и
+    # разрушает идентичность: полоса OGZ1 ≈1000px против трека 2237px, в полосе все 7 кривых
+    # (ось 1 §6.29 — расширение полосы губит идентичность). Замер: честных 7→19 из 90,
+    # med(med) 158.8→14.2, листов лучше 7, ХУЖЕ 0. Вариант «выключить ветку» даёт РОВНО ТО ЖЕ
+    # (19 / 14.2), т.е. ограничение забирает весь выигрыш, но сохраняет дотяг до упора.
+    nlo, nhi = _neighbor_bounds(line, siblings)
+    if nlo is not None:
+        tl = max(tl, int(nlo))          # int обязателен: tl/tr_ идут в срез fg[y, hi:tr_]
+    if nhi is not None:
+        tr_ = min(tr_, int(nhi))
     # НЕДОТЯГ = band отрезал чернило: доля строк трассы, где ТОГО ЖЕ ЦВЕТА чернило есть ЗА band
     # (перо ушло к упору, band это срезал). Не «трасса у края» (недотяг = трасса НЕ дошла).
     rows = sorted(tr)
