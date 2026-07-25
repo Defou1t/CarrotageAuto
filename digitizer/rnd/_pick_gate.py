@@ -113,6 +113,10 @@ ap.add_argument("--bridge", type=int, default=0,
                 help="МОСТИК: линейно заполнить разрывы трассы длиной <= N строк (§6.52). "
                      "0 = как сейчас. Экспертная полилиния имеет вершины через 6-23 строки, "
                      "поэтому разрыв короче этого в ЕЁ представлении вообще не существует")
+ap.add_argument("--jump-limit", type=float, default=0,
+                help="СБОРКА С ПРЕДОХРАНИТЕЛЕМ ПРЫЖКА (§6.56): не садиться на ран дальше N px от "
+                     "предсказания, а коастить по инерции и НЕ писать строку. 0 = как в проде "
+                     "(предохранитель есть в trace2d, но НИКЕМ не передаётся)")
 ap.add_argument("--cv", default="",
                 help="каталоги кэшей через запятую: перекрёстный замер по НЕЗАВИСИМЫМ наборам")
 ap.add_argument("--json", default=str(OUT / "res.json"))
@@ -402,6 +406,17 @@ def n_slots(nlgx):
 def build(sheets):
     from auto.pipeline import run as pipe_run
     from auto.config import Config
+    if a.jump_limit:
+        # ★ Предохранитель написан в auto/trace2d.py:69 и снабжён разбором дефекта (19.07), но
+        # `jump_limit` не передаёт НИКТО — ни refine, ни конфиг. Здесь он включается обёрткой,
+        # чтобы померить цену его отключённости, ничего не меняя в проде.
+        from auto import trace2d as _T
+        _tl = _T.trace_line
+
+        def _tl_capped(*ar, **kw):
+            kw.setdefault("jump_limit", a.jump_limit)
+            return _tl(*ar, **kw)
+        _T.trace_line = _tl_capped
     from auto import confidence as confidence_mod
     from auto import emit as emit_mod
     _classify = confidence_mod.classify
