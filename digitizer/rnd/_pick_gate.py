@@ -125,6 +125,9 @@ ap.add_argument("--dp-skip", type=float, default=6.0, help="штраф проп�
 ap.add_argument("--dp-wid", type=float, default=0.0,
                 help="ДП + ПРИЗНАК ИДЕНТИЧНОСТИ: вес штрафа за несоответствие ширины штриха "
                      "(§6.64). 0 = чистая гладкость, как в §6.61")
+ap.add_argument("--seq", default="",
+                help="СБОРКА ОБУЧЕННЫМ ОКОННЫМ СЕЛЕКТОРОМ (§6.66): имя чекпойнта в "
+                     "output/taskS/decoder, напр. seq_model_d45p.pt. Требует torch")
 ap.add_argument("--cv", default="",
                 help="каталоги кэшей через запятую: перекрёстный замер по НЕЗАВИСИМЫМ наборам")
 ap.add_argument("--json", default=str(OUT / "res.json"))
@@ -414,6 +417,54 @@ def n_slots(nlgx):
 def build(sheets):
     from auto.pipeline import run as pipe_run
     from auto.config import Config
+    if a.seq:
+        # ★ ОБУЧЕННЫЙ СЕЛЕКТОР РАНОВ (§6.22-§6.24), решение на строке опирается на ПАТЧ ±64 строки.
+        # Это ровно «идентичность из контекста», к которой свёлся вывод §6.64. Код инференса —
+        # тот же, что в `_emit_traces.py --seq`, вынесен сюда без изменений.
+        import torch
+        from auto import trace2d as _T
+        from auto import imaging as _im
+        from _decoder_core import features
+        from _decoder_seq import WindowSelector, OUT as MODELS
+        from _decoder_seq_data import MAXC, patch
+        DEV = "cuda" if torch.cuda.is_available() else "cpu"
+        NET = WindowSelector().to(DEV)
+        NET.load_state_dict(torch.load(MODELS / a.seq, map_location=DEV)["sd"]); NET.eval()
+
+        def _seq(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_range=None,
+                 jump_limit=None):
+            H, W = fg.shape
+            lo = max(0, int(x_range[0])) if x_range is not None else max(0, int(line.x_lo) - band_pad)
+            hi = min(W, int(x_range[1]) + 1) if x_range is not None else min(W, int(line.x_hi) + band_pad + 1)
+            base = line.x_center
+            band = np.ascontiguousarray(fg[:, lo:hi] > 0)
+            x = None; v = 0.0; tr = {}
+            with torch.no_grad():
+                for y in range(max(0, line.y0), min(H, line.y1 + 1)):
+                    runs = _im.row_runs(fg[y, lo:hi])
+                    if not runs:
+                        if x is not None:
+                            x = x + float(np.clip(v, -slmax, slmax))
+                        continue
+                    A = np.array([r[0] + lo for r in runs]); Bb = np.array([r[1] + lo for r in runs])
+                    C = np.array([r[2] + lo for r in runs], float)
+                    if x is None:
+                        k = int(np.argmin(np.abs(C - base))); x = float(C[k]); v = 0.0; tr[y] = x; continue
+                    pred = x + float(np.clip(v, -slmax, slmax))
+                    idx, X = features(A, Bb, C, pred, x, v, base, MAXC)
+                    if len(idx) == 1:
+                        k = int(idx[0])
+                    else:
+                        ink, val = patch(band, lo, y, pred)
+                        pt = torch.from_numpy(np.stack([ink, val]).astype(np.float32))[None].to(DEV)
+                        f = np.zeros((1, MAXC, 10), np.float32); f[0, :len(idx)] = X
+                        mm = np.zeros((1, MAXC), np.float32); mm[0, :len(idx)] = 1
+                        sc = NET(pt, torch.from_numpy(f).to(DEV), torch.from_numpy(mm).to(DEV))
+                        k = int(idx[int(sc[0].argmax().item())])
+                    nx = float(C[k]); v = 0.6 * v + 0.4 * (nx - x); x = nx; tr[y] = float(nx)
+            _T._extend_ends(tr, fg, lo, hi, slmax)
+            return tr
+        _T.trace_line = _seq
     if a.dp:
         # ★ Подменяем ТОЛЬКО выбор пути; полоса, цвет, refine и всё остальное — прод.
         from auto import trace2d as _T
