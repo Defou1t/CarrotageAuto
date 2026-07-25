@@ -109,8 +109,11 @@ for fp in sorted(Path(a.cache).glob("*.pkl")):
 sheets = sheets[:a.n]
 
 print(f"листов: {len(sheets)}   метрика §6.36 по ВЫДАННЫМ файлам\n")
-print(f"{'лист':<42}{'кривых':>7}{'ПРОД A':>8}{'§6.33 B':>9}")
-tA = tB = tc = 0
+# ★ ВАРИАНТ C РАЗЛАГАЕТ ВЫИГРЫШ: настоящая classify (гейт РАБОТАЕТ) + эмиссия `emit_traces`.
+# A→C = вклад ЭМИССИИ (очистка слотов, своё окно строк, отбор §6.49, мостик §6.53),
+# C→B = вклад ВЫКЛЮЧЕННОГО ГЕЙТА. Это решает, что можно вносить без смены постановки.
+print(f"{'лист':<42}{'кривых':>7}{'ПРОД A':>8}{'C гейт+':>9}{'§6.33 B':>9}")
+tA = tB = tC = tc = 0
 for n in sheets:
     img = find_image(n)
     if not img:
@@ -136,6 +139,19 @@ for n in sheets:
             hA, _ = honest_of_file(pa, GM, raw)
     except Exception as e:
         print(f"{n.name[:40]:<42} A ПАДЕНИЕ {type(e).__name__}")
+    # C: настоящая classify + emit_traces
+    CM.classify = _classify
+    TR.clear()
+    cfg = Config(); cfg.out = OUT / "C" / n.stem[:30]
+    hC = 0
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
+            ours = [tr for _, tr in TR.get("all", [])]
+            pc, _w = emit_traces(n, ours, OUT / "C" / n.stem[:30], model=m, image=img)
+        hC, _ = honest_of_file(pc, GM, raw)
+    except Exception as e:
+        print(f"{n.name[:40]:<42} C ПАДЕНИЕ {type(e).__name__}: {e}")
     # B: §6.33 — форсированный AUTO + emit_traces
     CM.classify = allauto
     TR.clear()
@@ -148,8 +164,8 @@ for n in sheets:
         hB, _ = honest_of_file(pb, GM, raw)
     except Exception as e:
         print(f"{n.name[:40]:<42} B ПАДЕНИЕ {type(e).__name__}: {e}")
-    tA += hA; tB += hB; tc += len(GM)
-    print(f"{n.name[:40]:<42}{len(GM):>7}{hA:>8}{hB:>9}"
+    tA += hA; tB += hB; tC += hC; tc += len(GM)
+    print(f"{n.name[:40]:<42}{len(GM):>7}{hA:>8}{hC:>9}{hB:>9}"
           + ("   ★" if hB > hA else ("   ✗" if hB < hA else "")))
 CM.classify = _classify
 print(f"\n{'ИТОГО':<42}{tc:>7}{tA:>8}{tB:>9}")
