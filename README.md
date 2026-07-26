@@ -85,7 +85,9 @@ vision LLM. The dashed arrows are reference/feedback inputs, not the main data p
 **Tracing uses one trained model, enabled by default.** `auto/trace_seq.py` scores candidate ink
 runs from a ±64-row patch instead of picking the nearest one greedily. Measured across 106 sheets with both sides built by the same code: **82 → 110 honest curves
 (+34%)**, 20 sheets better, 3 worse; on the 60 sheets the model never saw, **48 → 63 (+31%)**
-(ROADMAP §6.71-§6.72). PyTorch is **not** a hard dependency — `trace_seq.available()`
+(ROADMAP §6.71-§6.72). ⚠ Those numbers score *tracing quality* on the research path, which forces
+every line to be traced and fills short gaps — the shipped writer does neither, so they do not
+describe the delivered file (ROADMAP §6.75). PyTorch is **not** a hard dependency — `trace_seq.available()`
 checks for both the import and the checkpoint, and without either the pipeline traces greedily and
 prints a warning naming the reason. Turn it off with `CVParams.seq_model = ""`.
 `auto/tests/run_pure.py` verifies the in-prod copy of the inference code still matches the training

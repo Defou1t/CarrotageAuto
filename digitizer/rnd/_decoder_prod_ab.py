@@ -150,6 +150,11 @@ def measure(tag, sheets):
     rows, per_sheet = [], []
     for well, n, img, m, gts in sheets:
         cfg = Config(); cfg.out = out
+        # ⚠⚠ РЕЖИМ ЗАДАЁТ СТЕНД, А НЕ ПРОД-УМОЛЧАНИЕ (§6.71). С 26.07 `seq_model` включён по
+        # умолчанию, поэтому `Config()` пустил бы селектор и в ветку A — A/B показал бы ноль
+        # разницы по причине, не имеющей отношения к делу. Здесь селектор включается ТОЛЬКО
+        # монкипатчем `T.trace_line` ниже.
+        cfg.cv.seq_model = ""
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
