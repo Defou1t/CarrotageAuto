@@ -143,11 +143,32 @@ def test_confidence():
     check("две одноцветные (≥2/стр) → FLAG", lines[8].confidence == "FLAG" and lines[9].confidence == "FLAG", (lines[8].confidence, lines[9].confidence))
 
 
+def test_seq_selftest():
+    """ДРЕЙФ ПРОД-КОПИИ СЕЛЕКТОРА от обучающего источника (§6.68/§6.69).
+
+    ⚠ ПРОПУСКАЕТСЯ, А НЕ ПАДАЕТ, без numpy/torch/чекпойнта: этот файл по постановке обязан
+    работать в CI без тяжёлых зависимостей. Но когда они есть — расхождение это ОШИБКА, потому
+    что при нём те же веса дают другой ответ, ничего не ломая и не бросая исключений."""
+    print("оконный селектор:")
+    try:
+        from auto import trace_seq as ts
+    except Exception as e:                            # нет numpy — окружение без CV
+        print(f"  [SKIP] selftest: не импортируется ({type(e).__name__})")
+        return
+    if not ts.available(ts.DEFAULT_MODEL):
+        print("  [SKIP] selftest: нет torch либо чекпойнта — прод в этом режиме работает "
+              "жадным выбором, это штатно")
+        return
+    bad = ts.selftest()
+    check("selftest: прод-копия совпадает с обучающим источником", not bad, bad)
+
+
 def main():
     if __package__ in (None, ""):                     # запуск как скрипт: репо на путь
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     test_meta()
     test_confidence()
+    test_seq_selftest()
     print(f"\nИТОГ: {'ВСЕ PASS' if not _FAILS else str(len(_FAILS)) + ' FAIL: ' + ', '.join(_FAILS)}")
     return 1 if _FAILS else 0
 
