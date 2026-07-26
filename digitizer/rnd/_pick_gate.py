@@ -423,26 +423,51 @@ def build_stamp():
     правками. Обнаружилось это лишь по mtime файлов — то есть случайно. Отпечаток делает такой
     разъезд видимым сразу.
 
-    `prod_sha` — хэш ИМЕННО тех файлов, что влияют на трассу; коммита мало, потому что правка
-    может лежать в рабочем дереве незакоммиченной (так было с §6.39, см. коммит 2a12fdd)."""
+    `prod_sha` — хэш ИМЕННО того, что влияет на трассу; коммита мало, потому что правка может
+    лежать в рабочем дереве незакоммиченной (так было с §6.39, см. коммит 2a12fdd).
+
+    ⚠ БЕРЁТСЯ ВЕСЬ `auto/*.py`, А НЕ СПИСОК. Первая версия перечисляла восемь «очевидно
+    трассирующих» файлов и пропускала неочевидную цепочку: `meta.parse_filename` читает
+    `mnemonics.json` → `expected_curves` → `understand._single_curve_rescue` пересобирает линию
+    как полно-полосную, меняя x_lo/x_hi, то есть САМУ ПОЛОСУ трассировки (масштаб цены — в
+    комментарии `meta.py`: прошлый баг этой цепочки давал «однокривой» 548 листам из 953).
+    Неполный список ХУЖЕ отсутствия защиты: ей начинают доверять. Поэтому правило простое —
+    хэшируется всё, из чего собирается прод, плюс внешние входы (словарь, парсер nlgx, веса)."""
     import subprocess, hashlib, datetime
     root = Path(__file__).resolve().parent.parent.parent          # …/Auto
     def sh(*c):
         try:
-            return subprocess.run(c, cwd=root, capture_output=True, text=True,
-                                  timeout=15).stdout.strip()
+            r = subprocess.run(c, cwd=root, capture_output=True, text=True, timeout=15)
+            return r.stdout.strip() if r.returncode == 0 else "?"
         except Exception:
             return "?"
-    h = hashlib.sha256()
-    for f in ("auto/trace2d.py", "auto/trace_seq.py", "auto/refine.py", "auto/imaging.py",
-              "auto/understand.py", "auto/config.py", "auto/emit.py", "auto/confidence.py"):
-        p = root / f
+    h, files = hashlib.sha256(), []
+    files += sorted((root / "auto").rglob("*.py"))                # весь прод, включая ui/ и tests/
+    files += [root / "mnemonics.json",                            # доменный словарь → приор → полоса
+              root / "digitizer" / "extract_nlgx.py"]             # рамка берётся отсюда
+    for p in files:
+        h.update(str(p.relative_to(root)).encode())
         h.update(p.read_bytes() if p.is_file() else b"<missing>")
-    return {"commit": sh("git", "rev-parse", "--short", "HEAD"),
-            "dirty": bool(sh("git", "status", "--porcelain", "--", "auto")),
+    # ⚠ ВЕСА — ЭТО РЕЖИМ, А НЕ КОД, и в `prod_sha` им нельзя: иначе жадная и селекторная сборки
+    # различались бы «по коду», и сверка, ради которой всё делалось, всегда ругалась бы впустую.
+    # Отдельным полем — чтобы подмена весов при том же имени файла всё-таки была видна.
+    seq_sha = ""
+    if a.seq:
+        for c in (root / "auto" / "models" / a.seq, OUT.parent / "decoder" / a.seq):
+            if c.is_file():
+                seq_sha = hashlib.sha256(c.read_bytes()).hexdigest()[:16]
+                break
+    st = sh("git", "status", "--porcelain")                       # ВЕСЬ репозиторий, не только auto
+    return {"v": 2,           # 1 = список из 8 файлов без словаря/парсера/весов (кэши 26.07 18:49)
+            "commit": sh("git", "rev-parse", "--short", "HEAD"),
+            # ⚠ не bool: "?" = git не ответил. Молча писать False здесь — fail-open, то есть ровно
+            # та ошибка, от которой этот штамп и заводился.
+            "dirty": "?" if st == "?" else bool(st),
             "built": datetime.datetime.now().isoformat(timespec="seconds"),
             "prod_sha": h.hexdigest()[:16],
+            "n_files": len(files),
             "seq": a.seq or "",                       # РЕЖИМ — ему и положено различаться
+            "seq_sha": seq_sha,
             "dp": bool(a.dp), "dp_wid": a.dp_wid, "jump_limit": a.jump_limit}
 
 
@@ -462,10 +487,19 @@ def check_stamps(dirs):
         if not st:
             print(f"{nm:<14}{'НЕТ ОТПЕЧАТКА':>18}{'—':>10}{'—':>21}  ⚠ собран до §6.71")
         else:
+            d = st.get("dirty")
+            mark = " ⚠DIRTY" if d is True else (" ⚠git?" if d == "?" else "")
+            sq = st["seq"] or "—"
+            if st.get("seq_sha"):
+                sq += f"@{st['seq_sha'][:8]}"
             print(f"{nm:<14}{st['prod_sha']:>18}{st['commit']:>10}{st['built']:>21}"
-                  f"  seq={st['seq'] or '—'}{' DIRTY' if st['dirty'] else ''}")
+                  f"  seq={sq}{mark}")
+    vers = {st.get("v", 1) for _, st in rows if st}
+    if len(vers) > 1:
+        print(f"⚠ отпечатки РАЗНЫХ ВЕРСИЙ формата {sorted(vers)} — prod_sha считался по разным "
+              f"наборам файлов, сравнивать хэши между версиями бессмысленно")
     known = [st["prod_sha"] for _, st in rows if st]
-    ok = len(known) == len(rows) and len(set(known)) == 1
+    ok = len(known) == len(rows) and len(set(known)) == 1 and len(vers) == 1
     if not ok:
         print("⚠⚠ ОТПЕЧАТКИ РАЗЛИЧАЮТСЯ ИЛИ НЕИЗВЕСТНЫ — разность кода не отделима от разности "
               "режима (§6.71). Сравнивать эти кэши НЕЛЬЗЯ, пересоберите обе стороны.")
