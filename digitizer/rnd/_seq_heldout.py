@@ -1,8 +1,9 @@
-r"""seq_heldout.py — цифра селектора ТОЛЬКО на листах, которых не было в обучении.
+r"""_seq_heldout.py — цифра селектора ОТДЕЛЬНО на виденных и невиденных листах.
 
-`_decoder_data.HELD` держит вне обучения 5 скважин, а замер §6.66/§6.69 шёл по 66 листам, из
-которых 59 попали в обучающую выборку. «Три независимых набора» независимы друг от друга, но не
-от модели. Здесь считается то же самое на непересекающейся части.
+⚠⚠ ГЛАВНОЕ ПРО ЭТОТ СТЕНД, ИНАЧЕ ОН ВРЁТ. `train_sheets(limit)` — это ПУЛ, а не выборка: с
+большим limit он вернёт весь архив (936 листов). Обучение `seq_model_d45p` взяло РОВНО 25 листов
+(`seq_data_d45p.log`, строка 1), поэтому сверять пересечение надо с `train_sheets(TRAIN_LIMIT)`,
+а не с пулом. Подстановка 10**6 завышает пересечение с 25 листов до 59 и делает вывод обратным.
 """
 import sys, pickle
 import numpy as np
@@ -18,8 +19,11 @@ from pathlib import Path
 ROOT = Path(r"F:\nds\output\taskS\pick_gate")
 G.a.bridge = 20
 G.a.dedup_tol = 50
-TRAIN = {Path(str(s[0] if isinstance(s, (tuple, list)) else s)).stem for s in train_sheets(10**6)}
-print(f"обучающих листов {len(TRAIN)}; HELD-скважины {sorted(HELD)}\n")
+TRAIN_LIMIT = 25            # ★ РОВНО столько взяло обучение d45p — см. seq_data_d45p.log:1
+TRAIN = {Path(str(s[0] if isinstance(s, (tuple, list)) else s)).stem
+         for s in train_sheets(TRAIN_LIMIT)}
+assert len(TRAIN) == TRAIN_LIMIT, f"train_sheets({TRAIN_LIMIT}) вернул {len(TRAIN)}"
+print(f"обучающих листов {len(TRAIN)} (limit={TRAIN_LIMIT}); HELD-скважины {sorted(HELD)}\n")
 
 PAIRS = [("гейт", "cache", "seq_gate"), ("валидация", "holdout", "seq_hold"),
          ("третий", "wide", "seq_wide")]
