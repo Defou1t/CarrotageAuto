@@ -48,7 +48,7 @@ def total(d, names, bridge, pick):
 
 
 for pick in ("nl+npts", "oracle"):
-    print(f"\n{'#'*92}\n### {pick} — {'ПРОД §6.49' if pick=='nl+npts' else 'потолок'}\n")
+    print(f"\n{'#'*92}\n### {pick} — {'ПУТЬ 2 (§6.75: НЕ отгрузка)' if pick == 'nl+npts' else 'потолок'}\n")
     print(f"{'мостик':>7} | " + "".join(f"{lb:>22}" for lb, _, _ in SETS) + f"{'ИТОГО':>22}")
     for b in BRIDGES:
         line = f"{b:>7} | "
