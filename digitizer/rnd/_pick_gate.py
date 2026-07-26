@@ -128,6 +128,11 @@ ap.add_argument("--dp-wid", type=float, default=0.0,
 ap.add_argument("--seq", default="",
                 help="СБОРКА ОБУЧЕННЫМ ОКОННЫМ СЕЛЕКТОРОМ (§6.66): имя чекпойнта в "
                      "output/taskS/decoder, напр. seq_model_d45p.pt. Требует torch")
+ap.add_argument("--set", default=None, action="append", metavar="ПОЛЕ=ЗНАЧЕНИЕ",
+                help="АБЛЯЦИЯ: переопределить поле CVParams при сборке, напр. "
+                     "--set color_max_frac=1.0 (откат §6.65). Можно несколько раз. Тип берётся "
+                     "из умолчания поля. Попадает в отпечаток, поэтому абляционный кэш нельзя "
+                     "случайно сравнить с обычным")
 ap.add_argument("--cv", default="",
                 help="каталоги кэшей через запятую: перекрёстный замер по НЕЗАВИСИМЫМ наборам")
 ap.add_argument("--json", default=str(OUT / "res.json"))
@@ -468,6 +473,7 @@ def build_stamp():
             "n_files": len(files),
             "seq": a.seq or "",                       # РЕЖИМ — ему и положено различаться
             "seq_sha": seq_sha,
+            "set": sorted(a.set or []),               # абляции — тоже режим, а не код
             "dp": bool(a.dp), "dp_wid": a.dp_wid, "jump_limit": a.jump_limit}
 
 
@@ -650,6 +656,11 @@ def build(sheets):
         # включается ТОЛЬКО флагом --seq (через подмену трассировщика ниже), а прод-путь всегда
         # обнуляется.
         cfg.cv.seq_model = ""
+        for kv in (a.set or []):                      # --set поле=значение (абляция, §6.72)
+            k, _, v = kv.partition("=")
+            cur = getattr(cfg.cv, k)                  # тип берём из умолчания, а не угадываем
+            setattr(cfg.cv, k, type(cur)(v) if not isinstance(cur, bool)
+                    else v.lower() in ("1", "true", "да"))
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
