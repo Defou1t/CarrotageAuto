@@ -32,8 +32,8 @@ Two pipelines live in this repo:
 |---|---|---|
 | Foreground | trained U-Net stroke mask | colour classification + geometric masks |
 | Separation | geometric multi-line tracker | per-colour instance extraction + identity linker |
-| Training | yes (`unet_best.pt`) | **none — rule-based** |
-| Runtime | Python + PyTorch (GPU) | pure Python 3.14 + OpenCV (CPU) |
+| Training | yes (`unet_best.pt`) | rule-based, **plus one small trained model**: a window run-selector (`auto/models/seq_model_d45p.pt`, 359 KB) that replaces the greedy run choice during tracing |
+| Runtime | Python + PyTorch (GPU) | OpenCV/NumPy (CPU); **PyTorch optional** — without it the pipeline falls back to the greedy tracer and says so loudly on every run |
 | Status | superseded (binary mask loses identity) | active |
 
 The current pipeline is **identity-aware and image-understanding-first**, organised in phases:
@@ -79,8 +79,17 @@ flowchart TD
     LEARN -. priors .-> BP
 ```
 
-`process` is pure OpenCV/NumPy (Phase A/B); `detect_scales` (A1) is optional and uses a local
+`process` is OpenCV/NumPy (Phase A/B); `detect_scales` (A1) is optional and uses a local
 vision LLM. The dashed arrows are reference/feedback inputs, not the main data path.
+
+**Tracing uses one trained model, enabled by default.** `auto/trace_seq.py` scores candidate ink
+runs from a ±64-row patch instead of picking the nearest one greedily. Measured on 60 sheets the
+model never saw, with both sides built by the same code: **48 → 63 honest curves (+31%)**, 10
+sheets better, 1 worse (ROADMAP §6.71). PyTorch is **not** a hard dependency — `trace_seq.available()`
+checks for both the import and the checkpoint, and without either the pipeline traces greedily and
+prints a warning naming the reason. Turn it off with `CVParams.seq_model = ""`.
+`auto/tests/run_pure.py` verifies the in-prod copy of the inference code still matches the training
+source; it skips cleanly when PyTorch is absent.
 
 ## Quick start
 
