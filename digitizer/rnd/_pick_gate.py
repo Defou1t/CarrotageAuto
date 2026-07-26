@@ -414,6 +414,64 @@ def n_slots(nlgx):
     return k
 
 
+def build_stamp():
+    """ОТПЕЧАТОК СБОРКИ: чем именно собран этот кэш (§6.71).
+
+    ⚠ ЗАЧЕМ. Кэш — это результат прогона прод-кода, и сравнивать между собой можно только кэши,
+    собранные ОДНИМ кодом в ОДНОМ режиме. За 24-26.07 жадные кэши собрались до правок
+    §6.52/§6.58/§6.65, а селекторные после, и «выигрыш обученной модели» на 55% оказался этими
+    правками. Обнаружилось это лишь по mtime файлов — то есть случайно. Отпечаток делает такой
+    разъезд видимым сразу.
+
+    `prod_sha` — хэш ИМЕННО тех файлов, что влияют на трассу; коммита мало, потому что правка
+    может лежать в рабочем дереве незакоммиченной (так было с §6.39, см. коммит 2a12fdd)."""
+    import subprocess, hashlib, datetime
+    root = Path(__file__).resolve().parent.parent.parent          # …/Auto
+    def sh(*c):
+        try:
+            return subprocess.run(c, cwd=root, capture_output=True, text=True,
+                                  timeout=15).stdout.strip()
+        except Exception:
+            return "?"
+    h = hashlib.sha256()
+    for f in ("auto/trace2d.py", "auto/trace_seq.py", "auto/refine.py", "auto/imaging.py",
+              "auto/understand.py", "auto/config.py", "auto/emit.py", "auto/confidence.py"):
+        p = root / f
+        h.update(p.read_bytes() if p.is_file() else b"<missing>")
+    return {"commit": sh("git", "rev-parse", "--short", "HEAD"),
+            "dirty": bool(sh("git", "status", "--porcelain", "--", "auto")),
+            "built": datetime.datetime.now().isoformat(timespec="seconds"),
+            "prod_sha": h.hexdigest()[:16],
+            "seq": a.seq or "",                       # РЕЖИМ — ему и положено различаться
+            "dp": bool(a.dp), "dp_wid": a.dp_wid, "jump_limit": a.jump_limit}
+
+
+def check_stamps(dirs):
+    """Сверить отпечатки кэшей перед сравнением. Печатает таблицу; True = сравнивать можно.
+
+    Различие в `seq` — норма (это и есть измеряемый режим). Различие в `prod_sha` — НЕ норма:
+    значит стороны собраны разным кодом и разность режимов с разностью кода не разделить."""
+    import pickle as _pk
+    rows = []
+    for d in dirs:
+        fs = sorted(Path(d).glob("*.pkl"))
+        st = _pk.load(open(fs[0], "rb")).get("stamp") if fs else None
+        rows.append((Path(d).name, st))
+    print(f"\n{'кэш':<14}{'prod_sha':>18}{'commit':>10}{'собран':>21}  режим")
+    for nm, st in rows:
+        if not st:
+            print(f"{nm:<14}{'НЕТ ОТПЕЧАТКА':>18}{'—':>10}{'—':>21}  ⚠ собран до §6.71")
+        else:
+            print(f"{nm:<14}{st['prod_sha']:>18}{st['commit']:>10}{st['built']:>21}"
+                  f"  seq={st['seq'] or '—'}{' DIRTY' if st['dirty'] else ''}")
+    known = [st["prod_sha"] for _, st in rows if st]
+    ok = len(known) == len(rows) and len(set(known)) == 1
+    if not ok:
+        print("⚠⚠ ОТПЕЧАТКИ РАЗЛИЧАЮТСЯ ИЛИ НЕИЗВЕСТНЫ — разность кода не отделима от разности "
+              "режима (§6.71). Сравнивать эти кэши НЕЛЬЗЯ, пересоберите обе стороны.")
+    return ok
+
+
 def build(sheets):
     from auto.pipeline import run as pipe_run
     from auto.config import Config
@@ -538,6 +596,9 @@ def build(sheets):
     emit_mod._map_lines_to_slots = map_capture
 
     CACHE.mkdir(parents=True, exist_ok=True)
+    STAMP = build_stamp()
+    print(f"отпечаток сборки: prod_sha={STAMP['prod_sha']} commit={STAMP['commit']}"
+          f"{' DIRTY' if STAMP['dirty'] else ''} seq={STAMP['seq'] or '—'}")
     for j, n in enumerate(sheets, 1):
         p = CACHE / f"{n.stem[:60]}.pkl"
         if p.exists():
@@ -573,7 +634,8 @@ def build(sheets):
             K = n_slots(n)
         except Exception:
             K = len(GM)
-        pickle.dump({"traces": traces, "GM": GM, "raw": raw, "K": K, "name": n.name}, open(p, "wb"))
+        pickle.dump({"traces": traces, "GM": GM, "raw": raw, "K": K, "name": n.name,
+                     "stamp": STAMP}, open(p, "wb"))
         print(f"[{j}/{len(sheets)}] {n.name[:50]:<52} трасс {len(traces):>3}  кривых {len(GM):>2}  K={K}")
 
 
@@ -660,6 +722,7 @@ def cross(dirs, picks):
     Протокол объявлен ДО прогона: критерий выбирается на самом большом и НИ РАЗУ не
     использованном наборе, остальные — проверочные. Печатается и сумма, и число ДЕГРАДИРОВАВШИХ
     листов против прода — правило §6.38 требует монотонности, а не только суммы."""
+    check_stamps(dirs)               # §6.71: разный код с обеих сторон = замер недействителен
     sets = []
     for d in dirs:
         rows = []
