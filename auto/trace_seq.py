@@ -20,9 +20,14 @@ r"""trace_seq.py — ОБУЧЕННЫЙ ОКОННЫЙ СЕЛЕКТОР РАНО
 
 ⚠⚠ ОПРЕДЕЛЕНИЕ СЕТИ ЗДЕСЬ ПРОДУБЛИРОВАНО из `digitizer/rnd/_decoder_seq.py` СОЗНАТЕЛЬНО: прод не
 должен импортировать исследовательские модули. Источник истины для ОБУЧЕНИЯ остаётся там.
-★ Расхождение ловится тестом `selftest()`: он грузит чекпойнт и сверяет выход с эталонными
-значениями; при любом расхождении архитектур веса либо не загрузятся, либо дадут другой ответ.
+★ Расхождение ловится `selftest()` — он сверяет признаки, патч и выход сети с эталонами, которые
+СГЕНЕРИРОВАНЫ обучающей стороной и лежат в `models/<модель>.golden.json`. Утверждение «веса либо
+не загрузятся, либо дадут другой ответ» неверно как гарантия: геометрия окна (NROW/NCOL/MAXC/
+COL_STEP) не входит ни в одну форму весов, поэтому её дрейф `load_state_dict` не видит вовсе —
+для этого в чекпойнте есть ключ `geom`, и его сверяет `_check_geom` при каждой загрузке.
 """
+from pathlib import Path
+
 import numpy as np
 
 R_ROWS, ROW_STEP = 64, 4                 # ±64 строки, каждая 4-я  → 33 строки
@@ -32,17 +37,46 @@ NCOL = 2 * R_COLS // COL_STEP + 1
 MAXC = 6                                 # кандидатов, скорим только ближайшие к предсказанию
 NF = 10                                  # признаков на кандидата
 
+MODELS_DIR = Path(__file__).resolve().parent / "models"
+DEFAULT_MODEL = "seq_model_d45p.pt"      # лежит В РЕПОЗИТОРИИ (§6.68), 359 КБ
+
+
+def resolve(model_path):
+    """Путь к чекпойнту → Path либо None (пусто = селектор выключен).
+
+    ⚠ ПОЧЕМУ НЕ ПРОСТО Path(): до §6.68 путь в конфиге указывал в `output/taskS/decoder`, который
+    есть ровно на одной машине, — у любого другого человека селектор молча не включался бы.
+    Поэтому голое ИМЯ файла (без каталога) ищется в `auto/models/`, где вес лежит под контролем
+    версий; путь с каталогом берётся как есть — это ход для чужого/экспериментального чекпойнта."""
+    if not model_path:
+        return None
+    p = Path(model_path)
+    return MODELS_DIR / p.name if p.name == str(model_path) else p
+
+
+def _check_geom(ckpt):
+    """Сверить геометрию окна с записанной в чекпойнт. Вернуть текст расхождения или "".
+
+    ⚠ ЗАЧЕМ ОТДЕЛЬНО: NROW/NCOL/MAXC/COL_STEP не входят НИ В ОДНУ форму весов, поэтому
+    `load_state_dict` их дрейф не видит — веса загрузятся, а ответ будет другой. Это единственное
+    расхождение, которое иначе проходит совершенно молча.
+    Чекпойнт без ключа `geom` (старее §6.66) не является ошибкой — сверять просто нечем."""
+    want = [NROW, NCOL, MAXC, COL_STEP]
+    got = list(ckpt.get("geom") or want)
+    return ("" if got == want else
+            f"геометрия чекпойнта {got} != геометрии кода {want} [NROW, NCOL, MAXC, COL_STEP]")
+
 
 def available(model_path):
     """Есть ли torch И чекпойнт. Прод обязан работать без обоих."""
-    if not model_path:
+    p = resolve(model_path)
+    if p is None:
         return False
     try:
         import torch                                            # noqa: F401
     except Exception:
         return False
-    from pathlib import Path
-    return Path(model_path).is_file()
+    return p.is_file()
 
 
 def _features(A, B, C, pred, x, v, base, n_pick=MAXC):
@@ -119,8 +153,15 @@ def make_tracer(model_path, device=None):
     from . import trace2d as T
 
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    ckpt = torch.load(resolve(model_path), map_location=dev, weights_only=False)
+    bad = _check_geom(ckpt)
+    if bad:
+        # ⚠ ПАДАЕМ, А НЕ ОТКАТЫВАЕМСЯ НА ЖАДНЫЙ: селектор запросили явно, и тихая подмена его
+        # чужой геометрией дала бы выдачу ХУЖЕ прода под видом улучшения. Молчаливый откат уместен
+        # только когда модель не запрашивали (пустой seq_model) или нет torch — см. available().
+        raise ValueError(f"{resolve(model_path)}: {bad}")
     net = _build_net(torch, nn)().to(dev)
-    net.load_state_dict(torch.load(model_path, map_location=dev)["sd"])
+    net.load_state_dict(ckpt["sd"])
     net.eval()
 
     # ★ CUDA-ГРАФ (§6.67): сеть крошечная, 89% времени — запуск ядер. Граф даёт ×9.6 при
@@ -190,3 +231,114 @@ def make_tracer(model_path, device=None):
         return tr
 
     return trace_line
+
+
+def selftest(model_path=DEFAULT_MODEL, golden_path=None):
+    """Поймать РАСХОЖДЕНИЕ прод-копии с обучающим источником истины. Список проблем; пусто = ок.
+
+    ⚠ ЗАЧЕМ ОН ВООБЩЕ НУЖЕН. Сеть, патч и признаки продублированы здесь из `digitizer/rnd/*`
+    сознательно (прод не должен импортировать исследовательский код) — но у дублирования есть
+    цена: копия может тихо разъехаться с оригиналом, и тогда ТЕ ЖЕ веса дадут ДРУГОЙ ответ, ничего
+    не сломав и не бросив исключения. Ни одна из таких ошибок не меняет форм весов:
+    порядок каналов [ink, val], формула колонки кандидата, порядок конкатенации [gathered, F],
+    перепутанные is_widest/is_nearest, потеря обнуления ink за краем, дрейф R_ROWS/COL_STEP.
+
+    ★ Эталоны СГЕНЕРИРОВАНЫ ОБУЧАЮЩЕЙ СТОРОНОЙ (`digitizer/rnd/_decoder_seq.py`,
+    `_decoder_core.py`) и лежат рядом с весами в `<модель>.golden.json`. Считай их эта же копия —
+    тест сверял бы копию сама с собой и не ловил бы ничего. Пересобирать эталоны ТОЛЬКО вместе со
+    сменой чекпойнта, скриптом из заголовка json.
+
+    Требует torch; без него возвращает единственную строку-предупреждение, а не падает."""
+    import json
+    import hashlib
+
+    bad = []
+    mp = resolve(model_path)
+    if mp is None or not mp.is_file():
+        return [f"нет чекпойнта: {mp}"]
+    gp = Path(golden_path) if golden_path else mp.with_suffix(".golden.json")
+    if not gp.is_file():
+        return [f"нет эталонов: {gp}"]
+    try:
+        import torch
+    except Exception as e:
+        return [f"torch недоступен, сверка невозможна: {e}"]
+
+    g = json.loads(gp.read_text(encoding="utf-8"))
+    ckpt = torch.load(mp, map_location="cpu", weights_only=False)
+
+    # A. ГЕОМЕТРИЯ И КОНСТАНТЫ. Единственные величины, которые меняют ответ и не входят в формы
+    #    весов, — их обязан сверять кто-то явно, иначе дрейф проходит молча.
+    e = _check_geom(ckpt)
+    if e:
+        bad.append("A/геометрия: " + e)
+    if list(g["geom"]) != [NROW, NCOL, MAXC, COL_STEP]:
+        bad.append(f"A/эталон: geom эталона {g['geom']} != кода {[NROW, NCOL, MAXC, COL_STEP]}")
+    sha = hashlib.sha256(mp.read_bytes()).hexdigest()
+    if sha != g["ckpt_sha256"]:
+        bad.append(f"A/чекпойнт: sha256 {sha[:12]} != эталонного {g['ckpt_sha256'][:12]} — "
+                   f"веса заменены, эталоны надо пересобрать")
+
+    # B. ИНВЕНТАРЬ ВЕСОВ. Понятное сообщение вместо простыни от strict-загрузки.
+    if sorted(ckpt["sd"]) != g["sd_keys"]:
+        bad.append("B/веса: набор ключей state_dict разошёлся с эталонным")
+    n = int(sum(t.numel() for t in ckpt["sd"].values()))
+    if n != g["n_params"]:
+        bad.append(f"B/веса: параметров {n} != эталонных {g['n_params']}")
+
+    # C. ПРИЗНАКИ. Вход подобран: есть ран поверх pred, есть ран шире 20px, самый широкий НЕ
+    #    совпадает с ближайшим, ранов >1 и <MAXC, v ненулевая — иначе колонки неразличимы.
+    f = g["features"]
+    order, X = _features(np.array(f["A"]), np.array(f["B"]), np.array(f["C"], float),
+                         f["pred"], f["x"], f["v"], f["base"])
+    if order.tolist() != f["order"]:
+        bad.append(f"C/признаки: порядок кандидатов {order.tolist()} != эталонного {f['order']}")
+    elif not np.allclose(X, np.array(f["X"]), atol=1e-12, rtol=0):
+        d = np.abs(X - np.array(f["X"])).max(axis=0)
+        bad.append(f"C/признаки: X разошлась, макс. отклонение по колонкам {d.round(6).tolist()}")
+
+    # D. ПАТЧ. Точка у края ПО ОБЕИМ осям сразу: проверяется и valid, и обнуление ink за краем.
+    #    Полоса задана АНАЛИТИЧЕСКИ (без rng), чтобы эталон не зависел от версии генератора.
+    yy, xx = np.mgrid[0:g["patch"]["H"], 0:g["patch"]["Wb"]]
+    band = np.abs(xx - (12 + 6 * np.sin(yy / 7.0))) < 2.0
+    for key, tag in (("patch", "D/патч"), ("patch_round", "D/патч(округление)")):
+        q = g[key]
+        ink, val = _patch(band, 0, q["y"], q["pred"])
+        if list(ink.shape) != g["patch"]["shape"]:
+            bad.append(f"{tag}: форма {list(ink.shape)} != эталонной {g['patch']['shape']}")
+            continue
+        if int(ink.sum()) != q["ink_sum"] or int(val.sum()) != q["val_sum"]:
+            bad.append(f"{tag}: ink {int(ink.sum())}/{q['ink_sum']}, "
+                       f"val {int(val.sum())}/{q['val_sum']}")
+        if hashlib.md5(np.packbits(ink).tobytes()).hexdigest() != q["ink_md5"]:
+            bad.append(f"{tag}: картинка окна разошлась при совпавших суммах")
+        if key == "patch" and int((ink & ~val).sum()) != g["patch"]["ink_outside_val"]:
+            bad.append(f"{tag}: ink НЕ обнулён за краем — модель обучена отличать «чисто» "
+                       f"от «не знаем», это разные входы")
+
+    # E. ВЫХОД СЕТИ. Ловит порядок каналов, формулу колонки, ctx-окно, порядок конкатенации и
+    #    masked_fill — ничего из этого не меняет форм весов и не бросает исключений.
+    import torch.nn as nn
+
+    net = _build_net(torch, nn)().eval()
+    net.load_state_dict(ckpt["sd"])
+    ink0, val0 = _patch(band, 0, g["patch"]["y"], g["patch"]["pred"])
+    P = torch.from_numpy(np.stack([ink0, val0]).astype(np.float32)[None])
+    F = torch.zeros(1, MAXC, NF); F[0, :len(f["order"])] = torch.tensor(f["X"], dtype=torch.float32)
+    M = torch.zeros(1, MAXC); M[0, :len(f["order"])] = 1
+    with torch.no_grad():
+        sc = net(P, F, M)[0].numpy()
+    if not np.allclose(sc, np.array(g["scores"], np.float32), atol=1e-5, rtol=0):
+        bad.append(f"E/сеть: скоры {np.round(sc, 4).tolist()} != эталонных "
+                   f"{[round(v, 4) for v in g['scores']]}")
+
+    # F. ГОДНОСТЬ САМОГО ЭТАЛОНА. `_features` возвращает ИНДЕКСЫ ранов (order), и выбирать надо
+    #    idx[argmax(sc)], а не argmax(sc) — перепутать их можно ровно один раз, но тогда трасса
+    #    садится на произвольный ран. Эталон различает эти два варианта только если order НЕ
+    #    тождественная перестановка; если кто-то переподберёт вход и это свойство потеряется,
+    #    тест начнёт молча пропускать целый класс ошибок. ⚠ Сам вызов трассировщика здесь не
+    #    проверяется: для этого нужен прогон trace_line по листу, он в selftest не входит.
+    if f["order"] == sorted(f["order"]):
+        bad.append("F/эталон: order тождественный — вход перестал различать idx[argmax] и "
+                   "argmax, эталонный случай надо переподобрать")
+    return bad

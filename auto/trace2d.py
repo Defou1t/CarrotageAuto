@@ -108,6 +108,15 @@ def _extend_ends(tr, fg, lo, hi, slmax, max_gap=25):
 
 
 _SEQ = {}                    # чекпойнт → готовый трассировщик (веса грузятся один раз)
+_SAID = set()                # что уже сказано в этом процессе (сообщение на лист — это шум)
+
+
+def _announce(msg):
+    """Сказать РОВНО ОДИН РАЗ на процесс. Режим трассировки одинаков для всех листов, поэтому
+    повтор на каждый лист — шум, а молчание — хуже: см. предупреждение ниже."""
+    if msg not in _SAID:
+        _SAID.add(msg)
+        print(f"  {msg}")
 
 
 def trace_auto(rgb, sheet, p=None):
@@ -127,6 +136,19 @@ def trace_auto(rgb, sheet, p=None):
         if trace_seq.available(p.seq_model):
             tl = _SEQ.get(p.seq_model) or _SEQ.setdefault(
                 p.seq_model, trace_seq.make_tracer(p.seq_model))
+            _announce(f"трассировка: ОКОННЫЙ СЕЛЕКТОР {trace_seq.resolve(p.seq_model).name}")
+        else:
+            # ⚠ ГОВОРИМ ГРОМКО, А НЕ МОЛЧА. Селектор ЗАПРОСИЛИ явно, но включить нечем — нет torch
+            # либо нет файла. Тихий откат на жадный выбор недопустим: выдача заметно хуже (§6.66),
+            # а внешне НЕОТЛИЧИМА — ровно так «те же цифры» и расходятся между машинами. Сам откат
+            # при этом сохранён намеренно (§6.68: torch не становится жёсткой зависимостью).
+            try:
+                import torch                                    # noqa: F401
+                why = "нет файла чекпойнта"
+            except Exception:
+                why = "torch не установлен"
+            _announce(f"⚠ seq_model={p.seq_model!r} ЗАПРОШЕН, НО НЕ ВКЛЮЧЁН ({why}: "
+                      f"{trace_seq.resolve(p.seq_model)}) — идёт ЖАДНЫЙ выбор, выдача хуже")
     for L in sheet.lines:
         # p.trace_flagged=True — вести и FLAG-линии тоже (§6.54-§6.55, смена контракта выдачи).
         if L.confidence != "AUTO" and not getattr(p, "trace_flagged", False):
