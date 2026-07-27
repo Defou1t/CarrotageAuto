@@ -148,7 +148,12 @@ def assign(d, use_color=True, use_class=True, xhow="center", hungarian=False,
             for i, ln in tlines:
                 if strict and s["color"] != ln["color"]:
                     continue
-                cls = "SP" if ln["behavior"] == "smooth" else "RES"
+                # ⚠ КЛАСС ИЗ ФИНАЛЬНОЙ ТРАССЫ, А НЕ ИЗ U1 (§6.84). `behavior` ставится в
+                # `understand.py:160` порогом rough_n<0.025 по ЦЕНТР-ТРАССЕ ИНСТАНСА, то есть
+                # ДО полноценной трассировки. В пуле лежит финальная трасса, и её rough_n
+                # измеряет ту же величину на несопоставимо лучших данных.
+                cls = ("SP" if feats(ln["tr"])["rough_n"] < 0.025 else "RES") if use_class == "trace" \
+                    else ("SP" if ln["behavior"] == "smooth" else "RES")
                 ok = (not use_class) or (s["class"] in (cls, "OTHER", "CALI"))
                 pairs.append((0 if ok else 1, s, i, ln))
         pairs.sort(key=lambda q: (q[0], rank[q[2]] if rank is not None else key_x(q[3], xhow)))
@@ -205,6 +210,11 @@ RULES = {
     "форма: ВЧ-дрожь, обратно": dict(xhow="-rough_n"),
     "форма: размах (span)": dict(xhow="span"),
     "форма: размах, обратно": dict(xhow="-span"),
+    # ★ КЛАСС ПО ФИНАЛЬНОЙ ТРАССЕ (§6.84): §6.83 показал, что 17 потерь из 70 дал класс, а он
+    # считается на U1 по сырой центр-трассе инстанса. Тот же порог, но по хорошим данным.
+    "★ класс из ФИНАЛЬНОЙ трассы": dict(use_class="trace"),
+    "класс из трассы + медиана x": dict(use_class="trace", xhow="med"),
+    "класс из трассы, без цвета": dict(use_class="trace", use_color=False),
 }
 
 files = sorted(Path(a.pools).glob("*.pkl"))
