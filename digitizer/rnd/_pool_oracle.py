@@ -39,14 +39,21 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--files", nargs="+", required=True)
 ap.add_argument("--seq", default="", help="чекпойнт селектора; пусто = жадный выбор")
 ap.add_argument("--out", default=r"F:\nds\output\taskS\pool_oracle")
+ap.add_argument("--dump", default="", help="каталог: сохранить ПУЛ трасс + рамку + эталон на лист. "
+                                           "Тогда правила раскладки перебираются ОФЛАЙН за секунды, "
+                                           "а не полным прогоном пайплайна на каждый вариант")
 a = ap.parse_args()
 
 POOL = {}
 _orig_map = emit_mod._map_lines_to_slots
 
 
+CAPM = {}
+
+
 def capture(traces, model, frame, mnemonics_path):
     POOL["all"] = list(traces)
+    CAPM["model"], CAPM["frame"], CAPM["mn"] = model, frame, mnemonics_path
     r = _orig_map(traces, model, frame, mnemonics_path)
     POOL["written"] = dict(r)
     return r
@@ -126,6 +133,30 @@ for f in a.files:
             continue
         got.add(nm); used.add(ti)
         opt += HON(m, c)
+    if a.dump:
+        # ★ Сохраняем ровно то, что нужно раскладке: трассы с их признаками (цвет, класс,
+        # x_center, трек), слоты рамки и эталон. Пайплайн больше не нужен — перебор правил
+        # становится офлайновым и стоит секунды вместо часа на вариант.
+        import pickle
+        d = Path(a.dump); d.mkdir(parents=True, exist_ok=True)
+        lines = [{"track": L.track_index, "color": L.color, "behavior": L.behavior,
+                  "x_center": float(L.x_center), "conf": L.confidence, "tr": tr}
+                 for L, tr in POOL.get("all", [])]
+        # ⚠ В дамп кладутся ТОЛЬКО чистые данные: объект рамки тянул бы за собой пакет `auto` при
+        # чтении. Всё, что раскладке нужно от рамки, — это трек слота, поэтому он вычисляется
+        # здесь и сохраняется числом. Приор цвета/класса из словаря — тоже здесь.
+        slots = []
+        for c in CAPM["model"].get("curves", []):
+            nmc = c.get("name", "")
+            if M.mnem_root(nmc) == "DA":
+                continue
+            info = M.curve_info(nmc, CAPM["mn"])
+            slots.append({"name": nmc, "track": emit_mod._slot_track(CAPM["model"], c, CAPM["frame"]),
+                          "color": info["color"], "class": info["class"]})
+        pickle.dump({"lines": lines, "slots": slots, "gts": gts, "raws": raws,
+                     "written": {k: v[1] for k, v in POOL.get("written", {}).items()},
+                     "name": n.name},
+                    open(d / f"{n.stem[:60]}.pkl", "wb"))
     print(f"  {n.stem[:42]:<44} кривых {len(gts):>2}  пул {len(pool):>3}  "
           f"записано {wr}  оптимум1:1 {opt}  потолок {cap}")
     T["написано"] += wr; T["оптимум"] += opt; T["потолок"] += cap
