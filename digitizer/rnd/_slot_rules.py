@@ -50,7 +50,37 @@ def key_x(ln, how):
     return ln["x_center"]
 
 
-def assign(d, use_color=True, use_class=True, xhow="center", hungarian=False):
+def copeland_order(lines, sep=0.0):
+    """Порядок линий по МАЖОРИТАРНОМУ голосованию ПО СТРОКАМ, а не по сводной координате.
+
+    ⚠ ЗАЧЕМ. Сводная координата (`x_center` или медиана трассы) ломается ровно там, где ломается
+    вся задача: на ПЕРЕСЕЧЕНИЯХ. Две кривые могут иметь почти одну медиану и при этом на 80% строк
+    идти в определённом порядке. Здесь для каждой пары считается доля общих строк, где A левее B;
+    побеждает тот, кто левее НА БОЛЬШИНСТВЕ строк, а итоговый ранг — число побед (Copeland).
+
+    `sep` — учитывать только строки, где линии разнесены дальше этого: у самого пересечения знак
+    разности случаен и добавляет шум в голосование."""
+    idx = [i for i, _ in lines]
+    wins = {i: 0 for i in idx}
+    for (ia, la), (ib, lb) in itertools.combinations(lines, 2):
+        ta, tb = la["tr"], lb["tr"]
+        com = [y for y in ta if y in tb]
+        if not com:
+            continue
+        dif = np.array([ta[y] - tb[y] for y in com], float)
+        if sep > 0:
+            dif = dif[np.abs(dif) > sep]
+        if not len(dif):
+            continue
+        if (dif < 0).mean() > 0.5:
+            wins[ia] += 1
+        elif (dif < 0).mean() < 0.5:
+            wins[ib] += 1
+    return sorted(lines, key=lambda q: (-wins[q[0]], key_x(q[1], "med")))
+
+
+def assign(d, use_color=True, use_class=True, xhow="center", hungarian=False,
+           majority=False, sep=0.0):
     """Вернуть {имя слота: трасса}. Повторяет прод-правило, кроме явно отключённого."""
     out = {}
     used = set()
@@ -60,8 +90,9 @@ def assign(d, use_color=True, use_class=True, xhow="center", hungarian=False):
         tlines = [(i, ln) for i, ln in enumerate(d["lines"]) if ln["track"] == ti]
         if not tslots or not tlines:
             continue
-        if hungarian:
-            order = sorted(tlines, key=lambda q: key_x(q[1], xhow))
+        if majority or hungarian:
+            order = (copeland_order(tlines, sep) if majority
+                     else sorted(tlines, key=lambda q: key_x(q[1], xhow)))
             n = min(len(tslots), len(order))
             for si in range(n):                       # ранг слота ↔ ранг линии, один к одному
                 i, ln = order[si]
@@ -70,6 +101,11 @@ def assign(d, use_color=True, use_class=True, xhow="center", hungarian=False):
                 used.add(i); out[tslots[si]["name"]] = ln["tr"]
             continue
         colors = {ln["color"] for _, ln in tlines}
+        # ⚠ Мажоритарный порядок как КЛЮЧ СОРТИРОВКИ, а не как отдельная ветка назначения: иначе
+        # тест смешал бы два изменения сразу (новый порядок И отказ от цвета/класса) и стал бы
+        # неинтерпретируемым — ровно эта ошибка была в первой редакции §6.82.
+        rank = ({i: r for r, (i, _) in enumerate(copeland_order(tlines, sep))}
+                if xhow == "major" else None)
         pairs = []
         for s in tslots:
             strict = use_color and s["color"] is not None and s["color"] in colors
@@ -79,7 +115,7 @@ def assign(d, use_color=True, use_class=True, xhow="center", hungarian=False):
                 cls = "SP" if ln["behavior"] == "smooth" else "RES"
                 ok = (not use_class) or (s["class"] in (cls, "OTHER", "CALI"))
                 pairs.append((0 if ok else 1, s, i, ln))
-        pairs.sort(key=lambda q: (q[0], key_x(q[3], xhow)))
+        pairs.sort(key=lambda q: (q[0], rank[q[2]] if rank is not None else key_x(q[3], xhow)))
         taken = set()
         for _, s, i, ln in pairs:
             if s["name"] in taken or i in used:
@@ -114,6 +150,14 @@ RULES = {
     "медиана x, без цвета": dict(use_color=False, use_class=True, xhow="med"),
     "медиана x, без цвета и класса": dict(use_color=False, use_class=False, xhow="med"),
     "венгерский по рангу (мед. x)": dict(hungarian=True, xhow="med"),
+    # ★ НОВЫЙ ПРИЗНАК (§6.82): порядок ПО СТРОКАМ вместо сводной координаты.
+    # Ниже он подставлен КЛЮЧОМ СОРТИРОВКИ в прод-правило (цвет и класс на месте) — иначе
+    # сравнение мерило бы сумму двух изменений, а не сам признак.
+    "мажоритарный порядок": dict(xhow="major"),
+    "мажоритарный, разнос >20px": dict(xhow="major", sep=20.0),
+    "мажоритарный, разнос >50px": dict(xhow="major", sep=50.0),
+    "мажоритарный, без цвета": dict(xhow="major", use_color=False),
+    "мажоритарный ранг-в-ранг (без цвета/класса)": dict(majority=True),
 }
 
 files = sorted(Path(a.pools).glob("*.pkl"))
