@@ -43,10 +43,46 @@ def err(tr, gt):
     return float(np.median(d)), len(com) / max(1, len(gt))
 
 
+_FEAT = {}
+
+
+def feats(tr):
+    """Признаки ФОРМЫ трассы (§6.83): та же тройка, что меряет `behavior_priors` по эталонам.
+
+    ⚠ ЗАЧЕМ ФОРМА. §6.82 закрыл ВСЕ способы прочитать ПОЛОЖЕНИЕ. Форма — другая ось, и у неё есть
+    физическое основание: зонды БКЗ различаются ДЛИНОЙ, а длинный зонд имеет меньшее вертикальное
+    разрешение, то есть даёт более ГЛАДКУЮ кривую. Значит гладкость должна УПОРЯДОЧИВАТЬ зонды —
+    это не бит «SP/RES» (он уже используется и ошибается на 30% потерь, §6.80), а ключ сортировки.
+    ⚠ Приоры `corpus/priors.json` тут не годятся: они классовые (RES против SP) и построены на
+    7 кривых — тот же один бит. Поэтому признак берётся ОТНОСИТЕЛЬНЫЙ, без внешних порогов."""
+    k = id(tr)
+    if k in _FEAT:
+        return _FEAT[k]
+    ys = sorted(tr)
+    x = np.array([tr[y] for y in ys], float)
+    if len(x) < 5:
+        f = {"wig": 0.0, "rev": 0.0, "span": 0.0, "rough_n": 0.0}
+    else:
+        dx = np.diff(x)
+        span = float(np.percentile(x, 90) - np.percentile(x, 10)) or 1.0
+        w = min(101, len(x) // 2 * 2 + 1)
+        sm = np.convolve(x, np.ones(w) / w, mode="same") if w >= 3 else x
+        f = {"wig": float(np.median(np.abs(dx))),
+             "rev": float(np.mean((dx[:-1] * dx[1:]) < 0)) if len(dx) > 2 else 0.0,
+             "span": span,
+             "rough_n": float(np.std(x - sm) / span)}
+    _FEAT[k] = f
+    return f
+
+
 def key_x(ln, how):
     if how == "med":
         v = list(ln["tr"].values())
         return float(np.median(v)) if v else ln["x_center"]
+    if how.startswith("-"):                       # обратный порядок того же признака
+        return -feats(ln["tr"])[how[1:]]
+    if how in ("wig", "rev", "span", "rough_n"):
+        return feats(ln["tr"])[how]
     return ln["x_center"]
 
 
@@ -158,6 +194,17 @@ RULES = {
     "мажоритарный, разнос >50px": dict(xhow="major", sep=50.0),
     "мажоритарный, без цвета": dict(xhow="major", use_color=False),
     "мажоритарный ранг-в-ранг (без цвета/класса)": dict(majority=True),
+    # ★ ДРУГАЯ ОСЬ (§6.83): форма трассы вместо положения. Обе стороны каждого признака —
+    # направление связи «длина зонда ↔ гладкость» заранее не известно, а гейт трёх наборов
+    # не даст принять случайную.
+    "форма: гладкость (wig)": dict(xhow="wig"),
+    "форма: гладкость, обратно": dict(xhow="-wig"),
+    "форма: развороты (rev)": dict(xhow="rev"),
+    "форма: развороты, обратно": dict(xhow="-rev"),
+    "форма: ВЧ-дрожь (rough_n)": dict(xhow="rough_n"),
+    "форма: ВЧ-дрожь, обратно": dict(xhow="-rough_n"),
+    "форма: размах (span)": dict(xhow="span"),
+    "форма: размах, обратно": dict(xhow="-span"),
 }
 
 files = sorted(Path(a.pools).glob("*.pkl"))
@@ -166,19 +213,28 @@ ncur = sum(len(d["gts"]) for d in data)
 print(f"листов {len(data)}, экспертных кривых {ncur}, трасс в пулах "
       f"{sum(len(d['lines']) for d in data)}\n")
 
-base = None
-print(f"{'правило':<32}{'честных':>9}{'против прода':>14}")
-for name, kw in RULES.items():
-    tot = 0
+def per_sheet(kw):
+    """Честных НА ЛИСТ — иначе не проверить монотонность (§6.38/§6.49: сумма мало что значит,
+    если она собрана из плюсов на одних листах и минусов на других)."""
+    out = []
     for d in data:
         got = assign(d, **kw)
-        for nm, gt in d["gts"].items():
-            tr = got.get(nm)
-            if tr and NULL_OK(*err(tr, gt)):
-                tot += 1
+        out.append(sum(1 for nm, gt in d["gts"].items()
+                       if got.get(nm) and NULL_OK(*err(got[nm], gt))))
+    return out
+
+
+base = None
+base_ps = None
+print(f"{'правило':<32}{'честных':>9}{'против прода':>14}{'листов ↑ / ↓':>16}")
+for name, kw in RULES.items():
+    ps = per_sheet(kw)
+    tot = sum(ps)
     if base is None:
-        base = tot
-    print(f"{name:<32}{tot:>9}{tot - base:>+14d}")
+        base, base_ps = tot, ps
+    up = sum(1 for a, b in zip(base_ps, ps) if b > a)
+    dn = sum(1 for a, b in zip(base_ps, ps) if b < a)
+    print(f"{name:<32}{tot:>9}{tot - base:>+14d}{f'{up} / {dn}':>16}")
 
 orc = sum(1 for d in data for nm, gt in d["gts"].items()
           if oracle(d).get(nm) and NULL_OK(*err(oracle(d)[nm], gt)))
