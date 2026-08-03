@@ -68,9 +68,9 @@ TR = {}
 _map = emit_mod._map_lines_to_slots
 
 
-def cap(traces, model, frame, mnem):
+def cap(traces, model, frame, mnem, *rest):         # *rest: §6.105, пятый аргумент `cv`
     TR["all"] = list(traces)
-    return _map(traces, model, frame, mnem)
+    return _map(traces, model, frame, mnem, *rest)
 
 
 emit_mod._map_lines_to_slots = cap

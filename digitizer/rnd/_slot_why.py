@@ -40,12 +40,12 @@ CAP = {}
 _orig = emit_mod._map_lines_to_slots
 
 
-def capture(traces, model, frame, mnemonics_path):
+def capture(traces, model, frame, mnemonics_path, *rest):   # *rest: §6.105, пятый аргумент `cv`
     CAP["traces"] = list(traces)
     CAP["model"] = model
     CAP["frame"] = frame
     CAP["mn"] = mnemonics_path
-    r = _orig(traces, model, frame, mnemonics_path)
+    r = _orig(traces, model, frame, mnemonics_path, *rest)
     CAP["written"] = dict(r)
     return r
 

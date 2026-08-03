@@ -630,9 +630,9 @@ def build(sheets):
     TR = {}
     _map = emit_mod._map_lines_to_slots
 
-    def map_capture(traces, model, frame, mnemonics_path):
+    def map_capture(traces, model, frame, mnemonics_path, *rest):   # *rest: §6.105, пятый арг `cv`
         TR["all"] = list(traces)
-        return _map(traces, model, frame, mnemonics_path)
+        return _map(traces, model, frame, mnemonics_path, *rest)
     emit_mod._map_lines_to_slots = map_capture
 
     CACHE.mkdir(parents=True, exist_ok=True)
@@ -815,7 +815,7 @@ if __name__ == "__main__":
             # ★ ПЕРЕСБОРКА ТЁМНЫХ ЛИСТОВ. Берём из готовых кэшей те листы, у которых бумага
             # тёмная, и гоняем их заново — так замер правки §6.52 идёт на ТЕХ ЖЕ листах,
             # что и замер до неё, без подмешивания новых.
-            import cv2, pickle as _pk
+            import cv2
             idx = {}
             for wlg in Path(r"F:\nds\projects\Archive").glob("*/wlg"):
                 for q in wlg.glob("*.nlgx"):
@@ -825,10 +825,15 @@ if __name__ == "__main__":
                 if Path(extra).is_dir():
                     for q in Path(extra).glob("*.nlgx"):
                         idx.setdefault(q.name, q)
+            # ⚠ ЛИСТ ОПОЗНАЁТСЯ ПО ИМЕНИ ФАЙЛА КЭША, А НЕ ЧТЕНИЕМ ЕГО САМОГО: кэш пишется как
+            # `{nlgx.stem[:60]}.pkl` (см. `--build` выше), а внутри лежат ВСЕ трассы листа. Прежний
+            # цикл распаковывал каждый такой дамп целиком ради одного поля `name` — сотни МБ до
+            # начала отбора. Та же ловушка, что в `_param_sweep`/`_start_probe`.
+            BY_STEM = {q.stem[:60]: q for q in idx.values()}
             sheets = []
             for d in a.dark_from.split(","):
                 for fp in sorted(Path(d).glob("*.pkl")):
-                    src = idx.get(_pk.load(open(fp, "rb"))["name"])
+                    src = BY_STEM.get(fp.stem)
                     if src is None or src in sheets:
                         continue
                     img = find_image(src)

@@ -51,7 +51,7 @@ def run(image_path, frame_nlgx=None, cfg=None, read_ruler=False, las=False,
     stem = Path(image_path).stem
     res = emit_mod.emit(sheet, traces, cfg.ensure_out(), stem, rgb=rgb,
                         frame_nlgx=frame_nlgx, mnemonics_path=cfg.mnemonics,
-                        image=image_path, las=las)
+                        image=image_path, las=las, cv=cfg.cv)
     if stages is not False:                         # поэтапный монтаж «как скрипт видит»
         from . import stages as stages_mod
         window = None if stages in (True, "auto") else stages

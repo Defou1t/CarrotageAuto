@@ -81,9 +81,9 @@ TRACES = {}
 _map = emit_mod._map_lines_to_slots
 
 
-def map_capture(traces, model, frame, mnemonics_path):
+def map_capture(traces, model, frame, mnemonics_path, *rest):   # *rest: §6.105, пятый арг `cv`
     TRACES["all"] = list(traces)
-    return _map(traces, model, frame, mnemonics_path)
+    return _map(traces, model, frame, mnemonics_path, *rest)
 
 
 emit_mod._map_lines_to_slots = map_capture

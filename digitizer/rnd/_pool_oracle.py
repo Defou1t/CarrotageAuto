@@ -36,7 +36,10 @@ from auto.pipeline import run as pipe_run
 from auto.config import Config
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--files", nargs="+", required=True)
+ap.add_argument("--files", nargs="+", default=[])
+ap.add_argument("--files-from", default="",
+                help="файл со списком путей, ПО ОДНОМУ НА СТРОКУ (utf-8). ⚠ Списки надо передавать "
+                     "так или массивом оболочки — подстановка рвёт имена с пробелом и запятой")
 ap.add_argument("--seq", default="", help="чекпойнт селектора; пусто = жадный выбор")
 ap.add_argument("--out", default=r"F:\nds\output\taskS\pool_oracle")
 ap.add_argument("--dump", default="", help="каталог: сохранить ПУЛ трасс + рамку + эталон на лист. "
@@ -51,10 +54,13 @@ _orig_map = emit_mod._map_lines_to_slots
 CAPM = {}
 
 
-def capture(traces, model, frame, mnemonics_path):
+# ⚠ `*rest` — ПРОБРОС ХВОСТА СИГНАТУРЫ. `emit._map_lines_to_slots` получил пятым аргументом `cv`
+# (§6.105, ручка `slot_order`), и перехват с жёсткими четырьмя падал бы `TypeError` ВНУТРИ
+# `try/except` пайплайна: прогон бы отработал, напечатал «ПАДЕНИЕ» на каждый лист и выдал пустой пул.
+def capture(traces, model, frame, mnemonics_path, *rest):
     POOL["all"] = list(traces)
     CAPM["model"], CAPM["frame"], CAPM["mn"] = model, frame, mnemonics_path
-    r = _orig_map(traces, model, frame, mnemonics_path)
+    r = _orig_map(traces, model, frame, mnemonics_path, *rest)
     POOL["written"] = dict(r)
     return r
 
@@ -86,12 +92,36 @@ def leaked(tr, raw):
 
 
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
-T = {"написано": 0, "оптимум": 0, "потолок": 0, "кривых": 0, "пул": 0}
+T = {"написано": 0, "оптимум": 0, "потолок": 0, "кривых": 0, "пул": 0, "листов": 0}
+SKIP = {}
 
-for f in a.files:
+# ⚠⚠ СПИСОК ПУТЕЙ — ФАЙЛОМ ИЛИ МАССИВОМ, НИКОГДА ПОДСТАНОВКОЙ В ОБОЛОЧКУ. Дважды за ветку
+# `--files $(cat list)` ломал прогон, и ОБА раза прогон завершался успешно с правдоподобными
+# числами: (1) список, записанный из Python на Windows, нёс `\r` в конце каждой строки → `OSError`
+# на каждом листе; (2) имена вида `KREMEN_083_BK, IK_0800-…` содержат ПРОБЕЛ И ЗАПЯТУЮ, и 118 путей
+# оболочка разбила на 178 обрывков — 80 «нет картинки», а посчитались только имена без пробелов.
+# Поэтому `\r` снимается явно, а в конце ОБЯЗАТЕЛЬНО печатается сверка «обработано + пропущено
+# против длины списка»: без неё обе поломки невидимы.
+FILES = list(a.files)
+if a.files_from:
+    for ln in Path(a.files_from).read_text(encoding="utf-8").splitlines():
+        ln = ln.strip().strip('"')
+        if ln:
+            FILES.append(ln)
+if not FILES:
+    sys.exit("не задан ни --files, ни --files-from")
+absent = [f for f in FILES if not Path(f).exists()]
+if absent:
+    print(f"⚠ НЕТ НА ДИСКЕ: {len(absent)} путей из {len(FILES)}")
+    for f in absent[:5]:
+        print(f"    {f}")
+print(f"список: {len(FILES)} путей" + (f" (из {a.files_from})" if a.files_from else ""))
+
+for f in FILES:
     n = Path(f)
     img = find_image(n)
     if not img:
+        SKIP["нет картинки"] = SKIP.get("нет картинки", 0) + 1
         print(f"  {n.stem[:44]:<46} нет картинки"); continue
     cfg = Config(); cfg.out = Path(a.out) / n.stem[:40]
     cfg.cv.seq_model = a.seq                      # §6.71: режим задаёт стенд
@@ -100,12 +130,14 @@ for f in a.files:
         with contextlib.redirect_stdout(io.StringIO()):
             pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
     except Exception as e:
+        SKIP["падение"] = SKIP.get("падение", 0) + 1
         print(f"  {n.stem[:44]:<46} ПАДЕНИЕ {type(e).__name__}: {e}"); continue
     G = extract(str(n))
     raws = {c["name"]: c for c in G["curves"]
             if M.mnem_root(c["name"]) != "DA" and sum(1 for x in c["xs"] if x != NULL) >= 50}
     gts = {nm: dense(c) for nm, c in raws.items()}
     if not gts:
+        SKIP["нет экспертных кривых"] = SKIP.get("нет экспертных кривых", 0) + 1
         continue
     pool = [tr for _, tr in POOL.get("all", [])]
     written = {nm: tr for nm, (_, tr) in POOL.get("written", {}).items()}
@@ -160,10 +192,19 @@ for f in a.files:
     print(f"  {n.stem[:42]:<44} кривых {len(gts):>2}  пул {len(pool):>3}  "
           f"записано {wr}  оптимум1:1 {opt}  потолок {cap}")
     T["написано"] += wr; T["оптимум"] += opt; T["потолок"] += cap
-    T["кривых"] += len(gts); T["пул"] += len(pool)
+    T["кривых"] += len(gts); T["пул"] += len(pool); T["листов"] += 1
 
-print(f"\n{'='*84}\nИТОГО: кривых {T['кривых']}, трасс в пулах {T['пул']}, "
+print(f"\n{'='*84}\nИТОГО: листов {T['листов']}, кривых {T['кривых']}, трасс в пулах {T['пул']}, "
       f"режим seq={a.seq or '—'}")
+# ⚠⚠ СВЕРКА СПИСКА — ОБЯЗАТЕЛЬНАЯ ПЕЧАТЬ, а не отладка: обе поломки передачи списка (см. выше)
+# давали прогон, который ОТРАБАТЫВАЛ и выдавал правдоподобные числа по неполной выборке.
+_skipped = sum(SKIP.values())
+_ok = (T["листов"] + _skipped) == len(FILES)
+print(f"  СВЕРКА СПИСКА: обработано {T['листов']} + пропущено {_skipped} = "
+      f"{T['листов'] + _skipped} против длины списка {len(FILES)}"
+      f"   {'★ СОШЛОСЬ' if _ok else '⛔ НЕ СОШЛОСЬ'}")
+for k, v in sorted(SKIP.items(), key=lambda q: -q[1]):
+    print(f"    пропущено «{k}»: {v}")
 print(f"  ЗАПИСАНО в файл      {T['написано']:>3} честных")
 print(f"  ОПТИМУМ 1:1 из пула  {T['оптимум']:>3}   ← цена отбора K из N: "
       f"{T['оптимум'] - T['написано']:+d}")

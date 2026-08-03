@@ -29,9 +29,10 @@ from pathlib import Path
 import numpy as np
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--pools", default=r"F:\nds\output\taskS\pools")
-a = ap.parse_args()
-
+ap.add_argument("--pools", nargs="+", default=[
+    r"F:/nds/output/taskS/pools", r"F:/nds/output/taskS/pools_gate",
+    r"F:/nds/output/taskS/pools_wide", r"F:/nds/output/taskS/pools_more",
+    r"F:/nds/output/taskS/pools_div"])
 NULL_OK = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
 
 
@@ -217,35 +218,55 @@ RULES = {
     "класс из трассы, без цвета": dict(use_class="trace", use_color=False),
 }
 
-files = sorted(Path(a.pools).glob("*.pkl"))
-data = [pickle.load(open(f, "rb")) for f in files]
-ncur = sum(len(d["gts"]) for d in data)
-print(f"листов {len(data)}, экспертных кривых {ncur}, трасс в пулах "
-      f"{sum(len(d['lines']) for d in data)}\n")
+# ⚠⚠ ТЕЛО ЗАКРЫТО В `main()`, А РАЗБОР АРГУМЕНТОВ — ВНУТРИ НЕЁ. Модуль импортируется стендом
+# паритета (`_slot_order_parity.py`) ради `key_x`/`feats`; без этой границы импорт запускал бы
+# весь перебор по 702 листам и падал на чужом `sys.argv`.
+def main():
+    a = ap.parse_args()
+    # ⚠ НЕСКОЛЬКО КАТАЛОГОВ И ДЕДУПЛИКАЦИЯ ПО ИМЕНИ ФАЙЛА. Прежде `--pools` принимал ОДИН каталог и
+    # по умолчанию смотрел в `pools` — 20 дампов. Весь перебор правил, включая венгерское
+    # назначение, был намерен на этих двадцати листах, тогда как в пулах их 702.
+    seen, files = set(), []
+    for root in a.pools:
+        for f in sorted(Path(root).glob("*.pkl")):
+            if f.stem in seen:
+                continue
+            seen.add(f.stem); files.append(f)
 
-def per_sheet(kw):
-    """Честных НА ЛИСТ — иначе не проверить монотонность (§6.38/§6.49: сумма мало что значит,
-    если она собрана из плюсов на одних листах и минусов на других)."""
-    out = []
-    for d in data:
-        got = assign(d, **kw)
-        out.append(sum(1 for nm, gt in d["gts"].items()
-                       if got.get(nm) and NULL_OK(*err(got[nm], gt))))
-    return out
+    # ⚠⚠ ДАМПЫ ЧИТАЮТСЯ ПОТОЧНО, А НЕ ВСЕ СРАЗУ. 702 дампа против прежних двадцати — это гигабайты
+    # живых словарей {y: x}, и прежний `data = [pickle.load(...)]` их бы не вместил.
+    # ⚠⚠ ИЗ-ЗА ЭТОГО ОБЯЗАТЕЛЕН СБРОС `_FEAT`: кэш признаков формы ключуется `id(tr)`, а после
+    # освобождения дампа тот же id достаётся новому объекту — признаки МОЛЧА пришли бы от чужой
+    # трассы, и перебор правил формы стал бы шумом, не сообщив об этом. Внутри листа кэш работает
+    # как прежде, его переиспользуют все правила подряд.
+    per = {name: [] for name in RULES}
+    ncur = nlines = orc = 0
+    for i, f in enumerate(files, 1):
+        d = pickle.load(open(f, "rb"))
+        _FEAT.clear()
+        ncur += len(d["gts"]); nlines += len(d["lines"])
+        for name, kw in RULES.items():
+            got = assign(d, **kw)
+            per[name].append(sum(1 for nm, gt in d["gts"].items()
+                                 if got.get(nm) and NULL_OK(*err(got[nm], gt))))
+        o = oracle(d)
+        orc += sum(1 for nm, gt in d["gts"].items() if o.get(nm) and NULL_OK(*err(o[nm], gt)))
+        if i % 50 == 0:
+            print(f"  … {i}/{len(files)} листов")
+    print(f"листов {len(files)}, экспертных кривых {ncur}, трасс в пулах {nlines}\n")
+
+    base_ps = per[next(iter(RULES))]
+    base = sum(base_ps)
+    print(f"{'правило':<32}{'честных':>9}{'против прода':>14}{'листов ↑ / ↓':>16}")
+    for name in RULES:
+        ps = per[name]
+        tot = sum(ps)
+        up = sum(1 for x, y in zip(base_ps, ps) if y > x)
+        dn = sum(1 for x, y in zip(base_ps, ps) if y < x)
+        print(f"{name:<32}{tot:>9}{tot - base:>+14d}{f'{up} / {dn}':>16}")
+
+    print(f"{'★ ОРАКУЛ (потолок)':<32}{orc:>9}{orc - base:>+14d}")
 
 
-base = None
-base_ps = None
-print(f"{'правило':<32}{'честных':>9}{'против прода':>14}{'листов ↑ / ↓':>16}")
-for name, kw in RULES.items():
-    ps = per_sheet(kw)
-    tot = sum(ps)
-    if base is None:
-        base, base_ps = tot, ps
-    up = sum(1 for a, b in zip(base_ps, ps) if b > a)
-    dn = sum(1 for a, b in zip(base_ps, ps) if b < a)
-    print(f"{name:<32}{tot:>9}{tot - base:>+14d}{f'{up} / {dn}':>16}")
-
-orc = sum(1 for d in data for nm, gt in d["gts"].items()
-          if oracle(d).get(nm) and NULL_OK(*err(oracle(d)[nm], gt)))
-print(f"{'★ ОРАКУЛ (потолок)':<32}{orc:>9}{orc - base:>+14d}")
+if __name__ == "__main__":
+    main()

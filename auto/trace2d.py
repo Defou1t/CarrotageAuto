@@ -27,13 +27,18 @@ def _color_fg(rgb, color, p):
     return cm & ~im.structure_mask(rgb, p)
 
 
-def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_range=None,
+def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=None, x_range=None,
                jump_limit=None):
     """Трасса одной AUTO-линии как x(row). fg — bool-маска цвета линии.
     band_pad — допуск вокруг x-полосы линии (анти-перескок на соседа). slmax — кламп скорости.
     wide_run — ран шире этого = горизонтальный спайк → берём ВЕРШИНУ (дальний край), не центр.
+      None = взять из конфига (`p.trace_wide_run`, §6.102: свип показал, что правило вершины
+      подкармливает дрейф и порог выгоднее поднять). Явно переданное значение сильнее конфига —
+      на этом держится `refine`, который ставит 10**6 для свипующего пера (`prefer_body`).
     x_range=(lo,hi) — ЯВНЫЙ band (для refine: расширение до трека, чтобы догнать выносы к упору;
     у цвето-уникальной AUTO соседа того же цвета нет → расширение безопасно, связность держит нить)."""
+    if wide_run is None:
+        wide_run = getattr(p, "trace_wide_run", 14)
     H, W = fg.shape
     if x_range is not None:
         lo = max(0, int(x_range[0])); hi = min(W, int(x_range[1]) + 1)

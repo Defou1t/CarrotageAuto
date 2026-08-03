@@ -45,9 +45,9 @@ TR = {}
 _map = EM._map_lines_to_slots
 
 
-def cap(t, mo, fr, mn):
+def cap(t, mo, fr, mn, *rest):                      # *rest: §6.105, пятый аргумент `cv`
     TR["all"] = list(t)
-    return _map(t, mo, fr, mn)
+    return _map(t, mo, fr, mn, *rest)
 
 
 EM._map_lines_to_slots = cap

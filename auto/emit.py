@@ -106,7 +106,43 @@ def _slot_track(model, curve, frame):
                key=lambda i: abs((frame.tracks[i].x_left + frame.tracks[i].x_right) / 2 - sx))
 
 
-def _map_lines_to_slots(traces, model, frame, mnemonics_path):
+def _trace_rough_n(tr):
+    """Относительная ВЧ-дрожь трассы: std остатка от скользящего среднего, нормированная на размах.
+
+    ⚠ ФОРМУЛА ПОВТОРЯЕТ `_slot_rules.feats` ОДИН В ОДИН (окно 101 или len//2*2+1, перцентили 10/90,
+    `mode="same"`). Любое расхождение сделало бы A/B на отгрузке замером ДРУГОГО правила, а не того,
+    что намерено на стенде, — паритет проверяется `_slot_order_parity.py`.
+    """
+    if not tr:
+        return 0.0
+    x = np.array([tr[y] for y in sorted(tr)], float)
+    if len(x) < 5:
+        return 0.0
+    span = float(np.percentile(x, 90) - np.percentile(x, 10)) or 1.0
+    w = min(101, len(x) // 2 * 2 + 1)
+    sm = np.convolve(x, np.ones(w) / w, mode="same") if w >= 3 else x
+    return float(np.std(x - sm) / span)
+
+
+def _slot_order_key(L, tr, how):
+    """Ключ порядка линий внутри трека для раскладки (`CVParams.slot_order`).
+
+    `x_center` — прежнее поведение: центр полосы, поставленный ещё на U1.
+    `med_x`    — медиана x САМОЙ трассы: полоса и трасса не обязаны совпадать.
+    `rough_n`  — порядок по ВЧ-дрожи вместо положения (§6.83: длинный зонд БКЗ даёт более гладкую
+                 кривую, то есть форма упорядочивает зонды там, где положение уже не различает).
+    ⚠ Неизвестное значение НЕ падает, а откатывается к прежнему поведению: раскладка не то место,
+    где опечатка в конфиге должна ронять сдачу листа.
+    """
+    if how == "med_x":
+        v = list(tr.values()) if tr else None
+        return float(np.median(v)) if v else float(L.x_center)
+    if how == "rough_n":
+        return _trace_rough_n(tr)
+    return float(L.x_center)
+
+
+def _map_lines_to_slots(traces, model, frame, mnemonics_path, cv=None):
     """Автономный маппинг AUTO-линий → слоты кривых рамки: тот же трек + совместимый цвет/класс +
     порядок слева-направо (идентичность = СЧЁТ, §6.6.11). Возвращает {slot_name: (Line, trace)}.
     Слоты берём ПО ИМЕНИ (все кривые кроме оси DA*): в ЛЁГКОМ каркасе слоты пусты, а
@@ -120,6 +156,7 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path):
         slot_info.append({"curve": c, "track": _slot_track(model, c, frame),
                           "color": info["color"], "class": info["class"],
                           "root": info["root"]})
+    how = (getattr(cv, "slot_order", "") or "x_center") if cv is not None else "x_center"
     used = set(); mapping = {}
     # внутри трека: назначение по ГЛОБАЛЬНОМУ score (не жадно по слотам — иначе первый слот
     # забирает единственную линию при полном несовпадении: G4-баг STK_4020, оранжевая ушла в
@@ -136,6 +173,9 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path):
         # Условие ниже сохраняет защиту там, где цветная линия действительно есть, и снимает
         # запрет там, где её нет.
         colors_on_track = {L.color for L, _ in tlines}
+        # ★ КЛЮЧ ПОРЯДКА (`CVParams.slot_order`) СЧИТАЕТСЯ ОДИН РАЗ НА ЛИНИЮ, до сборки пар: одна
+        # линия входит в пары со ВСЕМИ слотами трека, а `rough_n` — свёртка по всей трассе.
+        xkey = {id(L): _slot_order_key(L, tr, how) for L, tr in tlines}
         pairs = []
         for s in tslots:
             strict_color = s["color"] is not None and s["color"] in colors_on_track
@@ -145,7 +185,7 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path):
                 cls = "SP" if L.behavior == "smooth" else "RES"
                 class_ok = (s["class"] in (cls, "OTHER", "CALI"))
                 pairs.append((0 if class_ok else 1, s, L, tr))
-        pairs.sort(key=lambda q: (q[0], q[2].x_center))
+        pairs.sort(key=lambda q: (q[0], xkey[id(q[2])]))
         taken_slots = set()
         for score, s, L, tr in pairs:
             nm = s["curve"]["name"]
@@ -214,14 +254,23 @@ def _level_segments(tr, model, curve, top_y, n, gray=None):
 
 
 def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
-                    image=None, las=False):
+                    image=None, las=False, cv=None):
     """Инъекция AUTO-трасс в лёгкую рамку NeuraLOG → _auto.nlgx(+bck). Рамка НЕ фабрикуется."""
     import struct
     from extract_nlgx import extract
     from write_nlgx import read_full, write_full, set_tag, find_ifd
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     model = extract(str(frame_nlgx))
-    mapping = _map_lines_to_slots(traces, model, frame, mnemonics_path)
+    # ★ ОБУЧЕННАЯ РАСКЛАДКА (§6.88), выключена по умолчанию (`CVParams.slot_model` = ""). Вернёт
+    # None, если её не просили, нет веса ИЛИ лист не прошёл меру уверенности ⇒ работает ПРАВИЛО.
+    # ⚠ Правило вызывается тем же именем, что и раньше: стенды, которые его перехватывают
+    # (`_pool_oracle`, `_pick_gate`, …), продолжают перехватывать именно правило.
+    mapping = None
+    if cv is not None and getattr(cv, "slot_model", ""):
+        from . import slot_model as slot_mod
+        mapping = slot_mod.map_lines(traces, model, frame, mnemonics_path, cv)
+    if mapping is None:
+        mapping = _map_lines_to_slots(traces, model, frame, mnemonics_path, cv)
     ifds = read_full(open(frame_nlgx, "rb").read())
 
     def curve_pred(short):
@@ -328,10 +377,11 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
 
 
 def emit(sheet, traces, out, stem, rgb=None, frame_nlgx=None, mnemonics_path=None,
-         image=None, las=False):
-    """Диспетчер: понимание всегда; nlgx — если дана лёгкая рамка."""
+         image=None, las=False, cv=None):
+    """Диспетчер: понимание всегда; nlgx — если дана лёгкая рамка.
+    ⚠ `cv` нужен только обученной раскладке (§6.88); None = прежнее поведение, правило."""
     res = emit_understanding(sheet, traces, out, stem, rgb=rgb)
     if frame_nlgx:
         res.update(emit_into_frame(traces, frame_nlgx, sheet.frame, out, stem,
-                                   mnemonics_path, image=image, las=las))
+                                   mnemonics_path, image=image, las=las, cv=cv))
     return res

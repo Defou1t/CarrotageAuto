@@ -50,8 +50,8 @@ _map = emit_mod._map_lines_to_slots
 LOG = {}
 
 
-def map_logged(traces, model, frame, mnemonics_path):
-    m = _map(traces, model, frame, mnemonics_path)
+def map_logged(traces, model, frame, mnemonics_path, *rest):   # *rest: §6.105, пятый арг `cv`
+    m = _map(traces, model, frame, mnemonics_path, *rest)
     LOG["chosen"] = {nm: float(L.x_center) for nm, (L, _) in m.items()}
     LOG["offered"] = [float(L.x_center) for L, _ in traces]
     return m

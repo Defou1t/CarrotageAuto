@@ -243,8 +243,8 @@ if __name__ == "__main__":
     TR = {}
     _m = EM._map_lines_to_slots
 
-    def cap(t, mo, fr, mn):
-        TR["all"] = list(t); return _m(t, mo, fr, mn)
+    def cap(t, mo, fr, mn, *rest):                  # *rest: §6.105, пятый аргумент `cv`
+        TR["all"] = list(t); return _m(t, mo, fr, mn, *rest)
     EM._map_lines_to_slots = cap
 
     if a.seq:

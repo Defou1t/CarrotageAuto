@@ -62,13 +62,20 @@ for e in (r"F:\nds\projects\Semeguniv_001\wlg", r"F:\nds\projects\Semeguniv_020\
         for q in Path(e).glob("*.nlgx"):
             WELL[q.name] = Path(e).parent.name
 
+# ⚠ КЛЮЧ ДЕДУПЛИКАЦИИ — ИМЯ ФАЙЛА, А НЕ ПОЛЕ `name`: `_pool_oracle.py` кладёт дамп как
+# `{nlgx.stem[:60]}.pkl`, поэтому дубль (один лист в двух каталогах) виден ДО чтения и стоит ноль.
+# ⚠ В отличие от `_start_probe`/`_param_sweep` здесь нет прохода «сначала список, потом счёт»: дамп
+# нужен целиком, и 2.35 ГБ читаются по делу — экономится только повторное чтение дублей.
 sheets, seen = [], set()
 for root in a.pools:
     for f in sorted(Path(root).glob("*.pkl")):
-        d = pickle.load(open(f, "rb"))
-        if d["name"] in seen:                 # один и тот же лист мог попасть в два дампа
+        if f.stem in seen:
             continue
-        seen.add(d["name"]); sheets.append(d)
+        seen.add(f.stem)
+        d = pickle.load(open(f, "rb"))
+        if not d["name"].startswith(f.stem[:40]):
+            print(f"  ⚠ имя дампа {f.stem[:40]!r} расходится с полем name {d['name'][:40]!r}")
+        sheets.append(d)
 
 X, Y, R, IDX = [], [], [], []
 prod = [0] * len(sheets)
