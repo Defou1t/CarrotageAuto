@@ -159,6 +159,7 @@ for rel in SH:
     img = find_image(n)
     TRACES.clear()
     cfg = Config(); cfg.out = Path(r"F:\nds\output\taskS\set_recall") / well
+    cfg.cv.seq_model = a.ckpt if a.seq else ""      # §6.106: путь трассировки задаёт стенд
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):

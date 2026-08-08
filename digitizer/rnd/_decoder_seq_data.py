@@ -164,20 +164,30 @@ if __name__ == "__main__":
     print(f"окно: {NROW}×{NCOL} (±{R_ROWS} строк /{ROW_STEP}, ±{R_COLS}px /{COL_STEP}), {PBYTES} байт/решение")
     PA, FA, LA, MA, DA, WA = [], [], [], [], [], []
     ok = nn = 0
+    SKIP, done = {}, 0          # §6.106: сверка списка — обязательная печать, а не отладка
     for n in sheets:
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
                 r = extract_sheet(n, a.pad, p, a.drift, rng, a.row_step, a.cap)
         except Exception as e:
+            SKIP["падение"] = SKIP.get("падение", 0) + 1
             print(f"  !! {n.name[:44]:<46} {type(e).__name__}: {e}"); continue
         if r is None:
+            SKIP["нет данных"] = SKIP.get("нет данных", 0) + 1
             print(f"  -- {n.name[:44]:<46} нет данных"); continue
         P, F, L, M, D, k, m = r
         PA.append(P); FA.append(F); LA.append(L); MA.append(M); DA.append(D)
         WA += [n.parent.parent.name] * len(P)
-        ok += k; nn += m
+        ok += k; nn += m; done += 1
         print(f"  {n.name[:44]:<46} {len(P):>7} решений, ближайший прав {100*k/max(1,m):.1f}%")
+    # ⚠⚠ СВЕРКА СПИСКА (§6.106, образец `_pool_oracle.py`): выборка, собранная по НЕПОЛНОМУ
+    # списку листов, выглядит совершенно так же, как полная, — только модель учится не на том.
+    _sk = sum(SKIP.values())
+    print(f"  СВЕРКА СПИСКА: обработано {done} + пропущено {_sk} = {done + _sk} против длины "
+          f"списка {len(sheets)}   {'★ СОШЛОСЬ' if done + _sk == len(sheets) else '⛔ НЕ СОШЛОСЬ'}")
+    for k_, v_ in sorted(SKIP.items(), key=lambda q: -q[1]):
+        print(f"    пропущено «{k_}»: {v_}")
     P = np.vstack(PA); F = np.vstack(FA); L = np.vstack(LA); M = np.vstack(MA); D = np.vstack(DA)
     wells = np.array(WA)
     OUT.mkdir(parents=True, exist_ok=True)

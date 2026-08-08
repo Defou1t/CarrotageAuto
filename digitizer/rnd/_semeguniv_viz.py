@@ -28,6 +28,7 @@ OUT = Path(r"F:\nds\output\taskS\semeguniv")
 ap = argparse.ArgumentParser()
 ap.add_argument("--scale", type=int, default=4, help="во сколько раз уменьшить обзор")
 ap.add_argument("--traces", default=None, help="json с нашими трассами (иначе прогон пайплайна)")
+ap.add_argument("--seq", default="", help="чекпойнт селектора; пусто = ЖАДНЫЙ trace2d (§6.106)")
 a = ap.parse_args()
 
 PAL = [(230, 60, 60), (60, 190, 60), (60, 120, 240), (240, 170, 40),
@@ -80,6 +81,7 @@ from auto.config import Config
 
 img_path = find_image(SHEET)
 cfg = Config(); cfg.out = OUT / "viz"
+cfg.cv.seq_model = a.seq        # §6.106: путь трассировки задаёт стенд, а не наличие torch
 with contextlib.redirect_stdout(io.StringIO()):
     pipe_run(str(img_path), frame_nlgx=str(SHEET), cfg=cfg, stages=False)
 alltr = TR.get("all", [])

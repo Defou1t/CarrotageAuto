@@ -67,15 +67,21 @@ for e in (r"F:\nds\projects\Semeguniv_001\wlg", r"F:\nds\projects\Semeguniv_020\
 # ⚠ В отличие от `_start_probe`/`_param_sweep` здесь нет прохода «сначала список, потом счёт»: дамп
 # нужен целиком, и 2.35 ГБ читаются по делу — экономится только повторное чтение дублей.
 sheets, seen = [], set()
+FOUND, DUPS = 0, 0              # §6.106: объём — ИЗ СЧЁТЧИКА, и сверка в конце
 for root in a.pools:
     for f in sorted(Path(root).glob("*.pkl")):
+        FOUND += 1
         if f.stem in seen:
+            DUPS += 1
             continue
         seen.add(f.stem)
         d = pickle.load(open(f, "rb"))
         if not d["name"].startswith(f.stem[:40]):
             print(f"  ⚠ имя дампа {f.stem[:40]!r} расходится с полем name {d['name'][:40]!r}")
         sheets.append(d)
+
+print(f"дампов найдено {FOUND} в {len(a.pools)} каталогах, дублей {DUPS}, листов {len(sheets)}"
+      f"   {'★ СОШЛОСЬ' if len(sheets) + DUPS == FOUND else '⛔ НЕ СОШЛОСЬ'}")
 
 X, Y, R, IDX = [], [], [], []
 prod = [0] * len(sheets)
@@ -141,11 +147,13 @@ def assign_count(scores, mask_sheets):
 
 print(f"{'фолд':<6}{'листов':>7}{'прод':>6}{'классиф.':>10}{'↑/↓':>9}{'регресс.':>10}{'↑/↓':>9}{'оракул':>8}")
 tot = dict(prod=0, clf=0, reg=0, cu=0, cd=0, ru=0, rd=0, orc=0, n=0)
+FOLD_SKIP = 0
 pair_fold = np.array([sheet_fold[si] for si, _, _ in IDX])
 for k in range(a.folds):
     te_s = sheet_fold == k
     tr_p = pair_fold != k
     if Y[tr_p].sum() < 10 or not te_s.any():
+        FOLD_SKIP += 1          # §6.106: молча пропущенный фолд = молча урезанная выборка
         continue
     clf = GradientBoostingClassifier(n_estimators=200, max_depth=3, random_state=0)
     clf.fit(X[tr_p], Y[tr_p])
@@ -164,6 +172,18 @@ for k in range(a.folds):
     tot["prod"] += p; tot["clf"] += sum(gc.values()); tot["reg"] += sum(gr.values())
     tot["cu"] += cu; tot["cd"] += cd; tot["ru"] += ru; tot["rd"] += rd
     tot["orc"] += sum(go.values()); tot["n"] += len(idxs)
+
+# ⚠⚠ СВЕРКА ВЫБОРКИ (§6.106): фолд, пропущенный из-за нехватки положительных, уносит свои листы
+# из ИТОГО молча — и таблица продолжает выглядеть как проверка по всей выборке.
+# ⚠ Второй источник расхождения нашла сама эта сверка при первом же прогоне: лист, у которого НЕТ
+# НИ ОДНОЙ пары (слот × трасса), в `assign_count` не попадает, а значит не попадает и в столбец
+# «листов». На дельты он не влияет (даёт ноль всем сторонам), но число в таблице — это листы
+# С КАНДИДАТАМИ, а не размер выборки, и читать его надо именно так.
+_no_pairs = len(sheets) - len({si for si, _, _ in IDX})
+_acc = tot["n"] + _no_pairs
+print(f"  СВЕРКА ВЫБОРКИ: листов в тестах {tot['n']} + без пар {_no_pairs} = {_acc} против "
+      f"{len(sheets)} загруженных; фолдов {a.folds - FOLD_SKIP} из {a.folds}"
+      f"   {'★ СОШЛОСЬ' if _acc == len(sheets) and not FOLD_SKIP else '⛔ НЕ СОШЛОСЬ'}")
 
 pc = lambda v: f"{100*(v-tot['prod'])/max(1,tot['prod']):+.0f}%"
 print(f"{'-'*66}\n{'ИТОГО':<6}{tot['n']:>7}{tot['prod']:>6}{tot['clf']:>10}"

@@ -152,7 +152,12 @@ def make_tracer(model_path, device=None):
     from . import imaging as im
     from . import trace2d as T
 
-    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    # ⚠ УСТРОЙСТВО ВЫБИРАЕТСЯ ПО `device_count()`, А НЕ ПО `is_available()` (§6.106). При
+    # `CUDA_VISIBLE_DEVICES=""` этот сборкой torch (2.10+cu130) `is_available()` возвращает True,
+    # а `device_count()` — 0; тогда `map_location="cuda"` роняет ЗАГРУЗКУ ЧЕКПОЙНТА, то есть
+    # пайплайн падает вместо того, чтобы честно считать на CPU. Поймано живьём при попытке увести
+    # замер с занятой видеокарты.
+    dev = device or ("cuda" if torch.cuda.device_count() > 0 else "cpu")
     ckpt = torch.load(resolve(model_path), map_location=dev, weights_only=False)
     bad = _check_geom(ckpt)
     if bad:

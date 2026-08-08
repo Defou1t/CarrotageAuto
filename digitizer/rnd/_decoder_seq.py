@@ -266,8 +266,11 @@ if __name__ == "__main__":
         net = train(a.data, a.epochs, a.bs, a.lr, dev, a.lam_off, a.off_w); net.eval()
 
     if not a.no_gate:
-        print(f"\n{'='*66}\n=== ГЕЙТ на держанных скважинах (bench, 24 кривые) ===")
-        rb = BE.report("БАЗА (прод)", BE.run_strategy())
+        # §6.106: объём — ИЗ СЧЁТЧИКА. «24 кривые» стояли строкой; смени bench состав — и шапка
+        # продолжала бы утверждать 24 (ровно ловушка `_slot_cause.py`).
+        _base_rows = BE.run_strategy()
+        print(f"\n{'='*66}\n=== ГЕЙТ на держанных скважинах (bench, {len(_base_rows)} кривых) ===")
+        rb = BE.report("БАЗА (прод)", _base_rows)
         t0 = time.time()
         rm = BE.report(f"ОКОННЫЙ селектор (torch), точка={a.point}",
                        BE.run_strategy(tracer=make_tracer(net, dev, point=a.point)))

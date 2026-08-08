@@ -296,6 +296,10 @@ if __name__ == "__main__":
     from auto.config import Config
     img = find_image(SHEET)
     cfg = Config(); cfg.out = OUT / "pipe"
+    # ★ §6.106: путь трассировки ПИННИТСЯ флагом стенда, а не наследуется из `CVParams`. Умолчание
+    # там непустое, и при доступном torch пайплайн повёл бы линии СЕЛЕКТОРОМ, тогда как патч
+    # `trace_line` выше до кода не доехал бы (ловушка `_slot_prod_ab.py`).
+    cfg.cv.seq_model = a.ckpt if a.seq else ""
     with contextlib.redirect_stdout(io.StringIO()):
         pipe_run(str(img), frame_nlgx=str(SHEET), cfg=cfg, stages=False)
     ours = [tr for _, tr in TR.get("all", [])]

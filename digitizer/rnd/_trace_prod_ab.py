@@ -38,6 +38,18 @@ r"""_trace_prod_ab.py — A/B ПАРАМЕТРОВ ТРАССИРОВЩИКА Н
 
 ⚠ Имена режимов БЕЗ ПРОБЕЛОВ, если стенд запускается через `Start-Process -ArgumentList`: массив
 склеивается пробелом БЕЗ квотирования, и «A сел.база:…» доезжает до argparse двумя аргументами.
+
+⚠⚠ ЕСЛИ ВСЕ РЕЖИМЫ СЕЛЕКТОРНЫЕ — СЧИТАТЬ НА CPU, А НЕ НА ВИДЕОКАРТЕ (§6.106). Замер 07.08: 12 шардов
+селектора на занятой видеокарте (VRAM 15.9/16.3 ГБ отданы LM Studio, игре и браузерам) дали
+2 лист-режима за 28 минут — счёт практически встал, потому что процессы делили остаток VRAM.
+Те же 12 шардов на CPU (32 ядра, `OMP_NUM_THREADS=3`) дают ≈7 лист-режимов в минуту, то есть
+118 листов × 4 режима ≈ час. Одиночный лист при этом: GPU 31 с, CPU 50 с — видеокарта быстрее
+ПРОЦЕССОМ, но она одна, а ядер 32.
+★ КОНТРОЛЬ СОПОСТАВИМОСТИ ПРОЙДЕН: выдача CPU и GPU на одном листе (5 кривых) совпала БИТ-В-БИТ,
+то есть числа CPU-прогона сравнимы с §6.102, посчитанным на видеокарте.
+  CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=3 <ComfyUI>\python_embeded\python.exe _trace_prod_ab.py …
+⚠ `CUDA_VISIBLE_DEVICES=""` на torch 2.10+cu130 оставляет `is_available()=True` при
+`device_count()=0`; до правки §6.106 в `auto/trace_seq.py` это роняло ЗАГРУЗКУ чекпойнта.
 """
 import sys, io, argparse, contextlib, pickle
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -64,6 +76,10 @@ ap.add_argument("--slot-gate", default="frac0.8", help="мера уверенн�
 ap.add_argument("--cap", type=int, default=3, help="листов на скважину (0 = все)")
 ap.add_argument("--shard", default="0/1")
 ap.add_argument("--out", default=r"F:\nds\output\taskS\prod_ab_trace")
+# ⚠ §6.107: отбор по СПИСКУ ИМЁН — для правок, эффект которых ДОКАЗУЕМО локализован (правка разбора
+# глубины меняет разбор ровно 36 листов из 702, на остальных вход пайплайна побитово тот же).
+# Мерить такую правку на всей выборке — размывать её собственный сигнал. Файл: имя nlgx на строку.
+ap.add_argument("--only-from", default="", help="файл со списком имён nlgx (по одному на строку)")
 a = ap.parse_args()
 SH_I, SH_N = (int(v) for v in a.shard.split("/"))
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
@@ -79,7 +95,7 @@ def parse_mode(s):
     то есть один и тот же стенд давал бы РАЗНЫЕ пути на разных машинах — ровно запрет §6.71.
     ⚠ `slot` от пути трассировки НЕ зависит (скор считает numpy) и действует на обоих."""
     nm, _, tail = s.partition(":")
-    kw, seq, slot, order = {}, None, None, "x_center"
+    kw, seq, slot, order, depth0 = {}, None, None, "x_center", False
     for part in filter(None, tail.split(",")):
         k, _, v = part.partition("=")
         if k == "seq":
@@ -88,6 +104,12 @@ def parse_mode(s):
             slot = v
         elif k == "order":
             order = v or "x_center"
+        elif k == "depth0":
+            # §6.107: правка `meta._depth_marker` — принимать интервал, начинающийся с НУЛЯ.
+            # Ручкой режима, а не правкой прода: приор из имени задаёт K и имена слотов, то есть
+            # правка меняет РАСКЛАДКУ, и её эффект на честных кривых обязан быть измерен, а не
+            # выведен из «имён разбирается больше».
+            depth0 = v not in ("", "0")
         else:
             kw[k] = None if v in ("None", "") else (float(v) if k == "slmax" else int(v))
     if seq is None:
@@ -102,8 +124,20 @@ def parse_mode(s):
     if seq and kw:
         print(f"⚠ режим {nm!r}: при включённом селекторе параметры {list(kw)} НЕ действуют — "
               f"`trace_seq` строит свой трассировщик и правила вершины у него нет вовсе")
-    return nm, seq, slot, order, kw
+    return nm, seq, slot, order, depth0, kw
 
+
+# ── §6.107: вариант `_depth_marker`, принимающий интервал от НУЛЯ ─────────────────────────────
+# Собирается из исходника прод-функции подменой одного сравнения: так вариант не разъедется с
+# продом при любой другой правке разбора имени (та же логика, что у паритета §6.105).
+import inspect, textwrap
+_dm_orig = M._depth_marker
+_ns = dict(M.__dict__)
+exec(compile(textwrap.dedent(inspect.getsource(_dm_orig)).replace("0 < a < 12000", "0 <= a < 12000"),
+             "<depth0>", "exec"), _ns)
+_dm_zero = _ns["_depth_marker"]
+if _dm_zero.__code__.co_code == _dm_orig.__code__.co_code:
+    sys.exit("⛔ вариант depth0 совпал с продом — подмена сравнения не сработала, замер бессмыслен")
 
 MODES = [parse_mode(s) for s in a.mode]
 _orig_trace = T.trace_line
@@ -163,6 +197,14 @@ for root in a.pools:
         if a.cap and len(per_well.get(wl, [])) >= a.cap:
             continue
         per_well.setdefault(wl, []).append(q.name); sheets.append(q)
+if a.only_from:
+    want = {ln.strip() for ln in Path(a.only_from).read_text(encoding="utf-8").splitlines() if ln.strip()}
+    sheets = [q for q in sheets if q.name in want]
+    missing = sorted(want - {q.name for q in sheets})
+    print(f"★ ОТБОР ПО СПИСКУ {a.only_from}: просили {len(want)}, нашлось {len(sheets)}"
+          f"   {'★ СОШЛОСЬ' if not missing else '⛔ НЕ СОШЛОСЬ'}")
+    for m in missing[:5]:
+        print(f"    нет в пулах: {m}")
 print(f"листов в пулах {len(seen)}, взято {len(sheets)} со {len(per_well)} скважин "
       f"(cap {a.cap or '—'}), режимов {len(MODES)}")
 Path(a.out).mkdir(parents=True, exist_ok=True)
@@ -173,16 +215,20 @@ if SH_N > 1:
     print(f"★ ШАРД {SH_I}/{SH_N}: {len(sheets)} листов × {len(MODES)} режима")
 
 res, FP = {}, {}
-for nm_mode, seq, slot, order, kw in MODES:
+for nm_mode, seq, slot, order, depth0, kw in MODES:
+    M._depth_marker = _dm_zero if depth0 else _dm_orig
     T.trace_line = make(kw) if kw else _orig_trace
     tot = dict(hon=0, curves=0, sheets=0, leak=0)
     per, FP[nm_mode] = {}, {}
+    SKIP = {}                    # §6.106: сверка списка — обязательная печать, а не отладка
     print(f"\n{'='*78}\n{nm_mode}: seq={seq or '— (жадный trace2d)'}, "
           f"slot={slot or '— (раскладка правилом)'}, order={order}, "
+          f"depth0={'ВКЛ' if depth0 else 'выкл'}, "
           f"{kw or 'константы trace_line по умолчанию'}\n{'='*78}")
     for n in sheets:
         img = find_image(n)
         if not img:
+            SKIP["нет картинки"] = SKIP.get("нет картинки", 0) + 1
             continue
         cfg = Config()
         cfg.cv.seq_model = seq            # §6.71: путь трассировки задаёт стенд, а не умолчания
@@ -194,6 +240,7 @@ for nm_mode, seq, slot, order, kw in MODES:
             with contextlib.redirect_stdout(io.StringIO()):
                 pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
         except Exception as e:
+            SKIP["падение пайплайна"] = SKIP.get("падение пайплайна", 0) + 1
             print(f"  {n.stem[:44]:<46} ПАДЕНИЕ {type(e).__name__}: {e}"); continue
         G = extract(str(n))
         raws = {c["name"]: c for c in G["curves"]
@@ -201,6 +248,7 @@ for nm_mode, seq, slot, order, kw in MODES:
         gts = {nm: dense(c) for nm, c in raws.items()}
         got = next(iter(sorted(cfg.out.glob("*_auto.nlgx"))), None)
         if got is None:
+            SKIP["файл не выдан"] = SKIP.get("файл не выдан", 0) + 1
             print(f"  {n.stem[:44]:<46} файл не выдан"); continue
         W = {c["name"]: dense(c) for c in extract(str(got))["curves"]
              if M.mnem_root(c["name"]) != "DA"}
@@ -219,6 +267,16 @@ for nm_mode, seq, slot, order, kw in MODES:
     res[nm_mode] = (tot, per)
     print(f"ИТОГО {nm_mode}: листов {tot['sheets']}, кривых {tot['curves']}, "
           f"★честных {tot['hon']}, утечек {tot['leak']}")
+    # ⚠⚠ СВЕРКА СПИСКА (§6.106, образец `_pool_oracle.py`). Без неё прогон по НЕПОЛНОЙ выборке
+    # завершается успешно и печатает правдоподобные числа — так ветка уже дважды получала
+    # цифру не про тот объём. Здесь она к тому же ловит РАЗЪЕЗД РЕЖИМОВ: если один режим
+    # уронил больше листов, чем другой, сравнивать их дельты нельзя.
+    _sk = sum(SKIP.values())
+    print(f"  СВЕРКА СПИСКА: обработано {tot['sheets']} + пропущено {_sk} = "
+          f"{tot['sheets'] + _sk} против длины списка {len(sheets)}"
+          f"   {'★ СОШЛОСЬ' if tot['sheets'] + _sk == len(sheets) else '⛔ НЕ СОШЛОСЬ'}")
+    for k, v in sorted(SKIP.items(), key=lambda q: -q[1]):
+        print(f"    пропущено «{k}»: {v}")
 T.trace_line = _orig_trace
 
 pickle.dump({"res": res, "fp": FP, "modes": [tuple(m) for m in MODES]},
@@ -227,7 +285,7 @@ base_nm = MODES[0][0]
 (ta, pa) = res[base_nm]
 print(f"\n{'='*78}\n★★ ОТГРУЖАЕМЫЙ ПУТЬ (база = {base_nm}: {ta['hon']} честных / "
       f"{ta['curves']} кривых / {ta['sheets']} листов)\n{'='*78}")
-for nm_mode, _seq, _slot, _order, _kw in MODES[1:]:
+for nm_mode, _seq, _slot, _order, _d0, _kw in MODES[1:]:
     tb, pb = res[nm_mode]
     up = sum(1 for k in pa if pb.get(k, 0) > pa[k]); dn = sum(1 for k in pa if pb.get(k, 0) < pa[k])
     same = sum(1 for k in FP[base_nm] if FP[nm_mode].get(k) == FP[base_nm][k])

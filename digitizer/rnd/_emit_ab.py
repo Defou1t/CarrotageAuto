@@ -38,7 +38,19 @@ OUT = Path(r"F:\nds\output\taskS\emit_ab")
 ap = argparse.ArgumentParser()
 ap.add_argument("--n", type=int, default=12)
 ap.add_argument("--cache", default=r"F:\nds\output\taskS\pick_gate\cache")
+ap.add_argument("--seq", default="", help="чекпойнт селектора; пусто = ЖАДНЫЙ trace2d (§6.106)")
 a = ap.parse_args()
+
+
+def Cfg():
+    """★ §6.106: ПУТЬ ТРАССИРОВКИ ЗАДАЁТ СТЕНД, А НЕ УМОЛЧАНИЕ. `CVParams.seq_model` по умолчанию
+    непустой, и при доступном torch пайплайн ведёт линии ОБУЧЕННЫМ СЕЛЕКТОРОМ. Стенд, наследующий
+    умолчание, меряет РАЗНЫЙ алгоритм на разных машинах — ровно ловушка `_slot_prod_ab.py`."""
+    c = Config(); c.cv.seq_model = a.seq
+    return c
+
+
+print(f"★ режим трассировки: {a.seq or '— ЖАДНЫЙ trace2d (--seq пусто)'}")
 
 _classify = CM.classify
 TR = {}
@@ -114,9 +126,11 @@ print(f"листов: {len(sheets)}   метрика §6.36 по ВЫДАННЫ�
 # C→B = вклад ВЫКЛЮЧЕННОГО ГЕЙТА. Это решает, что можно вносить без смены постановки.
 print(f"{'лист':<42}{'кривых':>7}{'A прод':>8}{'C эмис':>8}{'D флаг':>8}{'B оба':>7}")
 tA = tB = tC = tD = tc = 0
+SKIP, done = {}, 0                      # §6.106: сверка списка — обязательная печать, не отладка
 for n in sheets:
     img = find_image(n)
     if not img:
+        SKIP["нет картинки"] = SKIP.get("нет картинки", 0) + 1
         continue
     m = extract(str(n))
     raw = {c["name"]: c for c in ds.real_curves(m) if any(x != NULL for x in c["xs"])}
@@ -126,11 +140,13 @@ for n in sheets:
         if len(d) >= 50:
             GM[nm] = {y: d[y] for y in sorted(d)}
     if not GM:
+        SKIP["нет эталонных кривых"] = SKIP.get("нет эталонных кривых", 0) + 1
         continue
+    done += 1
     hA = hB = 0
     # A: прод целиком, настоящая classify
     CM.classify = _classify
-    cfg = Config(); cfg.out = OUT / "A" / n.stem[:30]
+    cfg = Cfg(); cfg.out = OUT / "A" / n.stem[:30]
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             _, _, res = pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
@@ -142,7 +158,7 @@ for n in sheets:
     # C: настоящая classify + emit_traces
     CM.classify = _classify
     TR.clear()
-    cfg = Config(); cfg.out = OUT / "C" / n.stem[:30]
+    cfg = Cfg(); cfg.out = OUT / "C" / n.stem[:30]
     hC = 0
     try:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -156,7 +172,7 @@ for n in sheets:
     # ★ Недостающая клетка матрицы: если D ≈ B, весь выигрыш берётся одним флагом, без смены
     # формата выдачи и без вопроса об именах.
     CM.classify = _classify
-    cfg = Config(); cfg.out = OUT / "D" / n.stem[:30]; cfg.cv.trace_flagged = True
+    cfg = Cfg(); cfg.out = OUT / "D" / n.stem[:30]; cfg.cv.trace_flagged = True
     hD = 0
     try:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -169,7 +185,7 @@ for n in sheets:
     # B: §6.33 — форсированный AUTO + emit_traces
     CM.classify = allauto
     TR.clear()
-    cfg = Config(); cfg.out = OUT / "B" / n.stem[:30]
+    cfg = Cfg(); cfg.out = OUT / "B" / n.stem[:30]
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
@@ -182,6 +198,13 @@ for n in sheets:
     print(f"{n.name[:40]:<42}{len(GM):>7}{hA:>8}{hC:>8}{hD:>8}{hB:>7}"
           + ("   ★" if hB > hA else ("   ✗" if hB < hA else "")))
 CM.classify = _classify
+# ⚠⚠ СВЕРКА СПИСКА (§6.106, образец `_pool_oracle.py`): без неё прогон по НЕПОЛНОЙ выборке
+# завершается успешно и печатает правдоподобные числа.
+_sk = sum(SKIP.values())
+print(f"\nСВЕРКА СПИСКА: обработано {done} + пропущено {_sk} = {done + _sk} против длины списка "
+      f"{len(sheets)}   {'★ СОШЛОСЬ' if done + _sk == len(sheets) else '⛔ НЕ СОШЛОСЬ'}")
+for k, v in sorted(SKIP.items(), key=lambda q: -q[1]):
+    print(f"    пропущено «{k}»: {v}")
 print(f"\n{'ИТОГО':<42}{tc:>7}{tA:>8}{tB:>9}")
 if tc:
     print(f"честных: ПРОД {100*tA/tc:.0f}%, путь §6.33 {100*tB/tc:.0f}%")

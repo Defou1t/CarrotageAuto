@@ -161,9 +161,11 @@ PROD = {lbl: sum(v) for lbl, v in PRODPS.items()}     # прод-база, сч�
 print(f"\n{'='*74}\nПРОТОКОЛ: обучен на ОДНОМ наборе, замер на ДВУХ ОСТАЛЬНЫХ (невиданных)\n")
 print(f"{'обучен на':<11}{'замер на':<11}{'классиф.':>10}{'листов↑/↓':>11}"
       f"{'регресс.':>10}{'листов↑/↓':>11}{'прод':>6}{'оракул':>7}{'листов':>7}")
+DONE = SKIPPED = 0              # §6.106: сверка — сколько пар (обучен, замер) реально сошлось
 for ptr, ltr in SETS:
     Xtr, Ytr, _, _, Rtr = D[ltr]
     if Ytr.sum() < 5:
+        SKIPPED += len(SETS) - 1
         print(f"{ltr:<12} мало положительных ({int(Ytr.sum())}) — пропуск"); continue
     clf = GradientBoostingClassifier(n_estimators=150, max_depth=3, random_state=0)
     clf.fit(Xtr, Ytr)
@@ -185,5 +187,13 @@ for ptr, ltr in SETS:
         uc, dc = ud(pc); ur, dr = ud(pr)
         orcps = count_by_score(np.array([1.0 if y else 0.0 for y in Yte]), IDXte, shte, per_sheet=True)
         orc = sum(orcps[k] for k in keep)
+        DONE += 1
         print(f"{ltr:<11}{lte:<11}{sum(pc):>10}{f'{uc}/{dc}':>11}"
               f"{sum(pr):>10}{f'{ur}/{dr}':>11}{sum(bp):>6}{orc:>7}{len(keep):>7}")
+
+# ⚠⚠ СВЕРКА (§6.106): набор, пропущенный из-за нехватки положительных, уносит свои строки молча,
+# и таблица продолжает читаться как полный протокол «каждый на каждом».
+_exp = len(SETS) * (len(SETS) - 1)
+print(f"  СВЕРКА ПРОТОКОЛА: строк {DONE} + пропущено {SKIPPED} = {DONE + SKIPPED} против "
+      f"ожидаемых {_exp} ({len(SETS)} наборов каждый на каждом)"
+      f"   {'★ СОШЛОСЬ' if DONE + SKIPPED == _exp else '⛔ НЕ СОШЛОСЬ'}")

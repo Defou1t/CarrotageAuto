@@ -42,6 +42,10 @@ ap.add_argument("--pools", nargs="+", default=[
     "F:/nds/output/taskS/pools_div"])
 ap.add_argument("--abstain-check", type=int, default=3, help="сколько ОТКАЗНЫХ листов перепрогнать")
 ap.add_argument("--gate", default="frac0.8")
+ap.add_argument("--seq", default="", help="чекпойнт селектора; пусто = ЖАДНЫЙ trace2d (§6.106)")
+# ⚠ §6.106: цитируемое число §6.90 — ИМЕНОВАННАЯ КОНСТАНТА, а не текст внутри print. Число,
+# вшитое в строку, переживает пересчёт того, что описывает, и продолжает звучать уверенно.
+EXCLUDED_690 = 186              # листов, исключённых §6.90 как отказные, из 297
 ap.add_argument("--out", default=r"F:\nds\output\taskS\prod_verify_abstain")
 a = ap.parse_args()
 
@@ -214,6 +218,10 @@ for nm in cand:
         cfg = Config()
         cfg.out = Path(a.out) / tag / q.stem[:40]
         cfg.cv.slot_model = mdl; cfg.cv.slot_gate = a.gate
+        # ★ §6.106: `seq_model` ПИННИТСЯ ТОЖЕ. Сам §6.90 этого не делал и под ComfyUI-питоном мерил
+        # СЕЛЕКТОРНЫЙ путь, нигде этого не объявив; чтобы воспроизвести тот прогон, задайте
+        # --seq seq_model_d45p.pt, чтобы померить ЖАДНЫЙ — оставьте пусто.
+        cfg.cv.seq_model = a.seq
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 pipe_run(str(img), frame_nlgx=str(q), cfg=cfg, stages=False)
@@ -238,4 +246,5 @@ for nm in cand:
 print(f"\n★ ИТОГ ДОПУЩЕНИЯ: идентичных {same}, различающихся {diff}")
 print("⇒ " + ("допущение подтверждено на проверенных листах: исключение отказных из замера правомерно"
                 if diff == 0 else
-                "⛔ ДОПУЩЕНИЕ ЛОЖНО: исключение 186 листов из §6.90 неправомерно, замер пересчитать"))
+                f"⛔ ДОПУЩЕНИЕ ЛОЖНО: исключение {EXCLUDED_690} листов из §6.90 неправомерно, "
+                f"замер пересчитать"))

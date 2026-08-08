@@ -69,9 +69,11 @@ def value_probe(sheets, lam, dxfrac, gate_w):
     Метрики ЛИНЕЙНЫЕ (corr и медиана |отн. ошибки|), т.к. backup — аддитивный сдвиг."""
     from dataset_build import find_las
     out = []
+    SKIP, done = {}, 0          # §6.106: сверка списка — обязательная печать, а не отладка
     for n in sheets:
         las = find_las(n)
         if not las:
+            SKIP["нет LAS"] = SKIP.get("нет LAS", 0) + 1
             continue
         try:
             buf = io.StringIO()
@@ -80,13 +82,17 @@ def value_probe(sheets, lam, dxfrac, gate_w):
                 cols, arr = ds.load_las(str(las))
                 matches = ds.match_las(m, cols, arr)
         except Exception:
+            SKIP["падение чтения"] = SKIP.get("падение чтения", 0) + 1
             continue
         da = m.get("depth_axis") or {}
         if not da.get("bottom_y"):
+            SKIP["нет оси глубин"] = SKIP.get("нет оси глубин", 0) + 1
             continue
         ty, by = da["top_y"], da["bottom_y"]; td, bd = da["top_depth"], da["bottom_depth"]
         if by == ty:
+            SKIP["вырожденная ось"] = SKIP.get("вырожденная ось", 0) + 1
             continue
+        done += 1
         depths = arr[:, 0]
         for c in ds.real_curves(m):
             fam = DL.build_family(m, c); gl = DL.gt_levels(c)
@@ -119,6 +125,13 @@ def value_probe(sheets, lam, dxfrac, gate_w):
                 den = np.where(np.abs(ll) > 1e-9, np.abs(ll), np.nan)
                 row[tag + "_rel"] = float(np.nanmedian(np.abs(vv - ll) / den))
             out.append(row)
+    # ⚠⚠ СВЕРКА СПИСКА (§6.106): «кривых с LAS и цепочкой ≥2 шкал: N» само по себе не говорит,
+    # СКОЛЬКО листов до этого счёта вообще дошло, — а отсев здесь четырёхступенчатый.
+    _sk = sum(SKIP.values())
+    print(f"  СВЕРКА СПИСКА: обработано {done} + пропущено {_sk} = {done + _sk} против длины "
+          f"списка {len(sheets)}   {'★ СОШЛОСЬ' if done + _sk == len(sheets) else '⛔ НЕ СОШЛОСЬ'}")
+    for k_, v_ in sorted(SKIP.items(), key=lambda q: -q[1]):
+        print(f"    пропущено «{k_}»: {v_}")
     return out
 
 
@@ -144,12 +157,14 @@ if a.values:
 def collect(sheets):
     """Дорогая часть (чтение nlgx + плотная GT) — ОДИН раз; перебор параметров потом дешёвый."""
     out = []
+    _skipped = 0
     for n in sheets:
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 m = extract(str(n))
         except Exception:
+            _skipped += 1               # §6.106: молчаливый пропуск листа обязан быть виден
             continue
         well = n.parent.parent.name
         for c in ds.real_curves(m):
@@ -167,6 +182,8 @@ def collect(sheets):
             if len(exp) >= 200:
                 out.append({"well": well, "short": c["name"].split()[0], "fam": fam,
                             "gl": gl, "exp": exp})
+    print(f"  СВЕРКА СПИСКА: обработано {len(sheets) - _skipped} + пропущено {_skipped} = "
+          f"{len(sheets)} против длины списка {len(sheets)}   ★ СОШЛОСЬ")
     return out
 
 
@@ -285,12 +302,15 @@ if a.sweep:
 print(f"{'скважина':<12}{'кривая':<8}{'шкал':>5}{'строк':>7}{'acc':>7}{'база0':>7}"
       f"{'перех.GT':>9}{'нашли':>7}{'|Δстрок|':>9}  вердикт")
 rows = []
-for n in train_sheets(a.sheets):
+_sheets = train_sheets(a.sheets)
+_skipped_main = 0
+for n in _sheets:
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             m = extract(str(n))
     except Exception as e:
+        _skipped_main += 1          # §6.106: молчаливый пропуск листа обязан быть виден
         continue
     well = n.parent.parent.name
     for c in ds.real_curves(m):
@@ -324,6 +344,11 @@ for n in train_sheets(a.sheets):
         print(f"{well:<12}{c['name'].split()[0]:<8}{len(fam):>5}{len(ys):>7}{acc:>7.2f}"
               f"{base0:>7.2f}{len(tg):>9}{len(td):>7}"
               f"{(dm if dm == dm and dm < 1e8 else float('nan')):>9.0f}  {v}")
+
+# ⚠⚠ СВЕРКА СПИСКА (§6.106): «кривых с цепочкой ≥2 шкал» не говорит, сколько листов до этого
+# счёта дошло; лист, упавший на чтении, исчезал молча.
+print(f"  СВЕРКА СПИСКА: обработано {len(_sheets) - _skipped_main} + пропущено {_skipped_main} = "
+      f"{len(_sheets)} против длины списка {len(_sheets)}   ★ СОШЛОСЬ")
 
 if rows:
     A = np.array([r[0] for r in rows]); B = np.array([r[1] for r in rows])

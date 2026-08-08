@@ -164,10 +164,12 @@ for tag, on in (("A прод", False), ("B +генератор", True)):
     ADD["on"] = on; ADD["n"] = 0
     tot = dict(hon=0, curves=0, sheets=0, leak=0)
     per, FP[tag] = {}, {}
+    SKIP = {}                # §6.106: сверка списка — обязательная печать, а не отладка
     print(f"\n{'='*78}\n{tag}: второй генератор {'ВКЛ' if on else 'выкл'}\n{'='*78}")
     for n in sheets:
         img = find_image(n)
         if not img:
+            SKIP["нет картинки"] = SKIP.get("нет картинки", 0) + 1
             continue
         cfg = Config(); cfg.cv.seq_model = a.seq
         cfg.out = Path(a.out) / tag.split()[0] / n.stem[:40]
@@ -175,6 +177,7 @@ for tag, on in (("A прод", False), ("B +генератор", True)):
             with contextlib.redirect_stdout(io.StringIO()):
                 pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
         except Exception as e:
+            SKIP["падение пайплайна"] = SKIP.get("падение пайплайна", 0) + 1
             print(f"  {n.stem[:44]:<46} ПАДЕНИЕ {type(e).__name__}: {e}"); continue
         G = extract(str(n))
         raws = {c["name"]: c for c in G["curves"]
@@ -182,6 +185,7 @@ for tag, on in (("A прод", False), ("B +генератор", True)):
         gts = {nm: dense(c) for nm, c in raws.items()}
         got = next(iter(sorted(cfg.out.glob("*_auto.nlgx"))), None)
         if got is None:
+            SKIP["файл не выдан"] = SKIP.get("файл не выдан", 0) + 1
             print(f"  {n.stem[:44]:<46} файл не выдан"); continue
         W = {c["name"]: dense(c) for c in extract(str(got))["curves"]
              if M.mnem_root(c["name"]) != "DA"}
@@ -197,6 +201,14 @@ for tag, on in (("A прод", False), ("B +генератор", True)):
         per[n.name] = h
         tot["hon"] += h; tot["curves"] += len(gts); tot["sheets"] += 1; tot["leak"] += lk
         print(f"  {n.stem[:42]:<44} кривых {len(gts):>2}  ЧЕСТНЫХ {h}")
+    # ⚠⚠ СВЕРКА СПИСКА (§6.106, образец `_pool_oracle.py`): прогон по неполной выборке
+    # завершается успешно и печатает правдоподобные числа.
+    _sk = sum(SKIP.values())
+    print(f"  СВЕРКА СПИСКА: обработано {tot['sheets']} + пропущено {_sk} = "
+          f"{tot['sheets'] + _sk} против длины списка {len(sheets)}"
+          f"   {'★ СОШЛОСЬ' if tot['sheets'] + _sk == len(sheets) else '⛔ НЕ СОШЛОСЬ'}")
+    for k, v in sorted(SKIP.items(), key=lambda q: -q[1]):
+        print(f"    пропущено «{k}»: {v}")
     res[tag] = (tot, per)
     print(f"ИТОГО {tag}: листов {tot['sheets']}, кривых {tot['curves']}, ★честных {tot['hon']}, "
           f"утечек {tot['leak']}, добавлено трасс {ADD['n']}")

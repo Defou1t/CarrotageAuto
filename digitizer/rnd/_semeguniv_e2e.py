@@ -161,6 +161,9 @@ print(f"режим: {'ОКОННЫЙ СЕЛЕКТОР' if a.seq else 'база'}
       f"{', FLAG снят' if a.force_auto else ''}, уровни lam={LAM} dxfrac={DXF} gate_w={GW}\n")
 
 cfg = Config(); cfg.out = OUT / ("seq" if a.seq else "base")
+# ★ §6.106: путь трассировки ЗАДАЁТ СТЕНД. Умолчание `CVParams.seq_model` непустое, и без этой
+# строки прогон «база» на машине с torch шёл бы СЕЛЕКТОРОМ, нигде этого не объявив.
+cfg.cv.seq_model = a.ckpt if a.seq else ""
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     sheet, traces, res = pipe_run(str(img), frame_nlgx=str(SHEET), cfg=cfg, stages=False)
