@@ -41,6 +41,9 @@ ap.add_argument("--files-from", default="",
                 help="файл со списком путей, ПО ОДНОМУ НА СТРОКУ (utf-8). ⚠ Списки надо передавать "
                      "так или массивом оболочки — подстановка рвёт имена с пробелом и запятой")
 ap.add_argument("--seq", default="", help="чекпойнт селектора; пусто = жадный выбор")
+ap.add_argument("--slot", default="", help="вес обученной раскладки; пусто = раскладка ПРАВИЛОМ "
+                                           "(как во всех пулах до 10.08)")
+ap.add_argument("--slot-gate", default="frac0.2", help="мера уверенности, если --slot задан")
 ap.add_argument("--out", default=r"F:\nds\output\taskS\pool_oracle")
 ap.add_argument("--dump", default="", help="каталог: сохранить ПУЛ трасс + рамку + эталон на лист. "
                                            "Тогда правила раскладки перебираются ОФЛАЙН за секунды, "
@@ -125,6 +128,12 @@ for f in FILES:
         print(f"  {n.stem[:44]:<46} нет картинки"); continue
     cfg = Config(); cfg.out = Path(a.out) / n.stem[:40]
     cfg.cv.seq_model = a.seq                      # §6.71: режим задаёт стенд
+    # ⚠⚠ РАСКЛАДКУ ПИННИМ ТОЖЕ (§6.108). С 10.08 `CVParams.slot_model` НЕ пуста, и колонка
+    # «записано» посчиталась бы ОБУЧЕННОЙ раскладкой — то есть у пулов, собранных до и после
+    # этой даты, столбец значил бы разное, а сравнивают их как один корпус. Умолчание "" =
+    # раскладка ПРАВИЛОМ, как у всех прежних пулов; отклонение объявляется флагом.
+    cfg.cv.slot_model = a.slot
+    cfg.cv.slot_gate = a.slot_gate
     POOL.clear()
     try:
         with contextlib.redirect_stdout(io.StringIO()):
