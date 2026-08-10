@@ -80,6 +80,8 @@ ap.add_argument("--out", default=r"F:\nds\output\taskS\prod_ab_trace")
 # глубины меняет разбор ровно 36 листов из 702, на остальных вход пайплайна побитово тот же).
 # Мерить такую правку на всей выборке — размывать её собственный сигнал. Файл: имя nlgx на строку.
 ap.add_argument("--only-from", default="", help="файл со списком имён nlgx (по одному на строку)")
+ap.add_argument("--wlg-roots", nargs="+", default=[r"F:\nds\projects\Archive"],
+                help=r"корни, где лежат <скважина>/wlg/*.nlgx (держанный набор — intake\sorted)")
 a = ap.parse_args()
 SH_I, SH_N = (int(v) for v in a.shard.split("/"))
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
@@ -95,7 +97,11 @@ def parse_mode(s):
     то есть один и тот же стенд давал бы РАЗНЫЕ пути на разных машинах — ровно запрет §6.71.
     ⚠ `slot` от пути трассировки НЕ зависит (скор считает numpy) и действует на обоих."""
     nm, _, tail = s.partition(":")
-    kw, seq, slot, order, depth0 = {}, None, None, "x_center", False
+    # ⚠⚠ УМОЛЧАНИЕ `depth0` = ПРОД (True). Первая редакция §6.108 перевернула смысл ручки и
+    # оставила умолчание False — и режимы БЕЗ ключа `depth0=` молча пошли ПРЕЖНИМ разбором,
+    # то есть два соседних прогона мерили разные конфигурации прода. Умолчание стенда обязано
+    # совпадать с продом; отклонение от прода объявляется ЯВНО.
+    kw, seq, slot, order, depth0, gate = {}, None, None, "x_center", True, None
     for part in filter(None, tail.split(",")):
         k, _, v = part.partition("=")
         if k == "seq":
@@ -104,11 +110,15 @@ def parse_mode(s):
             slot = v
         elif k == "order":
             order = v or "x_center"
+        elif k == "gate":
+            # §6.108: мера уверенности обученной раскладки — ПО РЕЖИМУ, а не одна на прогон:
+            # сравнивать порога гейта иначе нечем, а именно они и решают, работает ли механизм.
+            gate = v or None
         elif k == "depth0":
-            # §6.107: правка `meta._depth_marker` — принимать интервал, начинающийся с НУЛЯ.
-            # Ручкой режима, а не правкой прода: приор из имени задаёт K и имена слотов, то есть
-            # правка меняет РАСКЛАДКУ, и её эффект на честных кривых обязан быть измерен, а не
-            # выведен из «имён разбирается больше».
+            # §6.108: ПРАВКА УЖЕ В ПРОДЕ, поэтому ручка теперь ВЫКЛЮЧАЕТ её: `depth0=0` = прежнее
+            # поведение (`0 < a`, интервал от нуля не разбирается). Смысл перевёрнут осознанно:
+            # §6.107 померил правку ТОЛЬКО на старом архиве (36 листов, 6 → 6 кривых) и записал
+            # «нейтральна», а на новых скважинах разница между стендами оказалась +34 кривые.
             depth0 = v not in ("", "0")
         else:
             kw[k] = None if v in ("None", "") else (float(v) if k == "slmax" else int(v))
@@ -124,7 +134,7 @@ def parse_mode(s):
     if seq and kw:
         print(f"⚠ режим {nm!r}: при включённом селекторе параметры {list(kw)} НЕ действуют — "
               f"`trace_seq` строит свой трассировщик и правила вершины у него нет вовсе")
-    return nm, seq, slot, order, depth0, kw
+    return nm, seq, slot, order, depth0, gate, kw
 
 
 # ── §6.107: вариант `_depth_marker`, принимающий интервал от НУЛЯ ─────────────────────────────
@@ -133,9 +143,9 @@ def parse_mode(s):
 import inspect, textwrap
 _dm_orig = M._depth_marker
 _ns = dict(M.__dict__)
-exec(compile(textwrap.dedent(inspect.getsource(_dm_orig)).replace("0 < a < 12000", "0 <= a < 12000"),
+exec(compile(textwrap.dedent(inspect.getsource(_dm_orig)).replace("0 <= a < 12000", "0 < a < 12000"),
              "<depth0>", "exec"), _ns)
-_dm_zero = _ns["_depth_marker"]
+_dm_zero = _ns["_depth_marker"]          # ⚠ теперь это ПРЕЖНЕЕ поведение, а прод — вариант с нулём
 if _dm_zero.__code__.co_code == _dm_orig.__code__.co_code:
     sys.exit("⛔ вариант depth0 совпал с продом — подмена сравнения не сработала, замер бессмыслен")
 
@@ -174,12 +184,16 @@ def leaked(tr, raw):
     return False
 
 
+# ⚠ §6.108: КОРНИ РАЗМЕТКИ — СПИСКОМ. Держанные скважины лежат в `intake\sorted`, а не в
+# `projects\Archive`, и стенд, знающий только архив, молча взял бы НОЛЬ листов и отработал.
 WELL, WLG = {}, {}
-for wlg in Path(r"F:\nds\projects\Archive").glob("*/wlg"):
-    for q in wlg.glob("*.nlgx"):
-        WELL[q.name] = wlg.parent.name; WLG[q.name] = q
+for root in a.wlg_roots:
+    for wlg in Path(root).glob("*/wlg"):
+        for q in wlg.glob("*.nlgx"):
+            WELL.setdefault(q.name, wlg.parent.name); WLG.setdefault(q.name, q)
 for q in Path(r"F:\nds\projects\Semeguniv_001\wlg").glob("*.nlgx"):
     WELL.setdefault(q.name, "Semeguniv"); WLG.setdefault(q.name, q)
+print(f"разметки найдено: {len(WLG)} листов в {len(a.wlg_roots)} корнях")
 
 # ── выборка: до --cap листов на СКВАЖИНУ, чтобы плотные скважины не решали за всех ────────────
 # ⚠ Список строится ПО ИМЕНАМ ФАЙЛОВ. Унаследованный цикл `pickle.load` по всем пулам читал 2.35 ГБ
@@ -215,15 +229,15 @@ if SH_N > 1:
     print(f"★ ШАРД {SH_I}/{SH_N}: {len(sheets)} листов × {len(MODES)} режима")
 
 res, FP = {}, {}
-for nm_mode, seq, slot, order, depth0, kw in MODES:
-    M._depth_marker = _dm_zero if depth0 else _dm_orig
+for nm_mode, seq, slot, order, depth0, gate, kw in MODES:
+    M._depth_marker = _dm_orig if depth0 else _dm_zero   # depth0=1 → прод; 0 → прежнее
     T.trace_line = make(kw) if kw else _orig_trace
     tot = dict(hon=0, curves=0, sheets=0, leak=0)
     per, FP[nm_mode] = {}, {}
     SKIP = {}                    # §6.106: сверка списка — обязательная печать, а не отладка
     print(f"\n{'='*78}\n{nm_mode}: seq={seq or '— (жадный trace2d)'}, "
           f"slot={slot or '— (раскладка правилом)'}, order={order}, "
-          f"depth0={'ВКЛ' if depth0 else 'выкл'}, "
+          f"depth0={'ВКЛ' if depth0 else 'выкл'}, гейт={gate or a.slot_gate}, "
           f"{kw or 'константы trace_line по умолчанию'}\n{'='*78}")
     for n in sheets:
         img = find_image(n)
@@ -233,7 +247,7 @@ for nm_mode, seq, slot, order, depth0, kw in MODES:
         cfg = Config()
         cfg.cv.seq_model = seq            # §6.71: путь трассировки задаёт стенд, а не умолчания
         cfg.cv.slot_model = slot          # §6.71: и раскладку тоже — см. шапку про `_slot_prod_ab`
-        cfg.cv.slot_gate = a.slot_gate
+        cfg.cv.slot_gate = gate or a.slot_gate
         cfg.cv.slot_order = order         # §6.105: ключ порядка в раскладке ПРАВИЛОМ
         cfg.out = Path(a.out) / nm_mode.split()[0] / n.stem[:40]
         try:
@@ -285,7 +299,7 @@ base_nm = MODES[0][0]
 (ta, pa) = res[base_nm]
 print(f"\n{'='*78}\n★★ ОТГРУЖАЕМЫЙ ПУТЬ (база = {base_nm}: {ta['hon']} честных / "
       f"{ta['curves']} кривых / {ta['sheets']} листов)\n{'='*78}")
-for nm_mode, _seq, _slot, _order, _d0, _kw in MODES[1:]:
+for nm_mode, _seq, _slot, _order, _d0, _g, _kw in MODES[1:]:
     tb, pb = res[nm_mode]
     up = sum(1 for k in pa if pb.get(k, 0) > pa[k]); dn = sum(1 for k in pa if pb.get(k, 0) < pa[k])
     same = sum(1 for k in FP[base_nm] if FP[nm_mode].get(k) == FP[base_nm][k])
