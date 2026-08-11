@@ -47,7 +47,13 @@ def tfeat(tr):
         return (0., 0., 1., 0., float(len(x)), 0., 0.)
     dx = np.diff(x)
     span = float(np.percentile(x, 90) - np.percentile(x, 10)) or 1.0
-    w = min(101, len(x) // 2 * 2 + 1)
+    # ⚠⚠ ОКНО НЕ ДЛИННЕЕ САМОЙ ТРАССЫ (§6.109). Было `len(x)//2*2+1`: при ЧЁТНОЙ длине это
+    # len(x)+1, а `np.convolve(mode="same")` возвращает max(len(x), w) — вычитание `x - sm`
+    # падало. Любая трасса чётной длины от 6 до 100 точек роняла раскладку, и после включения
+    # `slot_model` по умолчанию (§6.108) это стало падением ПРОДА, а не только стенда.
+    # ⚠ Правка НЕ меняет признаки там, где код работал: при нечётной длине w тот же, при
+    # длине ≥101 окно и было 101. Значит обученный вес остаётся действительным.
+    w = min(101, len(x) if len(x) % 2 else len(x) - 1)
     sm = np.convolve(x, np.ones(w) / w, mode="same") if w >= 3 else x
     return (float(np.median(np.abs(dx))),
             float(np.mean((dx[:-1] * dx[1:]) < 0)) if len(dx) > 2 else 0.,
