@@ -135,13 +135,13 @@ def _parse_gate(spec):
     s = (spec or DEFAULT_GATE).strip()
     if s == "off":
         return ("off", 0.0)
-    for kind in ("frac", "minx"):
+    for kind in ("frac", "minx", "mean"):
         if s.startswith(kind):
             try:
                 return (kind, float(s[len(kind):]))
             except ValueError:
                 break
-    raise ValueError(f"slot_gate={spec!r}: ожидалось frac<порог>, minx<порог> или off")
+    raise ValueError(f"slot_gate={spec!r}: ожидалось frac<порог>, minx<порог>, mean<порог> или off")
 
 
 def map_lines(traces, model, frame, mnemonics_path, cv):
@@ -249,6 +249,14 @@ def assign(slots, by_track, w, kind, thr):
         ok = False
     elif kind == "frac":
         ok = float(np.mean([marg[k] >= 0.3 for k in ks])) >= thr
+    elif kind == "mean":
+        # §6.109: СРЕДНИЙ margin назначенных слотов. На корпусе 2677 листов (202 скважины,
+        # вложенный выбор порога) даёт 832 → 947 против 832 → 894 у `frac` — почти вдвое.
+        # ⚠⚠ КЛИП ±5 ОБЯЗАТЕЛЕН И ПОВТОРЯЕТ СТЕНД (`_slot_abstain.MGS`): у слота с ЕДИНСТВЕННЫМ
+        # кандидатом margin = +∞, и без клипа один такой слот делает среднее бесконечным, то есть
+        # гейт пропускал бы лист всегда. Разойдись клип со стендом — прод считал бы не то, что
+        # померено, и это не всплыло бы: обе стороны «работают».
+        ok = float(np.mean(np.clip([marg[k] for k in ks], -5.0, 5.0))) >= thr
     else:                                              # minx: одиночки — по предсказанной ошибке
         ok = min((marg[k] if ncand[k] > 1 else sc[k] + 2.0) for k in ks) >= thr
     return got if ok else None
@@ -265,7 +273,7 @@ def selftest(model_path=DEFAULT_MODEL):
         return "скор не конечен"
     if len(s) != 3:
         return f"скоров {len(s)}, ждали 3"
-    for g in ("frac0.8", "minx0.0", "off"):
+    for g in ("frac0.8", "minx0.0", "mean0.05", "off"):
         _parse_gate(g)
     return ""
 

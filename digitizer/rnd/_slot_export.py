@@ -23,9 +23,17 @@ from pathlib import Path
 import numpy as np
 from sklearn.ensemble import GradientBoostingRegressor
 
-CACHE = "F:/nds/output/taskS/_slot_abstain_cache_v2.pkl"
+# ⚠ §6.109: кэш и имя веса — АРГУМЕНТАМИ. Корпус вырос с 702 листов до 2677, и переобучение на нём
+# обязано класть НОВЫЙ файл: перезаписать `slot_model_g250.npz` значило бы, что все прежние замеры
+# ветки задним числом относятся неизвестно к чему.
+import argparse
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--cache", default="F:/nds/output/taskS/_slot_abstain_cache_v2.pkl")
+_ap.add_argument("--name", default="slot_model_g250.npz")
+_a = _ap.parse_args()
+CACHE = _a.cache
 OUT = Path(r"F:\nds\Auto\auto\models")
-NAME = "slot_model_g250.npz"
+NAME = _a.name
 
 # ★ ОБЪЯВЛЕНО ДО ПРОГОНА: скважины, на которых будет мериться ОТГРУЗКА, в обучение не идут.
 AUDIT = ["BOGAT_011", "BOGAT_014", "VILHIV_055", "RYBAL_058",
