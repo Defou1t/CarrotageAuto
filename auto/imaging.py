@@ -17,9 +17,31 @@ import cv2
 
 
 def load_rgb(path):
-    from PIL import Image
+    """RGB-массив скана. ОБРЕЗАННЫЙ файл читается частично, но ГРОМКО (§6.108).
+
+    ⚠⚠ ЗАЧЕМ ВТОРАЯ ПОПЫТКА. В партии Бильче-Волыця 18 TIFF пришли с битой картой полос
+    (`decoder error -2`, `TIFFFillStrip: Invalid strip byte count 0`), и лист падал целиком —
+    пайплайн не выдавал НИЧЕГО. PIL те же файлы читает, если разрешить обрезанные: проверено,
+    15 МБ TIFF раскрывается в 1756×24081. Терять 18 листов из-за хвоста файла незачем.
+    ⚠ НО МОЛЧА ПРИНИМАТЬ ОБРЕЗАННУЮ КАРТИНКУ НЕЛЬЗЯ: у неё не хватает низа, трасса выйдет
+    короче эталона, и это будет выглядеть как ошибка ВЕДЕНИЯ, а не как дефект данных. Поэтому
+    флаг включается ТОЛЬКО на повторной попытке, тут же снимается, и печатается предупреждение.
+    ⚠ Флаг PIL — глобальный на процесс; снимаем его в `finally`, чтобы соседний лист не прочитался
+    обрезанным незаметно."""
+    from PIL import Image, ImageFile
     Image.MAX_IMAGE_PIXELS = None
-    return np.asarray(Image.open(path).convert("RGB"))
+    try:
+        return np.asarray(Image.open(path).convert("RGB"))
+    except OSError as e:
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        try:
+            arr = np.asarray(Image.open(path).convert("RGB"))
+        finally:
+            ImageFile.LOAD_TRUNCATED_IMAGES = False
+        print(f"⚠⚠ {path}: ФАЙЛ ОБРЕЗАН ({type(e).__name__}: {str(e)[:60]}) — прочитан ЧАСТИЧНО, "
+              f"{arr.shape[1]}×{arr.shape[0]}. Низа скана может не хватать: короткая трасса на "
+              f"этом листе — дефект ДАННЫХ, а не ведения.")
+        return arr
 
 
 # ── МЕМО-КЭШ чистых карт по identity скана (профиль 20.07: structure_mask с морфологией на

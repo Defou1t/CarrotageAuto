@@ -80,9 +80,19 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     rows = []
     files = []
-    for well in WELLS:
-        files += [(well, f) for f in sorted(glob.glob(os.path.join(ARCHIVE, well, "wlg", "*.nlgx")))
-                  if "_auto" not in os.path.basename(f).lower()]
+    # ⚠ §6.108: список планшетов — АРГУМЕНТОМ, а не зашитыми двумя скважинами. Джиттер эталона
+    # нужен ПО СОРТАМ (A — проверено экспертом, B — «почти правильное»): без разреза по сорту
+    # число описывает неизвестно чью разметку. Файл: путь к nlgx на строку.
+    if len(sys.argv) > 1:
+        for ln in open(sys.argv[1], encoding="utf-8"):
+            ln = ln.strip().strip('"')
+            if ln and "_auto" not in os.path.basename(ln).lower():
+                files.append((os.path.basename(os.path.dirname(os.path.dirname(ln))), ln))
+        print(f"список: {sys.argv[1]}")
+    else:
+        for well in WELLS:
+            files += [(well, f) for f in sorted(glob.glob(os.path.join(ARCHIVE, well, "wlg", "*.nlgx")))
+                      if "_auto" not in os.path.basename(f).lower()]
     print(f"планшетов: {len(files)}")
     for k, (well, nlgx) in enumerate(files, 1):
         stem = os.path.basename(nlgx)

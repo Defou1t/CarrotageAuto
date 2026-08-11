@@ -40,7 +40,11 @@ NOW = time.time()
 
 # ★ ПУЛЫ — сохраняются всегда. Список ЯВНЫЙ, а не по маске `pools*`: маска подхватила бы и
 # `pools_g114`, который на самом деле дубль, и любой будущий `pools_smoke`.
-KEEP_POOLS = ["pools", "pools_gate", "pools_wide", "pools_more", "pools_div", "pools_seq"]
+KEEP_POOLS = ["pools", "pools_gate", "pools_wide", "pools_more", "pools_div", "pools_seq",
+              # §6.108: держанный набор (§6.107) и полный корпус выросшего архива. Раньше их
+              # защищала лишь проверка дублей («уникальные дампы есть ⇒ не трогаю») — защита
+              # ПОБОЧНАЯ: стоит появиться дублю этих листов в другом каталоге, и она отпадёт.
+              "pools_heldout", "pools_all"]
 # ВЫДАЧА A/B: корни, под которыми лежат полистные деревья. Файлы В КОРНЕ каждого (pkl, логи,
 # json со сводкой) остаются — в них и живут числа.
 EMIT_ROOTS = ["prod_ab_slot", "prod_ab_trace", "prod_ab_seq", "prod_ab", "pool_oracle_seq",
