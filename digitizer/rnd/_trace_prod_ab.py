@@ -101,7 +101,7 @@ def parse_mode(s):
     # оставила умолчание False — и режимы БЕЗ ключа `depth0=` молча пошли ПРЕЖНИМ разбором,
     # то есть два соседних прогона мерили разные конфигурации прода. Умолчание стенда обязано
     # совпадать с продом; отклонение от прода объявляется ЯВНО.
-    kw, seq, slot, order, depth0, gate = {}, None, None, "x_center", True, None
+    kw, seq, slot, order, depth0, gate, prob = {}, None, None, "x_center", True, None, ""
     for part in filter(None, tail.split(",")):
         k, _, v = part.partition("=")
         if k == "seq":
@@ -110,6 +110,11 @@ def parse_mode(s):
             slot = v
         elif k == "order":
             order = v or "x_center"
+        elif k == "prob":
+            # §6.110: recall-модель переднего плана (`config.prob_provider`). §6.3 закрыл её
+            # выводом «на чернилах работает, на выдачу не переносится», но это замер ИЮЛЯ — до
+            # селектора и до починки отбора. Тогда выигрыш было чем съесть; теперь проверяем заново.
+            prob = v
         elif k == "gate":
             # §6.108: мера уверенности обученной раскладки — ПО РЕЖИМУ, а не одна на прогон:
             # сравнивать порога гейта иначе нечем, а именно они и решают, работает ли механизм.
@@ -134,7 +139,7 @@ def parse_mode(s):
     if seq and kw:
         print(f"⚠ режим {nm!r}: при включённом селекторе параметры {list(kw)} НЕ действуют — "
               f"`trace_seq` строит свой трассировщик и правила вершины у него нет вовсе")
-    return nm, seq, slot, order, depth0, gate, kw
+    return nm, seq, slot, order, depth0, gate, prob, kw
 
 
 # ── §6.107: вариант `_depth_marker`, принимающий интервал от НУЛЯ ─────────────────────────────
@@ -150,6 +155,13 @@ if _dm_zero.__code__.co_code == _dm_orig.__code__.co_code:
     sys.exit("⛔ вариант depth0 совпал с продом — подмена сравнения не сработала, замер бессмыслен")
 
 MODES = [parse_mode(s) for s in a.mode]
+_PROV = {}
+for _m in MODES:
+    _ck = _m[6]
+    if _ck and _ck not in _PROV:
+        from auto.prob import make_prob_provider
+        _PROV[_ck] = make_prob_provider(_ck)
+        print(f"★ recall-модель загружена: {_ck}")
 _orig_trace = T.trace_line
 
 
@@ -229,7 +241,7 @@ if SH_N > 1:
     print(f"★ ШАРД {SH_I}/{SH_N}: {len(sheets)} листов × {len(MODES)} режима")
 
 res, FP = {}, {}
-for nm_mode, seq, slot, order, depth0, gate, kw in MODES:
+for nm_mode, seq, slot, order, depth0, gate, prob, kw in MODES:
     M._depth_marker = _dm_orig if depth0 else _dm_zero   # depth0=1 → прод; 0 → прежнее
     T.trace_line = make(kw) if kw else _orig_trace
     tot = dict(hon=0, curves=0, sheets=0, leak=0)
@@ -248,6 +260,9 @@ for nm_mode, seq, slot, order, depth0, gate, kw in MODES:
         cfg.cv.seq_model = seq            # §6.71: путь трассировки задаёт стенд, а не умолчания
         cfg.cv.slot_model = slot          # §6.71: и раскладку тоже — см. шапку про `_slot_prod_ab`
         cfg.cv.slot_gate = gate or a.slot_gate
+        # ⚠ Провайдер строится ОДИН раз на процесс: загрузка чекпойнта и сборка сети на каждый
+        # лист съели бы больше, чем сам инференс.
+        cfg.prob_provider = _PROV.get(prob) if prob else None
         cfg.cv.slot_order = order         # §6.105: ключ порядка в раскладке ПРАВИЛОМ
         cfg.out = Path(a.out) / nm_mode.split()[0] / n.stem[:40]
         try:
@@ -299,7 +314,7 @@ base_nm = MODES[0][0]
 (ta, pa) = res[base_nm]
 print(f"\n{'='*78}\n★★ ОТГРУЖАЕМЫЙ ПУТЬ (база = {base_nm}: {ta['hon']} честных / "
       f"{ta['curves']} кривых / {ta['sheets']} листов)\n{'='*78}")
-for nm_mode, _seq, _slot, _order, _d0, _g, _kw in MODES[1:]:
+for nm_mode, _seq, _slot, _order, _d0, _g, _p, _kw in MODES[1:]:
     tb, pb = res[nm_mode]
     up = sum(1 for k in pa if pb.get(k, 0) > pa[k]); dn = sum(1 for k in pa if pb.get(k, 0) < pa[k])
     same = sum(1 for k in FP[base_nm] if FP[nm_mode].get(k) == FP[base_nm][k])
