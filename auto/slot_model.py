@@ -176,7 +176,7 @@ def map_lines(traces, model, frame, mnemonics_path, cv):
     by_track = {}
     for L, tr in traces:
         by_track.setdefault(L.track_index, []).append((L, tr))
-    got = assign(slots, by_track, w, kind, thr)
+    got = assign(slots, by_track, w, kind, thr, sib=float(getattr(cv, "slot_sib", 0.0) or 0.0))
     if got is None:
         _announce("  (лист(ы) не прошли меру уверенности — там раскладка ПРАВИЛОМ)")
         return None
@@ -211,16 +211,56 @@ def rows(slots, by_track):
     return (np.array(out, float) if out else np.zeros((0, NF))), pairs
 
 
-def assign(slots, by_track, w, kind, thr):
+def _sib_term(slots, pairs):
+    """§6.130: согласие ранга слота по индексу зонда с рангом кандидата по x, [0..1] на пару."""
+    import re as _re
+    fam = {}
+    for s in slots:
+        tok = s["name"].split()[0]
+        m = _re.match(r"^([A-Za-z_]+)(\d+)$", tok)
+        if m:
+            fam.setdefault((s["track"], m.group(1)), []).append((int(m.group(2)), s["name"]))
+    rank = {}
+    for key, items in fam.items():
+        if len(items) < 2:
+            continue
+        for r, (_, nm) in enumerate(sorted(items)):
+            rank[nm] = (r, len(items), key)
+    out = np.zeros(len(pairs))
+    if not rank:
+        return out
+    for key in {v[2] for v in rank.values()}:
+        ks = [k for k in range(len(pairs)) if rank.get(pairs[k][0], (0, 0, None))[2] == key]
+        if not ks:
+            continue
+        uniq = sorted({pairs[k][1].x_center for k in ks})
+        for k in ks:
+            r, n, _ = rank[pairs[k][0]]
+            fx = uniq.index(pairs[k][1].x_center) / max(1, len(uniq) - 1)
+            fs = r / max(1, n - 1)
+            out[k] = 1.0 - abs(fx - fs)
+    return out
+
+
+def assign(slots, by_track, w, kind, thr, sib=0.0):
     """Ядро: признаки → скор → жадное 1:1 → отказ листом. None = отказ.
 
     Вынесено из `map_lines`, чтобы стенд мог сверить прод-путь с обучением ПО ПУЛАМ, не запуская
     пайплайн (`_slot_parity.py`). slots — список dict(name, track, color, cls);
-    by_track — {трек: [(Line, {row: x})]}, у Line нужны .color, .behavior, .x_center."""
+    by_track — {трек: [(Line, {row: x})]}, у Line нужны .color, .behavior, .x_center.
+
+    ★ §6.130: `sib` — вес добавки «порядок зондов в семействе». 0.0 = ПРОД, поведение бит-в-бит
+    прежнее. Раскладка путает братские зонды одного семейства (GZ1…GZ5): из 14 признаков ни один
+    не кодирует, который из зондов перед нами. Добавка сближает ранг слота по индексу зонда с
+    рангом кандидата по x. Эталон не нужен — оба ранга известны на месте.
+    ⚠ Направление конвенции ОДНО и прямое: по листу его выбрать нельзя (неоткуда узнать без
+    эталона), берётся большинство — 53% против 20% (§6.129)."""
     X, pairs = rows(slots, by_track)
     if not len(X):
         return None
     sc = predict(w, X)
+    if sib:
+        sc = sc + sib * _sib_term(slots, pairs)
 
     # ── margin ПАРЫ внутри слота: её скор минус лучший из ОСТАЛЬНЫХ кандидатов этого слота ─────
     per_slot = {}

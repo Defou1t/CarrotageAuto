@@ -19,7 +19,7 @@ r"""_intake_sort.py — РАЗБОР СВАЛКИ ФАЙЛОВ В СТРУКТУ
 
   <python> _intake_sort.py --src <папка…> [--dst F:\nds\projects\Inbox] [--apply]
 """
-import sys, argparse, re, shutil, hashlib
+import sys, os, argparse, re, shutil, hashlib
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 from pathlib import Path
 from collections import defaultdict
@@ -36,8 +36,19 @@ ap.add_argument("--src", nargs="+", required=True, help="папки со сва�
 # следующий прогон зеркала их увезёт. Соседний `intake\` ничему не принадлежит и безопасен.
 # В боевой `Archive` комплекты переносятся ОТДЕЛЬНЫМ шагом, ПОСЛЕ анализа (`_intake_merge.py`).
 ap.add_argument("--dst", default=r"E:\Carrotagki_auto\intake\sorted")
-ap.add_argument("--apply", action="store_true", help="реально копировать (без флага — только отчёт)")
+ap.add_argument("--apply", action="store_true", help="реально раскладывать (без флага — только отчёт)")
+# ⚠⚠ РАСКЛАДКА ЖЁСТКИМИ ССЫЛКАМИ, А НЕ КОПИЕЙ. Источников набралось 240 ГБ, из них 902 архива на
+# 220 ГБ; после распаковки свободного остаётся ~160 ГБ, и копия разложенного туда НЕ ВЛЕЗАЕТ.
+# Жёсткая ссылка на том же томе не занимает места и создаётся мгновенно, а исходник остаётся цел —
+# удаление разложенного каталога данные не трогает. `copy` оставлен для разных томов.
+ap.add_argument("--mode", default="link", choices=["link", "copy"],
+                help="link — жёсткие ссылки (по умолчанию), copy — копирование")
+ap.add_argument("--min-free", type=float, default=25.0,
+                help="ГБ: ниже этого распаковка останавливается")
 ap.add_argument("--report", default="", help="куда положить список неполных комплектов (txt)")
+# Приоритет источников при расхождении версий одного листа. Чем раньше — тем главнее.
+ap.add_argument("--priority", default="for bodya_cherk,from bodya,from group,unpacked,from telegram",
+                help="подстроки путей через запятую, по убыванию доверия")
 # ⚠ Выгрузка чата содержит rar/zip. Их надо РАСПАКОВАТЬ, иначе комплекты внутри невидимы. Распаковка
 # идёт в отдельный каталог рядом с приёмкой и делается один раз (повторный запуск её пропускает).
 ap.add_argument("--unpack", default=r"E:\Carrotagki_auto\intake\unpacked",
@@ -52,8 +63,10 @@ a = ap.parse_args()
 # Дата в начале скобочной конвенции бывает и ДИАПАЗОНОМ: `1965.12.29-1966.01.12_Rybal_058_…`
 # и `1966.02.24-11.16_Rybal_057_…`. Одиночная дата покрывала лишь часть — вхолостую 388 файлов
 # остались неразобранными именно из-за этого.
-RE_DATE = re.compile(r"^\d{4}[.\-]\d{2}[.\-]\d{2}"
-                     r"(?:\s*-\s*(?:\d{4}[.\-])?\d{2}[.\-]\d{2})?[_\-]+(.+)$")
+# Разделитель внутри даты бывает точкой, дефисом И ПОДЧЁРКИВАНИЕМ: `1973_06_09_Rybal_137_…`
+# (найдено на полном разборе — часть из 997 неразобранных имён).
+RE_DATE = re.compile(r"^\d{4}[._\-]\d{2}[._\-]\d{2}"
+                     r"(?:\s*-\s*(?:\d{4}[._\-])?\d{2}[._\-]\d{2})?[_\-]+(.+)$")
 # Имя скважины бывает и СОСТАВНЫМ: `Pn_Zavoda_1_AK_…` (вхолостую — 372 файла мимо разбора).
 # Буквенных токенов может быть несколько, номер — первый числовой токен после них.
 # Разделитель перед номером БЫВАЕТ ОПУЩЕН: архивы зовутся `Andriyashivska11`, `Voloshkivska-10`.
@@ -144,6 +157,11 @@ def unpack_all(srcs, dst):
                 out = dst / (mp.group(1) if mp else p.stem)
                 if out.exists():
                     done += 1; continue
+                # ⚠ СТОРОЖ МЕСТА: архивов 902 на 220 ГБ, распаковка их удваивает. Забить диск на
+                # машине, где идут расчёты, — отдельная поломка; лучше остановиться и сказать.
+                if shutil.disk_usage(str(dst)).free / (1 << 30) < a.min_free:
+                    failed.append((p.name, f"остановлено: свободно < {a.min_free} ГБ"))
+                    return done, n, failed
                 out.mkdir(parents=True, exist_ok=True)
                 try:
                     if p.suffix.lower() == ".zip":
@@ -206,6 +224,20 @@ for s in a.src:
 print(f"найдено файлов: {len(files)} в {len(a.src)} источник(ах)"
       + (f"; ⚠ пропущено НАШЕЙ выдачи `_auto`: {skipped_auto}" if skipped_auto else ""))
 
+# ── приоритет источников при расхождении версий ───────────────────────────────────────────────
+# ⚠⚠ ПОРЯДОК ЗАДАЁТ ВЛАДЕЛЕЦ, А НЕ СКРИПТ. Правило Эдуарда (02.08): при совпадении листа берётся
+# версия из `for Bodya_Cherk` — это то, что реально сдавалось заказчику ПОСЛЕ проверки экспертом.
+# Остальное — «почти правильное»: возможны ошибки оцифровки, имён методов, шкал axis/depth.
+# Чем РАНЬШЕ источник в списке, тем он главнее. Неизвестный источник — в самый конец.
+def PRIO(p):
+    s = str(p).replace("\\", "/").lower()
+    for i, key in enumerate(PRIO_KEYS):
+        if key in s:
+            return i
+    return len(PRIO_KEYS)
+
+
+PRIO_KEYS = [k.strip().lower() for k in a.priority.split(",") if k.strip()]
 sets, unknown, dupes = defaultdict(dict), [], []
 for p in files:
     stem = p.stem
@@ -215,10 +247,20 @@ for p in files:
     ext = p.suffix.lower()
     k = "img" if ext in IMG else KIND[ext]
     slot = sets[(w, stem)]
-    if k in slot and slot[k] != p:
-        # одинаковый stem и вид, но разные файлы — решать должен человек
-        if slot[k].stat().st_size != p.stat().st_size or sha1(slot[k]) != sha1(p):
-            dupes.append((w, stem, k, slot[k], p)); continue
+    old = slot.get(k)
+    if old is not None and old != p:
+        # ⚠⚠ ОДИН ЛИСТ В НЕСКОЛЬКИХ ВЕРСИЯХ — это НОРМА для этого архива, а не сбой. Проверено на
+        # `Bilch_Volyts_203_…_AK_1076_1493`: nlgx 136974 / 134462 / 136936 байт в трёх источниках,
+        # причём `.bck` из группы совпадает по размеру с `.nlgx` из экспорта ⇒ экспорт СТАРЕЕ, его
+        # разметка после правки эксперта уехала в резервную копию.
+        # ⇒ Молча пропускать нельзя (потеряем лист) и молча брать первый попавшийся тоже нельзя.
+        # Берём версию из источника ВЫШЕ ПО ПРИОРИТЕТУ, а проигравшую записываем в отчёт.
+        if old.stat().st_size != p.stat().st_size or sha1(old) != sha1(p):
+            if PRIO(p) < PRIO(old):
+                dupes.append((w, stem, k, old, p)); slot[k] = p
+            else:
+                dupes.append((w, stem, k, p, old))
+            continue
     slot.setdefault(k, p)
 
 # ── что УЖЕ есть в боевом архиве ──────────────────────────────────────────────────────────────
@@ -260,7 +302,7 @@ print(f"{'  nlgx + img, НЕТ las':<38}{len(no_las):>6}   годен для р�
 print(f"{'⚠ nlgx БЕЗ img':<38}{len(no_img):>6}   ← искать скан В ПЕРВУЮ ОЧЕРЕДЬ (есть эталон)")
 print(f"{'  img БЕЗ nlgx':<38}{len(no_nlgx):>6}   нечем мерить: скан без разметки эксперта")
 print(f"{'⛔ имя не разобрано':<38}{len(unknown):>6}   скважина не определена, не раскладываю")
-print(f"{'⛔ конфликт (один stem, разные файлы)':<38}{len(dupes):>6}   решать вручную")
+print(f"{'· версий одного листа разошлось':<38}{len(dupes):>6}   взята из источника выше по приоритету")
 print(f"{'· уже в боевом архиве (совпал байт-в-байт)':<38}{len(already):>6}   пропускаю")
 print(f"{'⚠ тот же лист, но ДРУГАЯ версия файла':<38}{len(differs):>6}   ← смотреть вам: что новее")
 if differs:
@@ -285,19 +327,102 @@ for w, stem, k, x, y in dupes[:10]:
     print(f"  конфликт {k}: {stem[:50]} — {x.parent.name}/ против {y.parent.name}/")
 
 if a.report:
-    Path(a.report).write_text(
-        "\n".join(["# NLGX БЕЗ СКАНА (искать в первую очередь)"] + [s for _, s, _ in no_img]
-                  + ["", "# IMG БЕЗ NLGX"] + [s for _, s, _ in no_nlgx]
-                  + ["", "# ИМЯ НЕ РАЗОБРАНО"] + [p.name for p in unknown]), encoding="utf-8")
-    print(f"\nсписок недостающего → {a.report}")
+    # ⚠ ГЛАВНОЕ В ОТЧЁТЕ — СПИСОК СКВАЖИН, А НЕ ФАЙЛОВ (запрос Эдуарда 02.08: «чтобы не теряться в
+    # каждом подфайле»). Семь с половиной тысяч имён листов невозможно использовать как список
+    # поиска; список из полусотни скважин — можно. Поэтому сначала скважины, потом уже подробности.
+    # ⚠⚠ СКАН МОЖЕТ УЖЕ ЛЕЖАТЬ В БОЕВОМ АРХИВЕ. Без этой проверки отчёт писал «BOGAT_011 — нет 179
+    # из 180», хотя у этой скважины в `F:\nds\projects\Archive\BOGAT_011\img` сканы есть. Список
+    # поиска, отправляющий искать уже имеющееся, хуже отсутствия списка.
+    HAVE_IMG = {stem for stem, kinds in HAVE.items() if any(e in IMG for e in kinds)}
+    per_well = defaultdict(lambda: [0, 0])          # скважина → [листов всего, из них со сканом]
+    for (w, stem), got in sets.items():
+        per_well[w][0] += 1
+        per_well[w][1] += ("img" in got or stem in HAVE_IMG)
+    none_img = sorted(w for w, (t, i) in per_well.items() if i == 0)
+    part_img = sorted(((w, t - i, t) for w, (t, i) in per_well.items() if 0 < i < t),
+                      key=lambda q: -(q[1]))
+    lines = [f"# СКВАЖИНЫ БЕЗ ЕДИНОГО СКАНА — {len(none_img)} шт "
+             f"(есть разметка, изображений нет вообще)", ""]
+    for i in range(0, len(none_img), 8):            # по 8 в строку: список для глаз, не для машины
+        lines.append(", ".join(none_img[i:i + 8]))
+    lines += ["", f"# СКВАЖИНЫ, ГДЕ СКАНОВ НЕ ХВАТАЕТ ЧАСТИЧНО — {len(part_img)} шт "
+                  f"(формат: скважина — нет N из M листов)", ""]
+    lines += [f"{w} — нет {miss} из {tot}" for w, miss, tot in part_img]
+    lines += ["", "=" * 78, f"# ПОДРОБНО: NLGX БЕЗ СКАНА, {len(no_img)} листов", ""]
+    lines += [s for _, s, _ in no_img]
+    lines += ["", f"# IMG БЕЗ NLGX, {len(no_nlgx)} (часто это скан с именем от сканера — "
+                  f"по имени в пару не встанет, хотя лист может быть тот же)", ""]
+    lines += [s for _, s, _ in no_nlgx]
+    lines += ["", f"# ИМЯ НЕ РАЗОБРАНО, {len(unknown)}", ""]
+    lines += [p.name for p in unknown]
+    # ⚠ ОДНА СКВАЖИНА ПОД РАЗНЫМИ НАПИСАНИЯМИ — `BVp_32` / `bvp_32` / `БВп_32`, `SKVORTS_012` /
+    # `SKVRTS_012`. Сливать их автоматически НЕЛЬЗЯ: латиница и кириллица могут оказаться разными
+    # скважинами, а ошибка слияния тихо испортит и обучение, и разрез по семействам. Поэтому —
+    # только СПИСОК ПОДОЗРЕНИЙ для человека. Группируем по регистру и по номеру скважины.
+    byl = defaultdict(set)
+    for w in per_well:
+        byl[w.lower()].add(w)
+    same_case = [sorted(v) for v in byl.values() if len(v) > 1]
+    # ⚠ ГРУППИРОВКА ПО НОМЕРУ ДАЁТ ЛОЖНЫЕ СОВПАДЕНИЯ: `KOBZIV_107, MARKIV_107, YULIIV_107, БВп_107`
+    # — это РАЗНЫЕ скважины с одинаковым номером. Полезен только случай, когда совпадает и номер,
+    # и ПЕРВАЯ БУКВА основы после транслитерации кириллицы: `Bilch_Volyts_403` ↔ `БВп_403`.
+    TR = str.maketrans("абвгдежзиклмнопрстуфхцчшы", "abvgdejziklmnoprstufhcchy")
+    def key(w):
+        m = re.match(r"^(.*?)[_\-]?(\d+)$", w)
+        if not m:
+            return None
+        base = m.group(1).lower().translate(TR)
+        base = re.sub(r"[^a-z]", "", base)
+        return (base, str(int(m.group(2))))
+
+    def dist(x, y):                                 # расстояние редактирования, потолок 3
+        if abs(len(x) - len(y)) > 2:
+            return 9
+        prev = list(range(len(y) + 1))
+        for i, cx in enumerate(x, 1):
+            cur = [i]
+            for j, cy in enumerate(y, 1):
+                cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (cx != cy)))
+            prev = cur
+        return prev[-1]
+
+    # ⚠ Двух первых букв основы МАЛО: `KREMEN_063` и `KRUZH_063` — разные месторождения, а список
+    # с третью ложных срабатываний перестают читать. Требуем совпадение номера И близость основ.
+    bynum = defaultdict(list)
+    for w in per_well:
+        k = key(w)
+        if k:
+            bynum[k[1]].append((k[0], w))
+    susp = []
+    for num, items in bynum.items():
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                (b1, w1), (b2, w2) = items[i], items[j]
+                if w1.lower() != w2.lower() and dist(b1, b2) <= 2:
+                    susp.append(sorted([w1, w2]))
+    if same_case or susp:
+        lines += ["", "=" * 78,
+                  "# ⚠ ВОЗМОЖНО ОДНА И ТА ЖЕ СКВАЖИНА ПОД РАЗНЫМИ ИМЕНАМИ (не сливал — решать вам)",
+                  "# ⚠ АББРЕВИАТУРЫ ЗДЕСЬ НЕ НАЙДУТСЯ: `БВп_403` и `Bilch_Volyts_403` — это одна",
+                  "#   скважина, но «БВп» = сокращение «Білче-Волиця», а не другое написание.",
+                  "#   Строковым правилом такую пару не поймать; их надо назвать вручную.",
+                  ""]
+        lines += ["различие только в регистре: " + ", ".join(g) for g in same_case]
+        lines += ["та же основа и номер (кириллица/латиница): " + ", ".join(g) for g in susp[:60]]
+    Path(a.report).write_text("\n".join(lines), encoding="utf-8")
+    print(f"\n★ СКВАЖИН БЕЗ ЕДИНОГО СКАНА: {len(none_img)}; частично не хватает у {len(part_img)}")
+    if none_img:
+        print("  " + ", ".join(none_img[:14]) + (" …" if len(none_img) > 14 else ""))
+    print(f"список недостающего → {a.report}")
 
 # ── раскладка ─────────────────────────────────────────────────────────────────────────────────
 if not a.apply:
     print("\n★ Это ОТЧЁТ. Ничего не скопировано. Разложить: тот же вызов с --apply")
     sys.exit()
-n = 0
+SKIP = {(x, y) for x, y, _ in already}
+n, linked, copied, failed = 0, 0, 0, 0
 for (w, stem), got in sets.items():
-    if stem in HAVE and (w, stem) in {(x, y) for x, y, _ in already}:
+    if (w, stem) in SKIP:                       # уже есть в боевом архиве байт-в-байт
         continue
     if "wlg" not in got and "img" not in got:
         continue
@@ -305,6 +430,22 @@ for (w, stem), got in sets.items():
         d = Path(a.dst) / w / FOLDER[k]
         d.mkdir(parents=True, exist_ok=True)
         dst = d / p.name
-        if not dst.exists():
-            shutil.copy2(p, dst); n += 1
-print(f"\n★ скопировано файлов: {n} → {a.dst} (исходники не тронуты)")
+        if dst.exists():
+            continue
+        try:
+            if a.mode == "link":
+                os.link(p, dst); linked += 1
+            else:
+                shutil.copy2(p, dst); copied += 1
+        except OSError:
+            # другой том либо ФС без жёстких ссылок: молча терять файл нельзя, копируем
+            try:
+                shutil.copy2(p, dst); copied += 1
+            except OSError as e:
+                failed += 1
+                if failed <= 5:
+                    print(f"  ⛔ не разложен {p.name[:50]}: {e}")
+        n += 1
+print(f"\n★ разложено файлов: {n} → {a.dst}  (ссылок {linked}, копий {copied}"
+      + (f", ⛔ НЕ УДАЛОСЬ {failed}" if failed else "") + ")")
+print("  исходники не тронуты; жёсткая ссылка места не занимает, удаление каталога данные не удалит")

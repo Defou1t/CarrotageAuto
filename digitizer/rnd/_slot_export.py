@@ -30,6 +30,10 @@ import argparse
 _ap = argparse.ArgumentParser()
 _ap.add_argument("--cache", default="F:/nds/output/taskS/_slot_abstain_cache_v2.pkl")
 _ap.add_argument("--name", default="slot_model_g250.npz")
+# ★ §6.123: держанный набор списком из файла — для перекрёстной проверки НА ВЫДАЧЕ, где каждый фолд
+# требует своего веса. Без файла поведение прежнее: держится зашитый AUDIT (§6.49).
+_ap.add_argument("--holdout-file", default="",
+                 help="файл со списком держанных скважин (по одной на строку); заменяет AUDIT")
 _a = _ap.parse_args()
 CACHE = _a.cache
 OUT = Path(r"F:\nds\Auto\auto\models")
@@ -38,6 +42,11 @@ NAME = _a.name
 # ★ ОБЪЯВЛЕНО ДО ПРОГОНА: скважины, на которых будет мериться ОТГРУЗКА, в обучение не идут.
 AUDIT = ["BOGAT_011", "BOGAT_014", "VILHIV_055", "RYBAL_058",
          "LOBACH_032", "KREMEN_057", "RYBAL_018", "RYBAL_168"]
+if _a.holdout_file:
+    AUDIT = [ln.strip() for ln in Path(_a.holdout_file).read_text(encoding="utf-8").splitlines()
+             if ln.strip()]
+    print(f"★ ДЕРЖАННЫЕ ИЗ ФАЙЛА {_a.holdout_file}: {len(AUDIT)} скважин "
+          f"(зашитый AUDIT не используется)")
 FEATS = ["color_eq", "color_none", "class_ok", "class_sp", "rank", "x_center", "med",
          "wig", "rev", "rough", "span", "npts", "n_lines", "dy"]
 

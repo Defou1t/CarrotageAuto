@@ -13,7 +13,7 @@ r"""_slot_cv.py — ЧЕСТНАЯ ПЕРЕКРЁСТНАЯ ПРОВЕРКА О�
 
   <ComfyUI>\python_embeded\python.exe _slot_cv.py [--folds 4]
 """
-import sys, argparse, pickle
+import sys, argparse, pickle, json
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 from pathlib import Path
 import numpy as np
@@ -25,6 +25,9 @@ ap.add_argument("--pools", nargs="+", default=[
     "F:/nds/output/taskS/pools_wide", "F:/nds/output/taskS/pools_more",
     "F:/nds/output/taskS/pools_div"])
 ap.add_argument("--folds", type=int, default=4)
+# ★ §6.120: без полистных счётчиков у прироста нет ШУМА, а без шума он не довод (§6.118).
+# Дамп необязателен и на счёт не влияет: {лист: {"prod": n, "clf": n, "reg": n}}.
+ap.add_argument("--per-sheet", default="", help="куда сложить полистные счётчики (json)")
 a = ap.parse_args()
 
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
@@ -153,6 +156,7 @@ def assign_count(scores, mask_sheets):
 
 print(f"{'фолд':<6}{'листов':>7}{'прод':>6}{'классиф.':>10}{'↑/↓':>9}{'регресс.':>10}{'↑/↓':>9}{'оракул':>8}")
 tot = dict(prod=0, clf=0, reg=0, cu=0, cd=0, ru=0, rd=0, orc=0, n=0)
+PS = {}
 FOLD_SKIP = 0
 pair_fold = np.array([sheet_fold[si] for si, _, _ in IDX])
 for k in range(a.folds):
@@ -178,6 +182,10 @@ for k in range(a.folds):
     tot["prod"] += p; tot["clf"] += sum(gc.values()); tot["reg"] += sum(gr.values())
     tot["cu"] += cu; tot["cd"] += cd; tot["ru"] += ru; tot["rd"] += rd
     tot["orc"] += sum(go.values()); tot["n"] += len(idxs)
+    if a.per_sheet:
+        for i in idxs:
+            PS[sheets[i]["name"]] = dict(prod=int(prod[i]), clf=int(gc[i]),
+                                         reg=int(gr[i]), orc=int(go[i]), fold=k)
 
 # ⚠⚠ СВЕРКА ВЫБОРКИ (§6.106): фолд, пропущенный из-за нехватки положительных, уносит свои листы
 # из ИТОГО молча — и таблица продолжает выглядеть как проверка по всей выборке.
@@ -197,3 +205,6 @@ print(f"{'-'*66}\n{'ИТОГО':<6}{tot['n']:>7}{tot['prod']:>6}{tot['clf']:>10}
       f"{f'{tot[chr(114)+chr(117)]}/{tot[chr(114)+chr(100)]}':>9}{tot['orc']:>8}")
 print(f"\nклассификатор {pc(tot['clf'])}, регрессия {pc(tot['reg'])} к проду; "
       f"потолок {tot['orc']} ({100*tot['orc']/max(1,tot['prod']):.0f}% от прода)")
+if a.per_sheet:
+    Path(a.per_sheet).write_text(json.dumps(PS, ensure_ascii=False), encoding="utf-8")
+    print(f"★ полистные счётчики ({len(PS)} листов) → {a.per_sheet}")

@@ -201,6 +201,58 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path, cv=None):
     return mapping
 
 
+_PICK = {}
+
+
+def _pick_feats(e):
+    """Восемь признаков ТРЕКА для выбора пути (§6.145). Считаются РОВНО из двух раскладок, то есть
+    из того, что известно `emit` в момент решения.
+
+    ⚠⚠ ЭТО НЕ ПРИДИРКА, А ЦЕНА В 14 КРИВЫХ. §6.146: девятый признак модели (`n_lines` — все
+    AUTO-линии трека) берётся из `_understanding.json`, а здесь видны только НАЗНАЧЕННЫЕ слоты.
+    Модель переобучена без него: держанный счёт упал с 1129 до 1127, то есть признак ничего не
+    стоил, — но пока он был в списке, реализовать выбор «как померено» было НЕЛЬЗЯ."""
+    import numpy as np
+    D, P = e["dec"], e["prod"]
+    dif = []
+    pd_ = dict(D)
+    for nm, t in P:
+        u = pd_.get(nm)
+        if u:
+            com = [y for y in u if y in t]
+            if len(com) >= 30:
+                dif.append(float(np.median([abs(u[y] - t[y]) for y in com])))
+    lb = [len(t) for _, t in D] or [0]
+    lp = [len(t) for _, t in P] or [0]
+    xs = [x for _, t in D for x in t.values()]
+    span = max(1.0, (max(xs) - min(xs)) if xs else 1.0)
+    med = [float(np.median(list(t.values()))) for _, t in D]
+    return dict(
+        n_dec=float(len(D)), n_prod=float(len(P)),
+        agree_med=float(np.log1p(np.median(dif))) if dif else float(np.log1p(1000.0)),
+        agree_frac=float(np.mean([x <= 3 for x in dif])) if dif else 0.0,
+        cov_dec=float(np.median(lb)), cov_prod=float(np.median(lp)),
+        len_ratio=float(np.median(lb) / max(1.0, np.median(lp))),
+        spread=float(np.log1p(np.std(med) / span)) if len(med) > 1 else 0.0)
+
+
+def _pick_score(name, e):
+    """→ вероятность «брать декодер» по весу `auto/models/<name>` (numpy, без torch и sklearn).
+    ⚠ Отсутствие веса — ГРОМКАЯ ошибка, а не тихий откат к порогу: молчаливая подмена режима уже
+    стоила ветке полугода споров (§6.68)."""
+    import numpy as np
+    if name not in _PICK:
+        p = Path(__file__).resolve().parent / "models" / name
+        if not p.is_file():
+            raise FileNotFoundError(f"rowdec_pick_model={name!r} — веса нет: {p}")
+        d = np.load(str(p), allow_pickle=False)
+        _PICK[name] = (d["w"], float(d["b0"]), d["mu"], d["sd"], [str(x) for x in d["feats"]])
+    w, b0, mu, sd, feats = _PICK[name]
+    f = _pick_feats(e)
+    z = (np.array([f[k] for k in feats], float) - mu) / sd
+    return float(1 / (1 + np.exp(-(z @ w + b0))))
+
+
 def _is_mbk_name(curve_name):
     """MBK-мнемоника (первый токен без хвостовых цифр). Для ленивой загрузки скана в emit."""
     import re
@@ -271,12 +323,77 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     # None, если её не просили, нет веса ИЛИ лист не прошёл меру уверенности ⇒ работает ПРАВИЛО.
     # ⚠ Правило вызывается тем же именем, что и раньше: стенды, которые его перехватывают
     # (`_pool_oracle`, `_pick_gate`, …), продолжают перехватывать именно правило.
-    mapping = None
-    if cv is not None and getattr(cv, "slot_model", ""):
-        from . import slot_model as slot_mod
-        mapping = slot_mod.map_lines(traces, model, frame, mnemonics_path, cv)
-    if mapping is None:
-        mapping = _map_lines_to_slots(traces, model, frame, mnemonics_path, cv)
+    def _map(tr):
+        m = None
+        if cv is not None and getattr(cv, "slot_model", ""):
+            from . import slot_model as slot_mod
+            m = slot_mod.map_lines(tr, model, frame, mnemonics_path, cv)
+        return m if m is not None else _map_lines_to_slots(tr, model, frame, mnemonics_path, cv)
+
+    mapping = _map(traces)
+    # ★★ ВЫБОР ПУТИ ВЕДЕНИЯ ПО ТРЕКУ (§6.144-§6.145), `cv.rowdec_pick`. Считается ЗДЕСЬ, а не в
+    # `trace2d`, и это не вопрос вкуса — это правка ошибки, которую поймал прогон.
+    # ⚠⚠ ЧТО БЫЛО. Первая редакция решала в `trace2d._pick_by_track` по числу линий, которые
+    # декодер ПОВЁЛ. Признак же, на котором мерился выигрыш, — сколько кривых он НАПИСАЛ, а это
+    # величина ПОСЛЕ раскладки: линия, не получившая слота, ведётся, но не пишется. На 137 листах
+    # прогона выбор разошёлся с посчитанным на 70 треках из 153, и цена расхождения — ровно
+    # 14 кривых из ожидавшихся 20 (+6 вместо +20). Числа сошлись до единицы, то есть дело было
+    # именно в подмене признака, а не в «стенд врёт».
+    # ⇒ Раскладка считается для ОБОИХ путей (она дешёвая, дорого ведение), и трек берёт тот путь,
+    # у которого назначено не больше `rowdec_pick` слотов у декодера.
+    alt = getattr(traces, "alt", None)
+    pick = int(getattr(cv, "rowdec_pick", 0) or 0) if cv is not None else 0
+    model_f = (getattr(cv, "rowdec_pick_model", "") or "") if cv is not None else ""
+    if alt is not None and (pick > 0 or model_f):
+        m_alt = _map(alt)
+        # ⚠⚠ ДВА СЧЁТА НАЗНАЧЕННЫХ СЛОТОВ, И ЭТО НЕ ИЗБЫТОЧНОСТЬ.
+        #   `n_all`  — ВСЕ назначенные слоты трека. Именно на нём проверено тождество механизма
+        #              офлайновому расчёту (§6.146: 170 = 170 на 137 листах, 45 = 45 на 12), и
+        #              менять его без нового доказательства нельзя.
+        #   списки   — только слоты с НЕПУСТОЙ трассой: на них считались признаки модели (§6.145),
+        #              а пустых в выдаче 6.2%, так что разница не косметическая.
+        # Порог берёт первое, модель — второе. Каждый работает ровно на том, на чём померен.
+        by_t = {}
+        for src, mp in (("dec", m_alt), ("prod", mapping)):
+            for nm, (L, t) in mp.items():
+                e = by_t.setdefault(L.track_index,
+                                    {"dec": [], "prod": [], "n_all": {"dec": 0, "prod": 0}})
+                e["n_all"][src] += 1
+                if t:
+                    e[src].append((nm, t))
+        use = {}
+        for ti, e in by_t.items():
+            if model_f:
+                use[ti] = _pick_score(model_f, e) >= 0.5
+            else:
+                use[ti] = 0 < e["n_all"]["dec"] <= pick
+        merged, took = {}, {"декодер": 0, "прод": 0}
+        for nm in set(mapping) | set(m_alt):
+            ti = (m_alt.get(nm) or mapping.get(nm))[0].track_index
+            src = m_alt if use.get(ti) else mapping
+            if nm in src:
+                merged[nm] = src[nm]
+        for ti in by_t:
+            took["декодер" if use.get(ti) else "прод"] += 1
+        print(f"  выбор пути по треку ({'модель ' + model_f if model_f else 'порог ' + str(pick)}): "
+              f"декодер на {took['декодер']} треках, прод на {took['прод']}")
+        # ⚠⚠ ВЫГРУЗКА ПРИЗНАКОВ РЯДОМ С ВЫДАЧЕЙ — НЕ ОТЛАДКА, А ЕДИНСТВЕННЫЙ СПОСОБ УЧИТЬ МОДЕЛЬ
+        # НА ТОМ, ЧТО ОНА УВИДИТ. §6.146 повторился второй раз за день: признаки §6.145 считались
+        # по ВЫДАННЫМ кривым (после нарезки уровней), а здесь доступны только трассы раскладки, и
+        # решения разошлись — стенд взял бы декодер на 9 треках из 17, механизм взял на 17.
+        # Пока признаки не выгружены отсюда, «обучить и внедрить» неразрешимо в принципе:
+        # обучающая выборка живёт в одном пространстве, а механизм — в другом.
+        # ★ Пишется ВСЕГДА, когда выбор работает: файл крошечный, а прогон становится проверяемым.
+        try:
+            import json as _json
+            (out / f"{stem}_pick.json").write_text(_json.dumps(
+                {"pick": pick, "model": model_f,
+                 "tracks": [{"track": int(ti), "dec": bool(use.get(ti)),
+                             "n_all": e["n_all"], **_pick_feats(e)} for ti, e in by_t.items()]},
+                ensure_ascii=False), encoding="utf-8")
+        except Exception as _e:                    # выгрузка не должна ронять выдачу
+            print(f"  ⚠ признаки выбора не выгружены: {_e}")
+        mapping = merged
     ifds = read_full(open(frame_nlgx, "rb").read())
 
     def curve_pred(short):
