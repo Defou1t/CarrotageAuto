@@ -78,11 +78,33 @@ def lead(path, mode):
 
 
 print("★ СБОРКА ПЯТИ ФОЛДОВ (у каждого свой держанный вес)")
-mod, bad = {}, []
+mod, bad, short = {}, [], []
 for f in range(a.folds):
     p, got, want = load(Path(a.dir) / f"f{f}", "M")
+    # ★★ ДОЗАПУСК УПАВШИХ ЛИСТОВ ЖИВЁТ В ОТДЕЛЬНОМ КАТАЛОГЕ `fN_fix` — и это не прихоть.
+    # `load()` берёт ОДИН знаменатель `of<N>` (самый свежий), поэтому дозапуск на 2 шардах,
+    # положенный рядом с восемью, ПОДМЕНИЛ БЫ выборку двумя листами. Сливаем явно.
+    fx = Path(a.dir) / f"f{f}_fix"
+    if fx.is_dir():
+        pf, gf, wf = load(fx, "M")
+        inter = set(pf) & set(p)
+        p = dict(p); p.update(pf)
+        print(f"   фолд {f}: + дозапуск {len(pf)} листов (шардов {gf} из {wf})"
+              f"{f', пересечение {len(inter)} — перекрыто' if inter else ''}")
+    # ★★ ПОЛНОТА СЧИТАЕТСЯ ПО ЛИСТАМ, А НЕ ПО ШАРДАМ (§6.166). Шард может доработать до конца и
+    # записать дамп, УРОНИВ по дороге отдельные листы: так фолд 2 оказался на 206 из 208, и ни
+    # один контролёр этого не увидел. Память кончается на КРУПНЫХ листах ⇒ потеря смещает выборку.
+    n_want = 0
+    try:
+        n_want = sum(1 for l in open(a.sheets.format(f=f), encoding="utf-8") if l.strip())
+    except OSError:
+        pass
+    flag = ""
+    if n_want and len(p) != n_want:
+        flag = f"   ⛔ ЛИСТОВ {len(p)} ИЗ {n_want} — НЕПОЛНЫЙ ПО ЛИСТАМ"
+        short.append((f, len(p), n_want))
     print(f"   фолд {f}: листов {len(p):>4}, шардов {got} из {want}"
-          f"{'' if got == want and want else '   ⚠⚠ НЕПОЛНЫЙ'}")
+          f"{'' if got == want and want else '   ⚠⚠ НЕПОЛНЫЙ ПО ШАРДАМ'}{flag}")
     if not want or got != want:
         bad.append(f)
     inter = set(p) & set(mod)
@@ -92,7 +114,13 @@ for f in range(a.folds):
         sys.exit(1)
     mod.update(p)
 if bad:
-    print(f"⚠⚠ НЕПОЛНЫЕ ФОЛДЫ: {bad} — числа ниже НЕ ОКОНЧАТЕЛЬНЫ")
+    print(f"⚠⚠ НЕПОЛНЫЕ ПО ШАРДАМ ФОЛДЫ: {bad} — числа ниже НЕ ОКОНЧАТЕЛЬНЫ")
+if short:
+    print(f"⛔⛔ НЕПОЛНЫЕ ПО ЛИСТАМ: " +
+          ", ".join(f"фолд {f}: {g} из {w}" for f, g, w in short))
+    print(f"   Это НЕ мелочь: память кончается на КРУПНЫХ листах, значит выборка смещена по")
+    print(f"   размеру бланка. Лечение — дозапуск списком `_fold_missing.py --out` в каталог")
+    print(f"   `f<N>_fix` с МЕНЬШИМ числом шардов; тик делает это сам.")
 print(f"   ★ всего листов у модели: {len(mod)}")
 
 prod, _, _ = load(a.prod, a.prod_mode)
@@ -205,6 +233,9 @@ if not have_lead:
 elif not full_volume:
     print(f"   ⛔ ПРАВИЛО НЕ ПРИМЕНЯЕТСЯ: посчитано {len(common)} листов из {want or '?'} —\n"
           f"   это часть корпуса, а правило писано на весь. Числа выше читать как промежуточные.")
+elif short:
+    print(f"   ⛔ ПРАВИЛО НЕ ПРИМЕНЯЕТСЯ: фолды неполны ПО ЛИСТАМ {short} —\n"
+          f"   выборка смещена по размеру бланка, а не просто мала.")
 elif bad:
     print(f"   ⛔ ПРАВИЛО НЕ ПРИМЕНЯЕТСЯ: фолды {bad} неполны — объём не тот, на котором оно писано.")
 elif d_rule >= 20 and p_rule < 0.01:

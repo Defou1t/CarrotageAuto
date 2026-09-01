@@ -33,6 +33,9 @@ ap.add_argument("--keep-snapshots", type=int, default=3, help="сколько д
 ap.add_argument("--min-age-hours", type=float, default=24.0, help="не трогать тронутое недавно")
 ap.add_argument("--apply", action="store_true", help="удалять (иначе только показать)")
 ap.add_argument("--graphify-only", action="store_true")
+ap.add_argument("--keep-overlay-recent", type=int, default=3,
+                help="в скольких САМЫХ СВЕЖИХ каталогах прогонов оверлеи оставить")
+ap.add_argument("--overlay-only", action="store_true", help="только раздел оверлеев")
 a = ap.parse_args()
 
 ROOT = Path(a.root)
@@ -89,10 +92,11 @@ def sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def rm(p: Path, why: str, freed: dict):
+def rm(p: Path, why: str, freed: dict, quiet: bool = False):
     size = mb(p) if p.is_dir() else p.stat().st_size / 2**20
     freed["mb"] += size; freed["n"] += 1
-    print(f"  {'УДАЛЯЮ ' if a.apply else 'удалил бы'} {str(p)[-64:]:<66} {size:>8.0f} МБ  {why}")
+    if not quiet:
+        print(f"  {'УДАЛЯЮ ' if a.apply else 'удалил бы'} {str(p)[-64:]:<66} {size:>8.0f} МБ  {why}")
     if a.apply:
         shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
 
@@ -129,6 +133,8 @@ for nm, sz in sorted(sizes.items(), key=lambda q: -q[1])[:12]:
     print(f"    {nm:<28}{sz:>9.0f} МБ  {tag}")
 
 # ── 3. дубли пулов: побайтовая проверка, а не совпадение имён ─────────────────────────────────
+if a.overlay_only:
+    print("★ --overlay-only: разделы дублей/выдачи/кэшей пропущены")
 print(f"\n★ ДУБЛИ ПУЛОВ (проверка хешем; имя совпадает и у жадного дампа с селекторным)")
 keep_index = {}
 for kp in KEEP_POOLS:
@@ -167,6 +173,41 @@ for name in sorted(set(EMIT_ROOTS)):
         rm(s, "полистная выдача (числа — в pkl рядом)", freed)
 
 # ── 5. кэши и дымовые ─────────────────────────────────────────────────────────────────────────
+# ── 4b. ОВЕРЛЕИ: 86% ВЕСА ПРОГОНА, И ИХ НЕ ЧИТАЕТ НИ ОДИН СТЕНД ───────────────────────────────
+# ⚠⚠ ПОЧЕМУ ЭТО БЕЗОПАСНО, И ЧЕМ ОТЛИЧАЕТСЯ ОТ ПУНКТА 4. Пункт 4 сносит полистное дерево ЦЕЛИКОМ
+# и потому применим только к прогонам, чьи числа уже сведены в pkl. Свежие `ab_*` так трогать
+# НЕЛЬЗЯ: `_name_cost_prod.py`, `_rowdec_transfer.py`, `_pregate.py` читают ИМЕННО полистную
+# выдачу (`*_auto.nlgx`) и признаки (`*_understanding.json`, `*_pick.json`).
+# Оверлей же не читает НИКТО: `emit._overlay` его пишет, а потребитель — только глаз человека
+# через веб-интерфейс (`auto/ui`). Проверено grep'ом по всему дереву: ни одного чтения
+# `*_overlay.png` в стендах нет.
+# ⇒ Оверлеи можно снимать ДАЖЕ С ЗАМОРОЖЕННЫХ, цитируемых прогонов, не задев ни одного числа.
+# Замер состава одного режима (`ab_rowdec_pair/A`, 1130 листов, 5.1 ГБ):
+#     overlay.png  4.41 ГБ (86%) · auto.bck 0.34 · auto.nlgx 0.34 · understanding.json ~0
+# ★ Оговорка: оверлей — единственный способ ПОСМОТРЕТЬ глазами, что вышло на листе. Поэтому в
+#   N самых свежих каталогах (`--keep-overlay-recent`, по умолчанию 3) они остаются.
+print(f"\n★ ОВЕРЛЕИ (*_overlay.png): их не читает ни один стенд; выдача и признаки НЕ трогаются")
+runs = [d for d in ROOT.iterdir() if d.is_dir()]
+runs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+keep_ov = {d.name for d in runs[:max(0, a.keep_overlay_recent)]}
+print(f"  оверлеи ОСТАЮТСЯ в {len(keep_ov)} самых свежих: {', '.join(sorted(keep_ov)) or '—'}")
+ov_n = ov_mb = 0
+for d in runs:
+    if d.name in keep_ov or d.name in KEEP_POOLS:
+        continue
+    if recent(d):
+        continue
+    got = list(d.rglob("*_overlay.png"))
+    if not got:
+        continue
+    w = sum(f.stat().st_size for f in got) / 1024 / 1024
+    ov_n += len(got); ov_mb += w
+    print(f"  {d.name:<24} оверлеев {len(got):>5}, {w:>8.0f} МБ")
+    # ⚠ поштучно НЕ печатаем: оверлеев сотни тысяч, и перечисление утопит сводку.
+    for f in got:
+        rm(f, "оверлей (ни один стенд его не читает)", freed, quiet=True)
+print(f"  ⇒ ИТОГО ПО ОВЕРЛЕЯМ: {ov_n} файлов, {ov_mb/1024:.1f} ГБ")
+
 print(f"\n★ КЭШИ И ДЫМОВЫЕ (регенерируются прогоном)")
 for name in CACHES + SMOKE:
     d = ROOT / name
