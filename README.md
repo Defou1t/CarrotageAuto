@@ -4,12 +4,28 @@
 (raster JPEG/TIFF) into digital curves as NeuraLOG `.nlgx` working files (+ `.bck`) and LAS,
 ready for expert QC — with as little manual correction as possible.
 
-> **🗺️ Live project map (modules, status, progress journal): [`PROJECT_MAP.md`](PROJECT_MAP.md)** — updated every session.
-> Internal development log (detailed, Russian): [`PLAN_new_dialog.md`](PLAN_new_dialog.md).
-> **Current authoritative course (2026-06): [`ROADMAP_v2.md`](ROADMAP_v2.md)** — reorientation to
-> autonomous image-first vectorization (the template-guided "snap-to-expert-trace" path is deprecated
-> as the delivery path; the expert only verifies).
-> This README is the outward-facing overview for users and developers.
+This README is the outward-facing overview. **Everything else has exactly one job — see the map below.**
+
+## Where the truth lives (read this before opening anything else)
+
+| question | file | note |
+|---|---|---|
+| **What is the state right now? What do I do next?** | ★ [`digitizer/rnd/HANDOFF.md`](digitizer/rnd/HANDOFF.md) | **the entry point.** Top block only; everything below it is context |
+| Where did a number come from? | [`ROADMAP_RECOGNITION.md`](ROADMAP_RECOGNITION.md) | the measurement journal, numbered `§6.x`, newest **on top**. Every published number has a section |
+| Which test bench measures what? | [`digitizer/rnd/STANDS.md`](digitizer/rnd/STANDS.md) | index of all `digitizer/rnd/_*.py`; verified by `python _stand_audit.py` |
+| What may I delete from `output/`? | [`digitizer/rnd/DATA_RETENTION.md`](digitizer/rnd/DATA_RETENTION.md) | executable part: `_data_retention.py` (dry run by default) |
+| How is `auto/` built, how do I check it? | [`auto/README.md`](auto/README.md), [`auto/VALIDATION.md`](auto/VALIDATION.md) | module contract and the check-list |
+
+**Rules of the journal.** A number is quotable only with the sheet-set it was measured on
+(accuracy varies **tenfold** between wells). A section marked ⛔ is retracted — do not cite it.
+A retracted claim is never deleted, it is struck through and kept, so the same mistake is not
+made twice.
+
+**Archive** (`archive/docs/`): the 2026-06/07 documents — `PLAN_new_dialog.md`, `PROJECT_MAP.md`
+and the older `HANDOFF_prev.md`, `DIRECTIONS.md`, `NEXT_*.md`, `AGENT_TASKS.md`, `INTAKE.md`.
+They are history: valuable as a record of *why*, superseded as a description of *what is*.
+[`ROADMAP_v2.md`](ROADMAP_v2.md) stays here because `auto/pipeline.py` and `auto/__init__.py`
+cite it as the architectural course.
 
 ---
 
@@ -113,15 +129,18 @@ the image; it produces the trace. Output opens directly in NeuraLOG for QC over 
 
 ```
 CarrotageAuto/
-├─ README.md                 ← you are here
-├─ ROADMAP_v2.md             authoritative course + status (Russian)
-├─ PLAN_new_dialog.md        historical dev log (Russian)
+├─ README.md                 ← you are here: overview + map of all documents
+├─ ROADMAP_RECOGNITION.md    ★ measurement journal, §6.x, newest on top — the source of truth
+├─ ROADMAP_v2.md             architectural course (2026-06); cited from auto/ docstrings
 ├─ mnemonics.json            curve dictionary (names, units, groups) from the client
 ├─ run_ui.bat / run.py       launchers: web UI / one template-pair run (regression)
 ├─ auto/                     ★ AUTONOMOUS image-first vectorizer (v2 course) + web UI (auto/ui)
+│   ├─ README.md             module contract
+│   ├─ VALIDATION.md         what to run and what a healthy answer looks like
+│   └─ config.py             ★ every production knob, each with the section that measured it
 ├─ digitizer/                nlgx I/O foundation + template pipeline + QC tooling
-│   └─ rnd/                  R&D: MK separator (production ensemble), BKZ separator, experiments
-└─ archive/                  dead code kept for reference (NeuraLOG Win32 UI automation, block-2)
+│   └─ rnd/                  R&D benches (`_*.py`) + HANDOFF.md (entry point) + STANDS.md (index)
+└─ archive/                  dead code and superseded documents (archive/docs/)
 ```
 
 **Where to work:** the web UI (`run_ui.bat` → http://127.0.0.1:8765) is the development cockpit —
@@ -199,9 +218,23 @@ projects/<well>/
 - Delivery = `.nlgx + .bck (+ .las)` per scan; the expert re-checks every curve in NeuraLOG, so the
   digitizer must *understand* the sheet (scales, identity, behaviour) rather than trace blindly.
 
-## Status
+## Status (2026-09-01)
+
+**Metric.** Curves must not get confused with each other; naming them is *not* required at this
+stage (Eduard's decision, 2026-08-20). So the leading count is **nameless**: maximum 1:1 matching
+inside a track. The named count is reported second, as a reference. Both are always taken in **one
+pass** — taken separately they diverged once and the error stood for three weeks.
+
+**In production** (`auto/config.py`): `slot_gate = "frac0.0"` + `slot_sib = 2.0` — together
+**+22.8 %** honest curves on the shipped path, p < 0.00001. `row_decoder = ""` — the row decoder
+is **off**.
+
+**The open decision.** A second tracing path (the row decoder) plus a per-track choice between it
+and production is written, measured and switched off pending a product call: it is worth roughly
+**+7…15 %** honest curves for **+30…60 %** run time. The exact figures, what is proven and what is
+only an estimate on frozen outputs, are in the top block of
+[`digitizer/rnd/HANDOFF.md`](digitizer/rnd/HANDOFF.md) — that block is kept current; this line is not.
 
 Phase A complete; Phase B core complete (identity tracker, ~0 % swaps); end-to-end assembly and a
-single-entry CLI in place. Active work: back-up-scale transitions (Phase C), coverage on faint
-amplified lines, and line→curve mapping without a template for fully new scans. See
-[`PLAN_new_dialog.md`](PLAN_new_dialog.md) for the live roadmap.
+single-entry CLI in place. Roughly **half** of the expert curves are still taken by no path, and
+that remainder is **geometry, not coverage** — the open lever is identity.

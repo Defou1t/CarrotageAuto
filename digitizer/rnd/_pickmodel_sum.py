@@ -28,10 +28,22 @@ import numpy as np
 ap = argparse.ArgumentParser()
 ap.add_argument("--dir", default=r"F:/nds/output/taskS/ab_pickmodel", help="каталог с f0..f4")
 ap.add_argument("--folds", type=int, default=5)
+ap.add_argument("--sheets", default=r"F:/nds/output/taskS/pickfolds/sheets_f{f}.txt",
+                help="списки листов фолдов: по ним считается ОЖИДАЕМЫЙ объём")
 ap.add_argument("--prod", default=r"F:/nds/output/taskS/ab_rowdec_pair", help="замороженный прод")
 ap.add_argument("--prod-mode", default="A")
 ap.add_argument("--rule", default=r"F:/nds/output/taskS/ab_rdpick_c", help="замороженный порог")
 ap.add_argument("--rule-mode", default="D")
+# ★★ ВЕДУЩИЙ СЧЁТ ВЕТКИ — БЕЗЫМЯННЫЙ (решение Эдуарда 20.08), и дампы `_trace_prod_ab` его НЕ
+# ДЕРЖАТ: там ИМЕННОЙ (§6.126, сказано в шапке `_name_cost_prod.py`). Предрегистрированное правило
+# «Δ ≥ +20 к порогу (1075)» написано на БЕЗЫМЯННОЙ шкале: 1075 — это она. На именной тот же
+# замороженный прогон даёт 696 против 670, то есть весь ход прод→порог там +26, а не +99, и
+# «+20» означало бы совсем другую высоту. ⇒ правило читаем по ведущему счёту, у ТОЙ ЖЕ реализации,
+# что дала 976 → 1075 (`_name_cost_prod.py --dump`), а именной печатаем вторым числом.
+ap.add_argument("--per-model", default=r"F:/nds/output/taskS/percurve_pickf{f}.pkl",
+                help="выгрузка ведущего счёта фолда, {f} — номер фолда")
+ap.add_argument("--per-prod", default=r"F:/nds/output/taskS/percurve_pair.pkl")
+ap.add_argument("--per-rule", default=r"F:/nds/output/taskS/percurve_rule.pkl")
 ap.add_argument("--perm", type=int, default=20000)
 a = ap.parse_args()
 
@@ -51,6 +63,18 @@ def load(d, mode):
         t, p = dd["res"].get(mode, ({}, {}))
         per.update(p); curves += t.get("curves", 0)
     return per, len(files), int(den)
+
+
+
+def lead(path, mode):
+    """→ {лист: БЕЗЫМЯННЫХ} из выгрузки `_name_cost_prod.py --dump` (значение — кортеж
+    «с именем, без имени, экспертных»). None, если выгрузки нет: молча подставить именной счёт
+    вместо ведущего нельзя — правило чтения написано не на нём."""
+    f = Path(path)
+    if not f.exists():
+        return None
+    d = pickle.load(open(f, "rb"))
+    return {k: v[1] for k, v in d[mode].items()} if mode in d else None
 
 
 print("★ СБОРКА ПЯТИ ФОЛДОВ (у каждого свой держанный вес)")
@@ -81,14 +105,47 @@ print(f"★ СВЕРКА ОБЪЁМА: общих листов {len(common)} и�
       f"   {'★ СОШЛОСЬ' if len(common) == len(mod) == len(prod) == len(rule) else '⚠ СЧИТАЮ ПО ПЕРЕСЕЧЕНИЮ'}")
 if not common:
     sys.exit("нет общих листов")
+
+# ★★ ОЖИДАЕМЫЙ ОБЪЁМ ЗАМЕРА. Полнота шардов говорит лишь «фолд досчитан», а правило чтения
+# написано на ВЕСЬ корпус (1130 листов = 221+263+208+300+138). Замер по части фолдов — законный
+# промежуточный взгляд, но правило к нему НЕ ПРИМЕНЯЕТСЯ, и стенд обязан это сказать сам.
+want = 0
+for _f in range(5):
+    try:
+        want += sum(1 for _l in open(a.sheets.format(f=_f), encoding="utf-8") if _l.strip())
+    except OSError:
+        want = 0
+        break
+if want:
+    print(f"★ ОЖИДАЕМЫЙ ОБЪЁМ (списки листов пяти фолдов): {want}; посчитано {len(common)}"
+          f"   {'★ ПОЛНЫЙ' if len(common) >= want * 0.98 else '⚠ ЧАСТИЧНЫЙ — правило чтения не применяется'}")
+else:
+    print("⚠ списки листов фолдов не прочитаны — ожидаемый объём неизвестен")
+full_volume = bool(want) and len(common) >= want * 0.98
 K = sorted(common)
 M = np.array([mod[k] for k in K], float)
 P = np.array([prod[k] for k in K], float)
 R = np.array([rule[k] for k in K], float)
-print(f"\n{'путь':<34}{'честных':>9}")
-print(f"{'прод (замороженный)':<34}{int(P.sum()):>9}")
-print(f"{'порог §6.150 (замороженный)':<34}{int(R.sum()):>9}")
-print(f"{'★ ОБУЧЕННЫЙ ВЫБОР (держанно)':<34}{int(M.sum()):>9}")
+# ★ ВЕДУЩИЙ (безымянный) счёт тех же листов — из выгрузок `_name_cost_prod.py --dump`
+lead_mod, miss = {}, []
+for f in range(a.folds):
+    q = lead(a.per_model.format(f=f), "M")
+    if q is None:
+        miss.append(a.per_model.format(f=f))
+    else:
+        lead_mod.update(q)
+lead_prod = lead(a.per_prod, a.prod_mode)
+lead_rule = lead(a.per_rule, a.rule_mode)
+if lead_prod is None:
+    miss.append(a.per_prod)
+if lead_rule is None:
+    miss.append(a.per_rule)
+uncov = set(K) - (set(lead_mod) & set(lead_prod) & set(lead_rule)) if not miss else set(K)
+have_lead = not miss and not uncov
+if miss:
+    print(f"\n⚠⚠ ВЕДУЩЕГО (БЕЗЫМЯННОГО) СЧЁТА НЕТ — не выгружено: {', '.join(miss)}")
+elif uncov:
+    print(f"\n⚠⚠ ВЕДУЩИЙ СЧЁТ НЕ ПОКРЫВАЕТ ЗАМЕР: {len(uncov)} листов из {len(K)} без счёта")
 
 
 def paired(x, y, nm):
@@ -115,13 +172,42 @@ def paired(x, y, nm):
     return obs, p
 
 
-d_rule, p_rule = paired(M, R, "ОБУЧЕННЫЙ ВЫБОР против ПОРОГА")
-d_prod, p_prod = paired(M, P, "ОБУЧЕННЫЙ ВЫБОР против ПРОДА")
+def block(mod_, prod_, rule_, title):
+    m = np.array([mod_[k] for k in K], float)
+    q = np.array([prod_[k] for k in K], float)
+    r = np.array([rule_[k] for k in K], float)
+    print(f"\n{'='*78}\n{title}\n{'='*78}")
+    print(f"{'путь':<34}{'честных':>9}")
+    print(f"{'прод (замороженный)':<34}{int(q.sum()):>9}")
+    print(f"{'порог §6.150 (замороженный)':<34}{int(r.sum()):>9}")
+    print(f"{'★ ОБУЧЕННЫЙ ВЫБОР (держанно)':<34}{int(m.sum()):>9}")
+    d_r, p_r = paired(m, r, "ОБУЧЕННЫЙ ВЫБОР против ПОРОГА")
+    paired(m, q, "ОБУЧЕННЫЙ ВЫБОР против ПРОДА")
+    paired(r, q, "ПОРОГ против ПРОДА (сверка с §6.150)")
+    return d_r, p_r
+
+
+d_rule = p_rule = None
+if have_lead:
+    d_rule, p_rule = block(lead_mod, lead_prod, lead_rule,
+                           "★★★ ВЕДУЩИЙ СЧЁТ — БЕЗ ИМЕНИ (критерий Эдуарда; шкала правила чтения)")
+block(mod, prod, rule, "СПРАВОЧНЫЙ СЧЁТ — С ИМЕНЕМ (дампы `_trace_prod_ab`)")
 
 # ★★★ ЧТЕНИЕ. Порог зафиксирован в `_pickmodel_run.ps1` ДО прогона: перенос состоялся при
 # Δ ≥ +20 к ПОРОГУ при p < 0.01; Δ ≤ 0 — не состоялся, и это тоже результат.
-print(f"\n★★★ ЧТЕНИЕ (правило зафиксировано ДО прогона: Δ ≥ +20 к порогу при p < 0.01)")
-if d_rule >= 20 and p_rule < 0.01:
+# ⚠ Правило написано на БЕЗЫМЯННОЙ шкале (порог там 1075) — на именной оно не читается.
+print(f"\n★★★ ЧТЕНИЕ (правило зафиксировано ДО прогона: Δ ≥ +20 к порогу при p < 0.01,")
+print(f"    по ВЕДУЩЕМУ безымянному счёту — той шкале, на которой порог равен 1075)")
+if not have_lead:
+    print("   ⛔ ПРАВИЛО НЕ ПРИМЕНЯЕТСЯ: ведущего счёта нет. Выгрузить и повторить:")
+    print("      python _name_cost_prod.py --dir <…>/ab_pickmodel/f<N> --mode M \\")
+    print("          --dump F:/nds/output/taskS/percurve_pickf<N>.pkl")
+elif not full_volume:
+    print(f"   ⛔ ПРАВИЛО НЕ ПРИМЕНЯЕТСЯ: посчитано {len(common)} листов из {want or '?'} —\n"
+          f"   это часть корпуса, а правило писано на весь. Числа выше читать как промежуточные.")
+elif bad:
+    print(f"   ⛔ ПРАВИЛО НЕ ПРИМЕНЯЕТСЯ: фолды {bad} неполны — объём не тот, на котором оно писано.")
+elif d_rule >= 20 and p_rule < 0.01:
     print(f"   Δ = {d_rule:+.0f} при p = {p_rule:.5f} ⇒ ★ ПЕРЕНОС СОСТОЯЛСЯ: обученный выбор")
     print("   обгоняет порог и на выданных файлах.")
 elif d_rule <= 0:
@@ -131,4 +217,5 @@ else:
     print(f"   Δ = {d_rule:+.0f} при p = {p_rule:.5f} ⇒ ⚠ НИ ТО НИ ДРУГОЕ: направление верное,")
     print("   но предрегистрированный порог не взят. Цитировать как «не доказано», а не как выигрыш.")
 print(f"\n⚠ Схема ИЗМЕРИТЕЛЬНАЯ (вес на фолд + `auto5`): на НЕЗНАКОМОЙ площади так не будет.")
-print(f"⚠ Цена вдвое: считаются ОБА пути, декодер втрое дороже прода по листу.")
+print(f"⚠ Цена второго пути ЗАМЕРЕНА (§6.160, `_path_cost.py`): ×1.5 от прода на GPU, "
+      f"×2 на CPU. Прежнее «декодер втрое дороже» — не замер и неверно: сам декодер ×0.17 от прода.")
