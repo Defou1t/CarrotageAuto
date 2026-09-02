@@ -47,6 +47,17 @@ for f in files:
     tot, per = dd["res"].get(a.mode, ({}, {}))
     got |= set(per)
 
+# ★ ДОЗАПИСАННЫЕ ЛИСТЫ ЛЕЖАТ В ОТДЕЛЬНОМ КАТАЛОГЕ `<фолд>_fix` (дампы нельзя мешать: сводка
+# берёт ОДИН знаменатель of<N>). Без их учёта фолд навсегда числится неполным, и тик на каждом
+# тике заново копирует выдачи — нашла состязательная проверка §6.169.
+fix = d.parent / (d.name + "_fix")
+if fix.is_dir():
+    for f in fix.glob("ab_*of*.pkl"):
+        try:
+            got |= set(pickle.load(open(f, "rb"))["res"].get(a.mode, ({}, {}))[1])
+        except Exception:
+            pass
+
 # в списке имена без расширения либо с ним — сверяем по стему
 norm = lambda s: s[:-5] if s.endswith(".nlgx") else s
 gotn = {norm(x) for x in got}
