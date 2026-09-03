@@ -51,9 +51,11 @@ import numpy as np
 ap = argparse.ArgumentParser()
 ap.add_argument("--prod", default=r"F:/nds/output/taskS/percurve_pair.pkl")
 ap.add_argument("--prod-mode", default="A")
-ap.add_argument("--both", default=r"F:/nds/output/taskS/percurve_rule.pkl")
+ap.add_argument("--both", nargs="+", default=[r"F:/nds/output/taskS/percurve_rule.pkl"],
+                help="дампы второго пути; их НЕСКОЛЬКО, когда прогон шёл по фолдам — склеиваются по листам")
 ap.add_argument("--both-mode", default="D")
-ap.add_argument("--dumps", default=r"F:/nds/output/taskS/ab_rdpick_c/D")
+ap.add_argument("--dumps", nargs="+", default=[r"F:/nds/output/taskS/ab_rdpick_c/D"],
+                help="каталоги выдачи с `_pick.json`/`_understanding.json`; их НЕСКОЛЬКО, когда прогон шёл по фолдам")
 ap.add_argument("--wellmap", default=r"F:/nds/output/taskS/rowdec_wellmap.json")
 ap.add_argument("--roots", nargs="+", default=[r"F:\nds\projects\Archive"])
 ap.add_argument("--folds", type=int, default=5)
@@ -66,13 +68,22 @@ a = ap.parse_args()
 
 # ⚠ Оговорка про утечку берётся из ФАКТИЧЕСКОГО каталога дампов, а не пишется рукой:
 # `ab_wellmap` снят с картой скважин (честная держанность, §6.157), `ab_rdpick_c` — без неё.
-LEAK = ("корпус ЧЕСТНО ДЕРЖАННЫЙ, wellmap" if "wellmap" in a.dumps.replace("\\", "/")
+_DP = " ".join(a.dumps).replace("\\", "/")
+LEAK = ("корпус ЧЕСТНО ДЕРЖАННЫЙ, wellmap" if "wellmap" in _DP or "honest" in _DP
         else "корпус УТЁКШИЙ: половина листов знакома чекпойнту декодера, §6.153")
-print(f"★ корпус дампов: {a.dumps}  ⇒ {LEAK}")
+print(f"★ корпус дампов: {', '.join(a.dumps)}  ⇒ {LEAK}")
 
 lead = lambda f, m: {k: v[1] for k, v in pickle.load(open(f, "rb"))[m].items()}
 A = lead(a.prod, a.prod_mode)
-D = lead(a.both, a.both_mode)
+# ★ несколько дампов склеиваются СЛОВАРЁМ, и пересечение ключей — ОШИБКА, а не мелочь: фолды
+# не пересекаются по листам по построению, и задвоение значило бы, что склеено не то.
+D = {}
+for _f in a.both:
+    _d = lead(_f, a.both_mode)
+    _dup = set(_d) & set(D)
+    if _dup:
+        sys.exit(f"⛔ дампы второго пути пересекаются на {len(_dup)} листах ({_f}) — склеено не то")
+    D.update(_d)
 
 WM = json.load(open(a.wellmap, encoding="utf-8"))
 na = sum(1 for k in WM if not k.isascii())
@@ -133,7 +144,7 @@ def feats(u, pick):
 
 
 F, skip = {}, Counter()
-for dd in Path(a.dumps).iterdir():
+for dd in [q for root in a.dumps for q in Path(root).iterdir()]:
     if not dd.is_dir():
         continue
     if dd.name not in BY:
