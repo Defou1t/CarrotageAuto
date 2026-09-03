@@ -108,7 +108,15 @@ Say "★ ВСЕ ПЯТЬ ФОЛДОВ ГОТОВЫ И СЧЁТ ВЫГРУЖЕН"
 $hd="$ts/ab_rdhonest"
 $hn=@(Get-ChildItem "$hd/ab_*of8.pkl" -ErrorAction SilentlyContinue).Count
 if ($hn -eq 8 -and (Test-Path "$ts/percurve_rdhonest.pkl")) {
-  Say "честный прогон тоже готов — работы нет, тик можно снимать"
+  # ★★ СЛЕДУЮЩАЯ ПОРЦИЯ — ЧЕСТНАЯ ЦЕНА ОБУЧЕННОГО ВЫБОРА (§6.175, пункты 2 и 3 очереди).
+  # Тот же принцип: свой возобновляемый драйвер отдаёт ОДНУ порцию и выходит; снос стоит одного фолда.
+  $hp = @(0..4 | Where-Object { -not (Test-Path "$ts/percurve_hpickf$_.pkl") })
+  if ($hp.Count -eq 0) {
+    Say "всё посчитано, включая честный обученный выбор — работы нет, тик можно снимать"
+  } else {
+    Say "честный обученный выбор: не выгружено фолдов $($hp.Count) — отдаю порцию"
+    & "$ts/_pickhonest_run.ps1" *>&1 | Out-File -FilePath $log -Encoding utf8 -Append
+  }
 } else {
   Say "запускаю честный прогон (_rdhonest_run.ps1), было $hn из 8 дампов"
   & "$ts/_rdhonest_run.ps1" *>&1 | Out-File -FilePath $log -Encoding utf8 -Append
