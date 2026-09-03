@@ -29,28 +29,36 @@ $log='F:\nds\output\taskS\_pickhonest.log'
 $pools=@("$ts/pools","$ts/pools_gate","$ts/pools_wide","$ts/pools_more","$ts/pools_div",
          "$ts/pools_heldout","$ts/pools_all")
 $env:OMP_NUM_THREADS='3'
-$N=4
+$N=8   # верхняя граница для НОВЫХ фолдов; у уже начатых знаменатель берётся из их дампов
 function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m |
     Out-File -FilePath $log -Encoding utf8 -Append }
 
 foreach ($f in 0..4) {
   $fo="$out/f$f"
-  $todo=@(0..($N-1) | Where-Object { -not (Test-Path "$fo/ab_${_}of$N.pkl") })
+  # ★★ ЗНАМЕНАТЕЛЬ БЕРЁТСЯ ИЗ УЖЕ ЛЕЖАЩИХ ДАМПОВ, А НЕ ЗАДАЁТСЯ СВЕРХУ (тот же приём, что в
+  # `_fold_missing.py`). Иначе простая смена $N обесценивает уже посчитанные фолды: их дампы `of4`
+  # перестают считаться своими, и всё считается заново — точно та потеря, что стоила суток в §6.171.
+  # Фолды суммируются ПОРОЗНЬ, поэтому разные знаменатели У РАЗНЫХ фолдов допустимы; запрет
+  # §6.166 — только на смешение внутри ОДНОГО каталога.
+  $have=@(Get-ChildItem "$fo/ab_*of*.pkl" -ErrorAction SilentlyContinue)
+  $Nf=$N
+  if ($have) { $Nf=[int](($have[0].BaseName -split 'of')[1]) }
+  $todo=@(0..($Nf-1) | Where-Object { -not (Test-Path "$fo/ab_${_}of$Nf.pkl") })
   if ($todo.Count -gt 0) {
     New-Item -ItemType Directory -Force -Path "$fo/logs" | Out-Null
-    Say "фолд ${f}: готово $($N - $todo.Count) из $N — считаю шарды $($todo -join ',')"
+    Say "фолд ${f}: готово $($Nf - $todo.Count) из $Nf — считаю шарды $($todo -join ',')"
     $procs=@()
     $todo | ForEach-Object {
       $a=@('_trace_prod_ab.py',
            '--mode',"M:seq=seq_model_d45p.pt,slot=slot_model_g250.npz,gate=frac0.0,sib=2.0,rowdec=auto5,rdpool=0,rdmodel=pick_model_h_f$f.npz,wellmap=$wm",
            '--pools')+$pools+@('--cap','0','--only-from',"$fd/sheets_f$f.txt",
-           '--shard',"$_/$N",'--shard-by-pool','--out',$fo)
+           '--shard',"$_/$Nf",'--shard-by-pool','--out',$fo)
       $procs += Start-Process -FilePath $py -ArgumentList $a -WorkingDirectory $rnd -WindowStyle Hidden `
         -RedirectStandardOutput "$fo/logs/sh$_.log" -RedirectStandardError "$fo/logs/sh$_.err" -PassThru
     }
     $procs | Wait-Process
-    $got=@(Get-ChildItem "$fo/ab_*of$N.pkl" -ErrorAction SilentlyContinue).Count
-    Say "фолд ${f}: шарды завершились, дампов $got из $N"
+    $got=@(Get-ChildItem "$fo/ab_*of$Nf.pkl" -ErrorAction SilentlyContinue).Count
+    Say "фолд ${f}: шарды завершились, дампов $got из $Nf"
   }
   # ★ ПОЛНОТА ПО ЛИСТАМ, А НЕ ПО ШАРДАМ (§6.166): шард дописывает дамп, даже уронив лист.
   & $py "$rnd/_fold_missing.py" '--dir' $fo '--sheets' "$fd/sheets_f$f.txt" '--out' "$fd/missing_f$f.txt" | Out-Null
