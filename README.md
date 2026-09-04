@@ -22,7 +22,9 @@ A retracted claim is never deleted, it is struck through and kept, so the same m
 made twice.
 
 **Archive** (`archive/docs/`): the 2026-06/07 documents — `PLAN_new_dialog.md`, `PROJECT_MAP.md`
-and the older `HANDOFF_prev.md`, `DIRECTIONS.md`, `NEXT_*.md`, `AGENT_TASKS.md`, `INTAKE.md`.
+and the older `HANDOFF_prev.md`, `DIRECTIONS.md`, `NEXT_*.md`, `AGENT_TASKS.md`, `INTAKE.md`;
+plus two blocks retired from HANDOFF on 05.09 — `HANDOFF_0109.md` (state as of 01.09, while the
+honest run was still going) and `HANDOFF_aug_defects.md` (13-16.08 defects, all closed).
 They are history: valuable as a record of *why*, superseded as a description of *what is*.
 [`ROADMAP_v2.md`](ROADMAP_v2.md) stays here because `auto/pipeline.py` and `auto/__init__.py`
 cite it as the architectural course.
