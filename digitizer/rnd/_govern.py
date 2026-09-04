@@ -34,7 +34,7 @@ r"""_govern.py — ДИНАМИЧЕСКИЙ РЕГУЛЯТОР НАГРУЗКИ:
   <ComfyUI>\python_embeded\python.exe _govern.py --rate            # темп по уровням, из журнала
   <ComfyUI>\python_embeded\python.exe _govern.py --release         # снять регулирование, вернуть всех
 """
-import sys, argparse, ctypes, subprocess, re, time, json
+import os, sys, argparse, ctypes, subprocess, re, time, json
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 from pathlib import Path
 
@@ -100,8 +100,11 @@ def snapshot():
     return ours, tot, free
 
 
-NCPU = int(subprocess.run([sys.executable, "-c", "import os;print(os.cpu_count())"],
-                          capture_output=True, text=True).stdout or 32)
+# ⚠⚠ ЧИСЛО ЯДЕР БЕРЁТСЯ В СВОЁМ ЖЕ ПРОЦЕССЕ. Первая редакция спрашивала его ОТДЕЛЬНЫМ python —
+# без `creationflags`, то есть С КОНСОЛЬНЫМ ОКНОМ, и регулятор моргал им РАЗ В МИНУТУ. Заказчик это
+# и увидел. Урок общий: подпроцесс в фоновой задаче обязан идти с CREATE_NO_WINDOW, а подпроцесс,
+# которого можно не запускать, — не запускаться вовсе.
+NCPU = os.cpu_count() or 32
 
 
 def foreign_pct(dt=2.0):

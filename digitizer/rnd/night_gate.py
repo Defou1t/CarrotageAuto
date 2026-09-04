@@ -95,7 +95,7 @@ def run_config(name, cfg, plate_list, workroot):
             cmd += ["--ens", ens]
         if tta:
             cmd += ["--tta"]
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=0x08000000)
         tr_path = os.path.join(wdir, stem + "_traces.npz")
         if r.returncode != 0 or not os.path.exists(tr_path):
             print(f"[{name}/{stem}] infer FAIL rc={r.returncode}: {(r.stderr or r.stdout)[-300:]}")

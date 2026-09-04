@@ -442,7 +442,7 @@ def build_stamp():
     root = Path(__file__).resolve().parent.parent.parent          # …/Auto
     def sh(*c):
         try:
-            r = subprocess.run(c, cwd=root, capture_output=True, text=True, timeout=15)
+            r = subprocess.run(c, cwd=root, capture_output=True, text=True, timeout=15, creationflags=0x08000000)
             return r.stdout.strip() if r.returncode == 0 else "?"
         except Exception:
             return "?"

@@ -26,7 +26,7 @@ def tail(p, n=1):
 def py_procs():
     try:
         out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq python.exe"],
-                             capture_output=True, text=True).stdout
+                             capture_output=True, text=True, creationflags=0x08000000).stdout
         return out.lower().count("python.exe")
     except Exception:
         return "?"
