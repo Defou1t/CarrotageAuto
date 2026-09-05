@@ -54,6 +54,9 @@ ap.add_argument("--once", action="store_true")
 ap.add_argument("--loop", action="store_true")
 ap.add_argument("--rate", action="store_true")
 ap.add_argument("--release", action="store_true", help="возобновить всех и выйти")
+ap.add_argument("--pause", action="store_true",
+                help="ПАУЗА: приостановить ВСЕ шарды и запретить регулятору их возвращать")
+ap.add_argument("--unpause", action="store_true", help="снять паузу и вернуть шарды")
 a = ap.parse_args()
 
 k32, ntd = ctypes.windll.kernel32, ctypes.windll.ntdll
@@ -121,6 +124,11 @@ def foreign_pct(dt=2.0):
 
 
 STATE = Path(a.log).with_suffix(".state.json")
+# ★★ ПАУЗА — ФАЙЛОМ, А НЕ ПАМЯТЬЮ ПРОЦЕССА. Регулятор живёт отдельным запуском раз в минуту, и
+# «приостановил вручную» он бы через минуту отменил, вернув шарды: две воли на один ресурс всегда
+# кончаются тем, что побеждает та, что чаще просыпается. Признак на диске переживает и запуск
+# регулятора, и снос сессии, и перезагрузку планировщика.
+PAUSED = Path(a.log).with_suffix(".paused")
 
 
 def load_state():
@@ -150,6 +158,19 @@ def step():
     fp, ours, free = foreign_pct()
     if not ours:
         say("шардов нет — регулировать нечего")
+        return
+    if PAUSED.is_file():
+        # ⚠ Пауза сильнее любых признаков простоя: её ставит человек, и снимать её сам регулятор
+        #   не вправе. Догоняем только тех, кто ещё работает, — иначе новый шард, запущенный тиком,
+        #   остался бы активным вопреки паузе.
+        st = load_state()
+        susp = set(st.get("susp", []))
+        add = [pid for pid, _ in ours if pid not in susp and setrun(pid, False)]
+        if add:
+            susp |= set(add)
+            STATE.write_text(json.dumps({"susp": sorted(susp)}), encoding="utf-8")
+        say(f"ПАУЗА ({PAUSED.name}): приостановлено всего {len(susp)}"
+            + (f", из них сейчас {len(add)}" if add else "") + ". Снять: --unpause")
         return
     st = load_state()
     susp = [p for p in st["susp"] if p in {q for q, _ in ours}]
@@ -224,7 +245,34 @@ def rate():
           "разброс темпа по фолдам был 1.53-2.06/мин (±25%). Меньшую разницу так не поймать.")
 
 
-if a.rate:
+def pause(on):
+    """Пауза: приостановить ВСЁ и запретить возврат. Прогресс цел — дамп шарда пишется в конце,
+    приостановленный процесс его не теряет (§6.171). ⚠ Память шарды продолжают держать."""
+    _, ours, free = foreign_pct(0.2)
+    if on:
+        PAUSED.write_text("пауза поставлена вручную; снять: _govern.py --unpause\n", encoding="utf-8")
+        st = load_state()
+        susp = set(st.get("susp", []))
+        for pid, _ in ours:
+            if pid not in susp and setrun(pid, False):
+                susp.add(pid)
+        STATE.write_text(json.dumps({"susp": sorted(susp)}), encoding="utf-8")
+        say(f"★ ПАУЗА: приостановлено {len(susp)} шардов, регулятор их не вернёт. "
+            f"Свободно памяти {free:.1f} ГБ — приостановленные её ДЕРЖАТ.")
+        print("⚠ Прогресс цел: дамп шарда пишется в самом конце, приостановка его не теряет.")
+        print("⚠ Но память шарды держат. Если пауза на сутки — дешевле дать досчитать.")
+    else:
+        if PAUSED.is_file():
+            PAUSED.unlink()
+        st = load_state()
+        n = sum(1 for pid in st.get("susp", []) if setrun(pid, True))
+        STATE.write_text(json.dumps({"susp": []}), encoding="utf-8")
+        say(f"★ ПАУЗА СНЯТА: возобновлено {n}; дальше решает регулятор (база {a.base})")
+
+
+if a.pause or a.unpause:
+    pause(a.pause)
+elif a.rate:
     rate()
 elif a.release:
     release()
