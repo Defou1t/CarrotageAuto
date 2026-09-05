@@ -73,6 +73,8 @@ ap.add_argument("--pools", nargs="+", default=[
 ap.add_argument("--mode", action="append", required=True,
                 help='"имя:seq=<чекпойнт|пусто>,slot=<вес|пусто>,k=v,…"; k — параметры trace_line')
 ap.add_argument("--slot-gate", default="frac0.8", help="мера уверенности обученной раскладки")
+ap.add_argument("--flush", type=int, default=20,
+                help="через сколько листов сбрасывать ПРОМЕЖУТОЧНЫЙ дамп (0 = только в конце)")
 ap.add_argument("--cap", type=int, default=3, help="листов на скважину (0 = все)")
 ap.add_argument("--shard", default="0/1")
 # ★ §6.118: стоимость листа определяет ОБЪЁМ ДАМПА ПУЛА (r=0.84 со временем листа против 0.34 у
@@ -363,6 +365,35 @@ if SH_N > 1:
         print(f"★ ШАРД {SH_I}/{SH_N}: {len(sheets)} листов × {len(MODES)} режима")
 
 res, FP = {}, {}
+# ★★★ ПРОМЕЖУТОЧНЫЙ ДАМП: ОСТАНОВКА ДОЛЖНА СТОИТЬ ЛИСТОВ, А НЕ ЧАСОВ (§6.186).
+# Прежде дамп писался ОДИН раз, в самом конце шарда. Значит снятый шард терял ВСЁ: 05.09 так ушли
+# 249 посчитанных листов, потому что дампов было ноль. Теперь раз в `--flush` листов пишется
+# `ab_<i>of<N>.part.pkl`, и перезапуск эти листы ПРОПУСКАЕТ.
+# ⚠⚠ ИМЯ ДРУГОЕ, И ЭТО ГЛАВНОЕ. Готовый дамп `ab_<i>of<N>.pkl` означает «шард ДОСЧИТАН» — по нему
+# тик и `_fold_missing.py` судят о полноте. Положи туда недосчитанное — и контролёры объявят готовым
+# неполное, ровно дефект §6.166. Поэтому промежуточный лежит под `.part.pkl` и удаляется в конце.
+PART = Path(a.out) / f"ab_{SH_I}of{SH_N}.part.pkl"
+if PART.is_file():
+    try:
+        _prev = pickle.load(open(PART, "rb")).get("res", {})
+        res.update(_prev)
+        print(f"★ НАЙДЕН ПРОМЕЖУТОЧНЫЙ ДАМП: режимов {len(_prev)}, листов "
+              f"{sum(len(v[1]) for v in _prev.values())} — они будут ПРОПУЩЕНЫ")
+    except Exception as e:
+        print(f"⚠ промежуточный дамп не читается ({type(e).__name__}) — считаю с нуля")
+
+
+def _flush(why):
+    """Атомарно: пишем во временный и переименовываем, иначе снятый в момент записи шард оставил
+    бы обрезанный файл, и следующий запуск считал бы мусор за прогресс."""
+    if not a.flush:
+        return
+    tmp = PART.with_suffix(".tmp")
+    pickle.dump({"res": res, "fp": FP, "modes": [tuple(m) for m in MODES]}, open(tmp, "wb"))
+    tmp.replace(PART)
+    print(f"  ★ промежуточный дамп сохранён ({why})")
+
+
 for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in MODES:
     # ★ §6.130: `sib` — не параметр `trace_line`, а ручка РАСКЛАДКИ. Вынимаем ДО построения
     # обёртки: иначе он уедет в kwargs трассировщика, который его не ждёт, и заодно включит
@@ -380,8 +411,12 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
     T.trace_line = make(kw) if kw else _orig_trace
     # ★ §6.133: мягкий передний план — режим, а не умолчание (§6.71: путь задаёт стенд).
     T._color_fg = make_softfg(softfg) if softfg else _orig_color_fg
-    tot = dict(hon=0, curves=0, sheets=0, leak=0)
-    per, FP[nm_mode] = {}, {}
+    # ★ ПОДХВАТ ПРОМЕЖУТОЧНОГО: если этот режим уже частично посчитан прошлым заходом, берём его
+    #   счёт и словарь листов — тогда цикл ниже пропустит их по `if n.name in per`.
+    _since, _done_skip = 0, 0
+    tot, per = res.get(nm_mode, (dict(hon=0, curves=0, sheets=0, leak=0), {}))
+    tot, per = dict(tot), dict(per)
+    FP[nm_mode] = FP.get(nm_mode, {})
     SKIP = {}                    # §6.106: сверка списка — обязательная печать, а не отладка
     print(f"\n{'='*78}\n{nm_mode}: seq={seq or '— (жадный trace2d)'}, "
           f"slot={slot or '— (раскладка правилом)'}, order={order}, "
@@ -433,6 +468,10 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
         if cfg.out.is_dir():
             for old in cfg.out.glob("*_auto.nlgx"):
                 old.unlink()
+        # ★ лист уже посчитан прошлым заходом — пропускаем, счёт для него уже в `per`
+        if n.name in per:
+            _done_skip += 1
+            continue
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
@@ -467,7 +506,15 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
         per[n.name] = h
         tot["hon"] += h; tot["curves"] += len(gts); tot["sheets"] += 1; tot["leak"] += lk
         print(f"  {n.stem[:42]:<44} кривых {len(gts):>2}  ЧЕСТНЫХ {h}")
+        _since += 1
+        if a.flush and _since >= a.flush:
+            res[nm_mode] = (tot, per)
+            _flush(f"{tot['sheets']} листов режима {nm_mode}")
+            _since = 0
     res[nm_mode] = (tot, per)
+    if _done_skip:
+        print(f"★ пропущено как уже посчитанное: {_done_skip} листов")
+    _flush(f"режим {nm_mode} завершён")
     print(f"ИТОГО {nm_mode}: листов {tot['sheets']}, кривых {tot['curves']}, "
           f"★честных {tot['hon']}, утечек {tot['leak']}")
     # ⚠⚠ СВЕРКА СПИСКА (§6.106, образец `_pool_oracle.py`). Без неё прогон по НЕПОЛНОЙ выборке
@@ -498,6 +545,9 @@ T.trace_line = _orig_trace
 
 pickle.dump({"res": res, "fp": FP, "modes": [tuple(m) for m in MODES]},
             open(Path(a.out) / f"ab_{SH_I}of{SH_N}.pkl", "wb"))
+# ★ ШАРД ДОСЧИТАН — промежуточный больше не нужен и не должен путаться под ногами
+if PART.is_file():
+    PART.unlink()
 base_nm = MODES[0][0]
 (ta, pa) = res[base_nm]
 print(f"\n{'='*78}\n★★ ОТГРУЖАЕМЫЙ ПУТЬ (база = {base_nm}: {ta['hon']} честных / "

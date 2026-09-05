@@ -129,6 +129,23 @@ STATE = Path(a.log).with_suffix(".state.json")
 # кончаются тем, что побеждает та, что чаще просыпается. Признак на диске переживает и запуск
 # регулятора, и снос сессии, и перезагрузку планировщика.
 PAUSED = Path(a.log).with_suffix(".paused")
+# ★★ НАСТРОЙКА — ТОЖЕ ФАЙЛОМ, ПО ТОЙ ЖЕ ПРИЧИНЕ, ЧТО И ПАУЗА. Регулятор живёт отдельным запуском
+# раз в минуту: значение, переданное ключом, живёт до конца этого запуска и ни на что дальше не
+# влияет. Человек же меняет «сколько ядер занимать» НАДОЛГО. ⇒ `govern.conf.json` перебивает ключи.
+#   {"manual": N} — держать РОВНО N активных, не глядя на простой (ручной режим);
+#   {"base": N, "max": M} — обычный режим: N под рукой, до M в простое.
+CONF = Path(a.log).with_suffix(".conf.json")
+_conf = {}
+if CONF.is_file():
+    try:
+        _conf = json.loads(CONF.read_text(encoding="utf-8"))
+    except Exception:
+        _conf = {}
+if isinstance(_conf.get("base"), int):
+    a.base = _conf["base"]
+if isinstance(_conf.get("max"), int):
+    a.max = _conf["max"]
+MANUAL = _conf.get("manual") if isinstance(_conf.get("manual"), int) else None
 
 
 def load_state():
@@ -176,7 +193,8 @@ def step():
     susp = [p for p in st["susp"] if p in {q for q, _ in ours}]
     idle = idle_seconds()
     quiet = idle >= a.idle_sec and fp < a.foreign_pct
-    want = min(a.max, len(ours)) if quiet else a.base
+    # ★ РУЧНОЙ РЕЖИМ СИЛЬНЕЕ ПРОСТОЯ: человек сказал «столько», значит столько, и в простое тоже.
+    want = MANUAL if MANUAL is not None else (min(a.max, len(ours)) if quiet else a.base)
     if free < a.min_free_gb:
         # ★ пол по памяти сильнее простоя: §6.106 — подкачка роняет темп в разы
         want = min(want, max(1, a.base - 2))
@@ -184,7 +202,8 @@ def step():
     active = [p for p, _ in ours if p not in susp]
 
     why = (f"простой {idle:.0f}с, чужой ЦП {fp:.0f}%, память {free:.1f} ГБ ⇒ "
-           f"{'ПРОСТОЙ' if quiet else 'машина занята'}")
+           + (f"РУЧНОЙ РЕЖИМ: держу {MANUAL}" if MANUAL is not None
+              else ("ПРОСТОЙ" if quiet else "машина занята")))
     if len(active) == want:
         say(f"активных {len(active)} из {len(ours)} — как надо; {why}")
         return
@@ -259,7 +278,7 @@ def pause(on):
         STATE.write_text(json.dumps({"susp": sorted(susp)}), encoding="utf-8")
         say(f"★ ПАУЗА: приостановлено {len(susp)} шардов, регулятор их не вернёт. "
             f"Свободно памяти {free:.1f} ГБ — приостановленные её ДЕРЖАТ.")
-        print("⚠ Прогресс цел: дамп шарда пишется в самом конце, приостановка его не теряет.")
+        print("⚠ Прогресс цел полностью: приостановленный процесс ничего не теряет.")
         print("⚠ Но память шарды держат. Если пауза на сутки — дешевле дать досчитать.")
     else:
         if PAUSED.is_file():
