@@ -130,6 +130,30 @@ def _announce(msg):
         print(f"  {msg}")
 
 
+def _pregate_ok(sheet, p):
+    """→ гнать ли ВТОРОЙ ПУТЬ на этом листе (§6.161, §6.178). `cv.rowdec_pregate` = 0.0 — гейта нет.
+
+    ⚠⚠ ПРИЗНАК СЧИТАЕТСЯ ПО ВСЕМ ЛИНИЯМ ЛИСТА, БЕЗ ФИЛЬТРОВ, и это не придирка. Ровно так он
+    считался в замере: `_pregate.py` берёт `lines` из `<лист>_understanding.json`, а тот —
+    `sheet.to_dict()` (`emit.py:31`). Отфильтруй здесь по `confidence == "AUTO"` или по цвету — и
+    прод будет решать по ДРУГОЙ величине, чем измерено. Это класс §6.144: там выбор считался по
+    «сколько линий декодер ПОВЁЛ», а мерился по «сколько кривых НАПИСАЛ», и цена подмены признака
+    вышла 14 кривых из ожидавшихся 20.
+    ⚠ Гейт стоит ДО `rowdec.trace_auto` намеренно: вся экономия в том, что на отсеянном листе
+    декодер НЕ СЧИТАЕТСЯ (§6.160 — порогом эта цена не регулируется). Гейт после вызова дал бы те
+    же кривые и НОЛЬ экономии.
+    """
+    thr = float(getattr(p, "rowdec_pregate", 0.0) or 0.0)
+    if thr <= 0.0:
+        return True
+    L = getattr(sheet, "lines", None) or []
+    if not L:
+        return True                    # не по чему решать — ведём себя как без гейта
+    from collections import Counter
+    c = Counter(str(getattr(x, "color", None)) for x in L)
+    return max(c.values()) / len(L) >= thr
+
+
 def trace_auto(rgb, sheet, p=None):
     """Трассировать все AUTO-линии листа. Возвращает list[(Line, {row:x})].
     Каждая трасса ДЕСПАЙКается (refine.despike): изолированные выбросы-спайки (перескок на рамку/
@@ -140,7 +164,7 @@ def trace_auto(rgb, sheet, p=None):
     # ★ ПОСТРОЧНЫЙ ДЕКОДЕР (Задача 9, §6.140): заменяет ведение целиком, а не выбор рана.
     # Выключен, пока не задан `row_decoder`; при недоступности говорит вслух и откатывается сюда.
     alt, pick, want_both = None, 0, False
-    if getattr(p, "row_decoder", ""):
+    if getattr(p, "row_decoder", "") and _pregate_ok(sheet, p):
         from . import rowdec
         alt = rowdec.trace_auto(rgb, sheet, p)
         pick = int(getattr(p, "rowdec_pick", 0) or 0)
