@@ -162,6 +162,12 @@ def parse_mode(s):
         elif k == "sib":
             # ★ §6.130: вес добавки «порядок зондов в семействе». По умолчанию 0 = прод.
             kw["__sib__"] = float(v or 0.0)
+        elif k == "pregate":
+            # ★★ §6.178: ПРЕДГЕЙТ ПО ЛИСТУ — гнать второй путь только там, где доля самого частого
+            # цвета среди линий листа не ниже порога. 0 = гейта нет (второй путь на каждом листе).
+            # ⚠ Требует `rowdec=`: без второго пути гейту нечего пропускать, и ключ молча ничего бы
+            # не значил — а молчаливо пустая ручка уже стоила ветке замера (§6.153).
+            kw["__pregate__"] = float(v or 0.0)
         elif k == "wellmap":
             # ★★ §6.153: карта «лист → скважина манифеста». Делает держанность `auto5`
             # настоящей; без неё 51% листов декодирует модель, видевшая скважину.
@@ -191,6 +197,9 @@ def parse_mode(s):
     # ⚠ `order=` НЕ обязателен, в отличие от `seq`/`slot`, и это осознанно. Пиннить требуется то,
     # что молча разъезжается МЕЖДУ МАШИНАМИ: `seq` зависит от наличия torch, `slot` — от наличия
     # веса. `slot_order` же берётся из конфига одинаково везде, поэтому умолчание тут честное.
+    if kw.get("__pregate__") and not rowdec:
+        sys.exit(f"⛔ режим {nm!r}: `pregate=` без `rowdec=` — гейту нечего пропускать, "
+                 f"ручка не значила бы ничего")
     if (kw.get("__rdpick__") or kw.get("__rdmodel__")) and not rowdec:
         sys.exit(f"режим {nm!r}: rdpick= задан, но rowdec= пуст — выбирать не из чего, режим молча совпал бы с продом")
     if order not in ("x_center", "med_x", "rough_n"):
@@ -198,7 +207,7 @@ def parse_mode(s):
     # ⚠ `__sib__` — ручка РАСКЛАДКИ (§6.130), а не параметр `trace_line`: под селектором она
     # действует, поэтому из этой проверки исключена.
     _kwv = [k for k in kw if k not in ("__sib__", "__rdcolor__", "__rdpool__", "__rdpick__",
-                                      "__rdmodel__", "__degen__", "__wellmap__")]
+                                      "__rdmodel__", "__degen__", "__wellmap__", "__pregate__")]
     if seq and _kwv:
         print(f"⚠ режим {nm!r}: при включённом селекторе параметры {_kwv} НЕ действуют — "
               f"`trace_seq` строит свой трассировщик и правила вершины у него нет вовсе")
@@ -363,6 +372,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
     rd_pool = bool(kw.pop("__rdpool__", 1))
     rd_col = float(kw.pop("__rdcolor__", 0.0) or 0.0)
     rd_pick = int(kw.pop("__rdpick__", 0) or 0)
+    pregate = float(kw.pop("__pregate__", 0.0) or 0.0)
     rd_model = kw.pop("__rdmodel__", "") or ""
     degen = bool(kw.pop("__degen__", False))
     wellmap = kw.pop("__wellmap__", "") or ""
@@ -404,6 +414,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
         cfg.cv.rowdec_dir = rddir
         cfg.cv.rowdec_color = rd_col
         cfg.cv.rowdec_pick = rd_pick
+        cfg.cv.rowdec_pregate = pregate
         cfg.cv.rowdec_pick_model = rd_model
         cfg.cv.color_fg_degen = degen
         cfg.cv.rowdec_wellmap = wellmap

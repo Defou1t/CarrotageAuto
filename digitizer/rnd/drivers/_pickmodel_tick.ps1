@@ -112,7 +112,16 @@ if ($hn -eq 8 -and (Test-Path "$ts/percurve_rdhonest.pkl")) {
   # Тот же принцип: свой возобновляемый драйвер отдаёт ОДНУ порцию и выходит; снос стоит одного фолда.
   $hp = @(0..4 | Where-Object { -not (Test-Path "$ts/percurve_hpickf$_.pkl") })
   if ($hp.Count -eq 0) {
-    Say "всё посчитано, включая честный обученный выбор — работы нет, тик можно снимать"
+    # ★★ ПОСЛЕДНЯЯ ПОРЦИЯ — ПОДТВЕРЖДАЮЩИЙ A/B ПРЕДГЕЙТА (§6.184). Ручка внесена
+    # в прод 05.09, и самое важное теперь — увидеть на ОТГРУЖАЕМОМ пути 965 у A и ~1109 у G.
+    # Не увидели — откатывать, а не объяснять.
+    $pg = @('A','G') | Where-Object { -not (Test-Path "$ts/percurve_pregate_$_.pkl") }
+    if ($pg.Count -eq 0) {
+      Say "всё посчитано, включая A/B предгейта — работы нет, тик можно снимать"
+    } else {
+      Say "A/B предгейта: не выгружено режимов $($pg.Count) — отдаю порцию"
+      & "$ts/_pregate_ab_run.ps1" *>&1 | Out-File -FilePath $log -Encoding utf8 -Append
+    }
   } else {
     Say "честный обученный выбор: не выгружено фолдов $($hp.Count) — отдаю порцию"
     & "$ts/_pickhonest_run.ps1" *>&1 | Out-File -FilePath $log -Encoding utf8 -Append
