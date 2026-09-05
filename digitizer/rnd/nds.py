@@ -83,15 +83,24 @@ def live():
     fin = [q for q in fin if not q.name.endswith(".part.pkl")]
     print(f"   дампов ГОТОВЫХ {len(fin)}, промежуточных {len(part)}"
           + ("   ⚠ промежуточных нет — остановка сейчас дороже" if not part and not fin else ""))
-    if part:
-        import pickle
-        tot = 0
-        for q in part:
+    # ★ СЧИТАТЬ НАДО ОБА ВИДА. Здесь считались только промежуточные, и пульт говорил «сохранено
+    #   180», когда три шарда были ДОСЧИТАНЫ и на диске лежало вчетверо больше. Заниженная цифра
+    #   пугает не меньше завышенной: по ней паузу откладывают там, где она давно безопасна.
+    import pickle
+
+    def _sheets(paths):
+        t = 0
+        for q in paths:
             try:
-                tot += sum(len(v[1]) for v in pickle.load(open(q, "rb")).get("res", {}).values())
+                t += sum(len(v[1]) for v in pickle.load(open(q, "rb")).get("res", {}).values())
             except Exception:
                 pass
-        print(f"   ★ в промежуточных сохранено листов: {tot} — столько НЕ пропадёт при остановке")
+        return t
+
+    sf, sp = _sheets(fin), _sheets(part)
+    if sf or sp:
+        print(f"   ★ СОХРАНЕНО листо-прогонов: {sf + sp} "
+              f"(в готовых {sf}, в промежуточных {sp}) — столько НЕ пропадёт при остановке")
 
 
 def verdict():
