@@ -391,6 +391,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
           f"rddir={rddir or '— (замороженный frozen_nobg)'}, "
           f"rdcolor={rd_col or '— (выкл)'}, "
           f"rdpick={rd_pick or '— (выкл, путь один)'}, "
+          f"pregate={pregate or '— (выкл, второй путь на каждом листе)'}, "
           f"rdmodel={rd_model or '— (выкл)'}, "
           f"degen={'ВКЛ' if degen else '— (выкл, прод)'}, "
           f"wellmap={'ЕСТЬ (честная держанность)' if wellmap else '— (скважина из имени)'}, "
