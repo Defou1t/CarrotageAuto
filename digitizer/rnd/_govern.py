@@ -159,7 +159,14 @@ def say(m):
     line = time.strftime("%m-%d %H:%M:%S") + "  " + m
     with open(a.log, "a", encoding="utf-8") as f:
         f.write(line + "\n")
-    print(line)
+    # ⚠ ПЕЧАТЬ НЕ ИМЕЕТ ПРАВА УРОНИТЬ РЕГУЛЯТОР. Под планировщиком (wscript //B) и в конвейере
+    # PowerShell стандартный вывод бывает недоступен, и `print` бросает OSError 22. Регулятор к
+    # этому моменту уже ПРИОСТАНОВИЛ процессы — падение оставило бы их замороженными навсегда.
+    # Журнал в файле обязателен, экран — удобство.
+    try:
+        print(line)
+    except OSError:
+        pass
 
 
 def setrun(pid, resume):
@@ -211,14 +218,18 @@ def step():
         for p in active[want:]:
             if setrun(p, False):
                 susp.append(p)
-        say(f"СЖИМАЮСЬ: {len(active)} → {want} активных (приостановлено {len(active)-want}); {why}")
+        msg = f"СЖИМАЮСЬ: {len(active)} → {want} активных (приостановлено {len(active)-want}); {why}"
     else:                                        # расширяемся: вернуть приостановленных
         need = want - len(active)
         for p in list(susp)[:need]:
             if setrun(p, True):
                 susp.remove(p)
-        say(f"РАСШИРЯЮСЬ: {len(active)} → {len(ours)-len(susp)} активных; {why}")
+        msg = f"РАСШИРЯЮСЬ: {len(active)} → {len(ours)-len(susp)} активных; {why}"
+    # ★★ СОСТОЯНИЕ ЗАПИСЫВАЕТСЯ РАНЬШЕ СЛОВ. Приостановка уже СЛУЧИЛАСЬ; если что-то помешает
+    # между делом и записью, следующий тик не найдёт приостановленных в списке, не вернёт их и
+    # будет замораживать дальше — счёт встанет молча. Дело фиксируем, потом рассказываем.
     STATE.write_text(json.dumps({"susp": susp}), encoding="utf-8")
+    say(msg)
 
 
 def release():

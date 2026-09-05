@@ -31,6 +31,10 @@ PAUSED = LOG.with_suffix(".paused")
 
 
 def gov(*args):
+    # ⚠⚠ ПУЛЬТ САМ БЫЛ ВТОРОЙ ВОЛЕЙ. Планировщик зовёт регулятор с `--base 3 --max 8`, а отсюда он
+    # звался БЕЗ ключей — то есть с умолчаниями стенда (base=4). Каждый `nds status` расширял счёт
+    # до 4, каждый тик через минуту сжимал до 3, и журнал заполнялся качелями. ⇒ Настройка живёт
+    # ТОЛЬКО в `govern.conf.json`, который перебивает ключи у ОБОИХ вызовов (§6.186).
     subprocess.run([PY, str(RND / "_govern.py"), *args], cwd=str(RND))
 
 
@@ -90,8 +94,20 @@ def live():
         print(f"   ★ в промежуточных сохранено листов: {tot} — столько НЕ пропадёт при остановке")
 
 
+def verdict():
+    """★ ПРИГОВОР ПРИЁМКИ — В ПУЛЬТ, А НЕ В ЛОГ. Вердикт, лежащий только в файле лога, человек
+    узнаёт последним; пульт — то место, куда и так смотрят."""
+    vf = Path(r"F:/nds/output/taskS/pregate_verdict.txt")
+    if not vf.is_file():
+        return
+    head = (vf.read_text(encoding="utf-8", errors="replace").splitlines() or [""])[0]
+    mark = "★★★" if head.startswith("ПРИНЯТО") else "⛔⛔"
+    print(f"\n{mark} ПРИЁМКА ПРЕДГЕЙТА: {head}\n    подробности: {vf}")
+
+
 def status():
     live()
+    verdict()
     print()
     if PAUSED.is_file():
         print("⏸  СЧЁТ НА ПАУЗЕ. Продолжить: nds go")
@@ -103,9 +119,15 @@ def status():
             pass
     if isinstance(d.get("manual"), int):
         print(f"🔧 РУЧНОЙ РЕЖИМ: держится ровно {d['manual']} процессов. Вернуть автоматику: nds auto")
-    else:
-        print(f"🔄 АВТОМАТИКА: под рукой {d.get('base', 3)}, в простое до {d.get('max', 8)}. "
+    elif isinstance(d.get("base"), int) and isinstance(d.get("max"), int):
+        print(f"🔄 АВТОМАТИКА: под рукой {d['base']}, в простое до {d['max']}. "
               f"Задать вручную: nds cores N")
+    else:
+        # ★ ЧЕСТНЕЕ НЕ ЗНАТЬ, ЧЕМ ПОДСТАВИТЬ ПРАВДОПОДОБНОЕ. Здесь стояло `d.get('base', 3)` —
+        #   и пульт печатал «под рукой 3», когда регулятор держал 4: умолчание пульта разошлось с
+        #   умолчанием стенда, а на экране разницы не было видно.
+        print("🔄 АВТОМАТИКА: пределы не заданы в govern.conf.json — действуют умолчания "
+              "регулятора. Задать: nds cores N (ручной режим) или прописать base/max в конфиг.")
     gov("--once")
 
 
