@@ -45,6 +45,8 @@ ap.add_argument("--roots", nargs="+", default=[r"F:\nds\projects\Archive"])
 ap.add_argument("--lo", type=int, default=3)
 ap.add_argument("--hi", type=int, default=4)
 ap.add_argument("--cap", type=int, default=0)
+ap.add_argument("--dump-off", action="store_true",
+                help="выгрузить трассы «вне линий» для разбора по картинке (_offtrace_ink.py)")
 a = ap.parse_args()
 TS = Path(a.ts)
 
@@ -89,8 +91,13 @@ BYDIR = {f"{q.stem[:40]}_{hashlib.md5(q.stem.encode('utf-8')).hexdigest()[:8]}":
          for nm, q in SRC.items()}
 
 
+t_name = lambda g: g                # имя эталонной кривой как есть — отдельная функция для ясности
+
+
 def why(moddir):
     """→ Counter причин по кривым корзины K и число взятых."""
+    global OFF
+    OFF = []
     MD = Path(a.ts) / moddir
     dirs = sorted([d for d in MD.iterdir() if d.is_dir()]) if MD.is_dir() else []
     if a.cap:
@@ -194,6 +201,11 @@ def why(moddir):
                                 c["      ↳↳ на линии, но систематически смещена"] += 1
                             else:
                                 c["      ↳↳ вне линий (рамка/сетка/шум)"] += 1
+                                # ★ ВЫГРУЗКА САМИХ ТРАСС ДЛЯ РАЗБОРА ПО КАРТИНКЕ. «Вне линий» —
+                                #   это «не совпало с эталоном», а не «не на туши»; следующий шаг
+                                #   спрашивает маску. Дампим ЗДЕСЬ, чтобы разбор шёл по тем же
+                                #   трассам, что вынесли приговор, а не по повторно отобранным.
+                                OFF.append((nm, t_name(g), best_w, dict(t)))
     return c, sheets, tracks
 
 
@@ -202,6 +214,10 @@ res = {}
 for tag, moddir in (("ПРОД", a.prod), ("ДЕКОДЕР", a.dec)):
     c, sheets, tracks = why(moddir)
     res[tag] = c
+    if a.dump_off:
+        p = Path(a.ts) / f"offtrace_{tag}_{a.lo}_{a.hi}.pkl"
+        pickle.dump(OFF, open(p, "wb"))
+        print(f"   ★ трасс «вне линий» выгружено {len(OFF)} → {p.name}")
     n = sum(v for k, v in c.items() if not k.startswith(" "))
     print(f"   {tag} ({moddir}): листов {sheets}, треков корзины {tracks}, кривых {n}")
 
