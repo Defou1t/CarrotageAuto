@@ -138,6 +138,22 @@ def segments(rows, Y0):
     return [s["pts"] for s in done + active if len(s["pts"]) >= a.minseg]
 
 
+def match(rows, cols, ok):
+    """Максимальное 1:1 внутри трека — механика `_name_cost_prod.py` дословно."""
+    pair = {}
+
+    def try_(r, seen):
+        for c in cols:
+            if not ok.get((r, c)) or c in seen:
+                continue
+            seen.add(c)
+            if c not in pair or try_(pair[c], seen):
+                pair[c] = r
+                return True
+        return False
+    return [r for r in rows if try_(r, set())]
+
+
 def stats(tr, gt):
     com = [y for y in tr if y in gt]
     if len(com) < 30:
@@ -223,10 +239,14 @@ for si, sh in enumerate(mine, 1):
                 m2, c2 = stats(br, g)
                 if HON(m2, c2):
                     cnt["★ сборка с мостиком"] += 1
-            for tag in ("прод", "декодер"):
-                w = outs[tag].get(nm)
-                if w and HON(*stats(w, g)):
-                    cnt[tag] += 1
+        # ⚠⚠ ВЕДУЩИЙ СЧЁТ — БЕЗЫМЯННЫЙ 1:1 (§6.143). Здесь стояло сравнение ПО ИМЕНИ
+        # (`outs[tag].get(nm)`), а сборка считалась фактически безымянно — и стенд печатал
+        # «50.8% против 27.1% у прода», сравнивая РАЗНЫЕ величины. На безымянном счёте прод на
+        # этих же листах даёт около 50%, то есть преимущества у сборки не было.
+        for tag in ("прод", "декодер"):
+            W_ = [k for k in outs[tag] if tm.get(k) == t]
+            ok = {(g2, w): HON(*stats(outs[tag][w], gts[g2])) for g2 in ns for w in W_}
+            cnt[tag] += len(match(ns, W_, ok))
     if si % 5 == 0 or si == len(mine):
         print(f"  {si}/{len(mine)}  кривых {cnt['кривых']}, сборка без мостика {cnt['★ сборка без мостика']}")
 
