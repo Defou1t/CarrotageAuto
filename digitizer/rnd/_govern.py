@@ -39,7 +39,11 @@ sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 from pathlib import Path
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--match", default=r"_trace_prod_ab\.py|_name_cost_prod\.py",
+# ⛔ 25.09: список был только `_trace_prod_ab|_name_cost_prod` — сборка кэша трасс (`_trace_cache.py`), выборки и обучение
+#   селектора (`_seq_data_big`, `_seq_onpolicy`, `_decoder_seq`) и декодера (`_rowdec_net`) регулятор НЕ ВИДЕЛ («шардов нет —
+#   регулировать нечего» весь день при 8 живых процессах). Игры держал только пониженный приоритет.
+ap.add_argument("--match", default=r"_trace_prod_ab\.py|_name_cost_prod\.py|_trace_cache\.py|_seq_data_big\.py|"
+                                   r"_seq_onpolicy\.py|_decoder_seq\.py|_rowdec_net\.py",
                 help="регулярка по КОМАНДНОЙ СТРОКЕ: что считать нашим счётом")
 ap.add_argument("--base", type=int, default=4, help="активных, пока машиной пользуются")
 ap.add_argument("--max", type=int, default=99, help="потолок активных в простое")
@@ -79,6 +83,13 @@ def ps(cmd):
                           creationflags=0x08000000).stdout   # CREATE_NO_WINDOW: без окон (§6.168)
 
 
+# ★ 25.09: ВАЖНОСТЬ процессов счёта — кого держать активным, когда активных меньше, чем живых. Первыми — критический путь
+#   (сборка кэша трасс и A/B на GPU), затем счёт и обучение, последними — сборы выборок на CPU.
+PRIO = [r"_trace_cache\.py", r"_trace_prod_ab\.py", r"_name_cost_prod\.py", r"_decoder_seq\.py", r"_rowdec_net\.py",
+        r"_seq_onpolicy\.py", r"_seq_data_big\.py"]
+RANK = {}
+
+
 def snapshot():
     """Один заход к Windows: наши процессы с их временем ЦП, суммарное время ЦП, свободная память."""
     out = ps("$os=Get-CimInstance Win32_OperatingSystem; "
@@ -98,8 +109,11 @@ def snapshot():
             free = float(p[1]) / 1048576.0
         elif p[0] == "P" and len(p) >= 4 and rx.search(p[3]):
             ours.append((int(p[1]), float(p[2])))
+            RANK[int(p[1])] = next((i for i, r in enumerate(PRIO) if re.search(r, p[3])), len(PRIO))
         elif p[0] == "T":
             tot += float(p[1])
+    # ★ по важности (см. `PRIO`), при равной — по PID (стабильно между тиками)
+    ours.sort(key=lambda t: (RANK.get(t[0], len(PRIO)), t[0]))
     return ours, tot, free
 
 
@@ -211,20 +225,24 @@ def step():
     why = (f"простой {idle:.0f}с, чужой ЦП {fp:.0f}%, память {free:.1f} ГБ ⇒ "
            + (f"РУЧНОЙ РЕЖИМ: держу {MANUAL}" if MANUAL is not None
               else ("ПРОСТОЙ" if quiet else "машина занята")))
-    if len(active) == want:
+    # ★ 25.09: КТО ИМЕННО РАБОТАЕТ — ПО ВАЖНОСТИ, а не по случайному порядку процессов. `ours` отсортирован по
+    #   рангу (`PRIO`: сборка кэша и A/B — критический путь — первыми, сбор выборок последним). Активными должны быть
+    #   первые `want`; если сейчас активен менее важный, а важный стоит, — меняем их местами.
+    keep = {p for p, _ in ours[:want]}
+    stop = [p for p in active if p not in keep]
+    start = [p for p in susp if p in keep]
+    if not stop and not start:
         say(f"активных {len(active)} из {len(ours)} — как надо; {why}")
         return
-    if len(active) > want:                       # сжимаемся: приостановить лишние
-        for p in active[want:]:
-            if setrun(p, False):
-                susp.append(p)
-        msg = f"СЖИМАЮСЬ: {len(active)} → {want} активных (приостановлено {len(active)-want}); {why}"
-    else:                                        # расширяемся: вернуть приостановленных
-        need = want - len(active)
-        for p in list(susp)[:need]:
-            if setrun(p, True):
-                susp.remove(p)
-        msg = f"РАСШИРЯЮСЬ: {len(active)} → {len(ours)-len(susp)} активных; {why}"
+    for p in stop:                               # приостановить лишних / менее важных
+        if setrun(p, False):
+            susp.append(p)
+    for p in start:                              # вернуть важных
+        if setrun(p, True):
+            susp.remove(p)
+    n_act = len(ours) - len(susp)
+    msg = (f"{'СЖИМАЮСЬ' if n_act < len(active) else 'РАСШИРЯЮСЬ' if n_act > len(active) else 'ПЕРЕСТАНОВКА ПО ВАЖНОСТИ'}: "
+           f"{len(active)} → {n_act} активных (остановлено {len(stop)}, возобновлено {len(start)}); {why}")
     # ★★ СОСТОЯНИЕ ЗАПИСЫВАЕТСЯ РАНЬШЕ СЛОВ. Приостановка уже СЛУЧИЛАСЬ; если что-то помешает
     # между делом и записью, следующий тик не найдёт приостановленных в списке, не вернёт их и
     # будет замораживать дальше — счёт встанет молча. Дело фиксируем, потом рассказываем.

@@ -18,6 +18,17 @@ function RunPy([string[]]$A, [string]$Out) {
 }
 $N=4
 function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-File -FilePath $log -Encoding utf8 -Append }
+# ★ 25.09: ОДИН ЭКЗЕМПЛЯР. 12:24 сторож перезапустил задачу в окне замены драйвера, и два драйвера кэша с 18:00 держали по
+#   комплекту шардов — дубли считали одни листы и дрались за один .tmp (PermissionError, шард падал кодом 1).
+#   Второй экземпляр не запускает ничего: ждёт конца первого и выходит, если тот дописал маркер конца.
+$self = Split-Path -Leaf $MyInvocation.MyCommand.Path
+function Others { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$self*" }) }
+if ((Others).Count -gt 0) {
+  Say "⚠ уже работает экземпляр $((Others)[0].ProcessId) этого драйвера — второй не запускаю, жду его конца"
+  while ((Others).Count -gt 0) { Start-Sleep -Seconds 60 }
+  if ((Test-Path $log) -and (Select-String -Path $log -Pattern '=== SEQBIG DONE ===' -SimpleMatch -CaseSensitive -Quiet)) { exit 0 }
+  Say "первый экземпляр завершился без маркера конца — продолжаю сам"
+}
 New-Item -ItemType Directory -Force -Path "$ts/seqbig_logs" | Out-Null
 Say "старт: выборка, обучение и оценка — сразу; сборка кэша с новым селектором — после === TCACHE DONE ==="
 

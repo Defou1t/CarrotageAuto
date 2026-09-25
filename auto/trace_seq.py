@@ -173,9 +173,16 @@ def make_tracer(model_path, device=None):
     # ПОБИТОВО том же результате (проверено allclose). Без cuda — обычный вызов.
     G = {}
     if dev == "cuda":
-        sP = torch.zeros(1, 2, NROW, NCOL, device=dev)
-        sF = torch.zeros(1, MAXC, NF, device=dev)
-        sM = torch.zeros(1, MAXC, device=dev)
+        # ★ §6.219 (25.09): вход сети — ОДИН закреплённый буфер на хосте и ОДИН буфер на GPU, виды которого захвачены
+        #   графом; на строку — одно асинхронное копирование вместо трёх (было 62% времени листа). Выдача побайтно та же
+        #   (сверка повтора с кэша трасс против A/B на всём поле, `tcache_parity.txt`); ≈ ×1.25 на лист.
+        _nP, _nF, _nM = 2 * NROW * NCOL, MAXC * NF, MAXC
+        dbuf = torch.zeros(_nP + _nF + _nM, device=dev)
+        sP = dbuf[:_nP].view(1, 2, NROW, NCOL)
+        sF = dbuf[_nP:_nP + _nF].view(1, MAXC, NF)
+        sM = dbuf[_nP + _nF:].view(1, MAXC)
+        hbuf = torch.zeros(_nP + _nF + _nM, pin_memory=True)
+        hnp = hbuf.numpy()
         with torch.no_grad():
             st = torch.cuda.Stream(); st.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(st):
@@ -185,7 +192,7 @@ def make_tracer(model_path, device=None):
             gr = torch.cuda.CUDAGraph()
             with torch.cuda.graph(gr):
                 sOut = net(sP, sF, sM)
-        G.update(g=gr, P=sP, F=sF, M=sM, out=sOut)
+        G.update(g=gr, P=sP, F=sF, M=sM, out=sOut, dbuf=dbuf, hbuf=hbuf, hnp=hnp, n=(_nP, _nF, _nM))
 
     def score(ink, val, X, n):
         pt = np.stack([ink, val]).astype(np.float32)[None]
@@ -194,8 +201,9 @@ def make_tracer(model_path, device=None):
         if not G:
             return net(torch.from_numpy(pt).to(dev), torch.from_numpy(f).to(dev),
                        torch.from_numpy(mm).to(dev))
-        G["P"].copy_(torch.from_numpy(pt)); G["F"].copy_(torch.from_numpy(f))
-        G["M"].copy_(torch.from_numpy(mm))
+        _nP, _nF, _nM = G["n"]; h = G["hnp"]
+        h[:_nP] = pt.reshape(-1); h[_nP:_nP + _nF] = f.reshape(-1); h[_nP + _nF:] = mm.reshape(-1)
+        G["dbuf"].copy_(G["hbuf"], non_blocking=True)
         G["g"].replay()
         return G["out"]
 
