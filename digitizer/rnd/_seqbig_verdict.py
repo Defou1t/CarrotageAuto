@@ -26,7 +26,8 @@ wm = json.load(open(TS / "rowdec_wellmap.json", encoding="utf-8"))
 
 
 def load(p):
-    return pickle.load(open(TS / p, "rb"))[a.mode]
+    d = pickle.load(open(TS / p, "rb"))
+    return d[a.mode] if a.mode in d else next(iter(d.values()))     # файл счёта помечен своим режимом
 
 
 def lst(n):

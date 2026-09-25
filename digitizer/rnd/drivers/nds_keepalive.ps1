@@ -7,6 +7,7 @@ function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-F
 $jobs = @(
   @{ task='nds_tcache';     log='F:\nds\output\taskS\_tcache.log';    done='=== TCACHE DONE ===' },
   @{ task='nds_seqbig';     log='F:\nds\output\taskS\_seqbig.log';    done='=== SEQBIG DONE ===' },
+  @{ task='nds_seqdag';     log='F:\nds\output\taskS\_seqdag.log';    done='=== SEQDAG DONE ===' },
   @{ task='nds_holdA_ab';   log='F:\nds\output\taskS\_holdA_ab.log';  done='=== HOLDA DONE ===' },
   @{ task='nds_slot_ab';   log='F:\nds\output\taskS\_slot_ab.log';   done='=== SLOT DONE ===' },
   @{ task='nds_names_ab';   log='F:\nds\output\taskS\_names_ab.log';  done='=== NAMES DONE ===' },
