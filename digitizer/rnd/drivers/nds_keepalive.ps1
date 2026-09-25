@@ -5,6 +5,8 @@
 $log = 'F:\nds\output\taskS\_keepalive.log'
 function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-File -FilePath $log -Encoding utf8 -Append }
 $jobs = @(
+  @{ task='nds_tcache';     log='F:\nds\output\taskS\_tcache.log';    done='=== TCACHE DONE ===' },
+  @{ task='nds_holdA_ab';   log='F:\nds\output\taskS\_holdA_ab.log';  done='=== HOLDA DONE ===' },
   @{ task='nds_slot_ab';   log='F:\nds\output\taskS\_slot_ab.log';   done='=== SLOT DONE ===' },
   @{ task='nds_names_ab';   log='F:\nds\output\taskS\_names_ab.log';  done='=== NAMES DONE ===' },
   @{ task='nds_train_bg1'; log='F:\nds\output\taskS\_train_bg1.log'; done='=== TRAIN DONE ===' },
