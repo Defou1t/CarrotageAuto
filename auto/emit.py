@@ -13,7 +13,7 @@ DURABLE-ограничение (PLAN §6.6.10): фабрикация рамки 
   emit_into_frame     — инъекция AUTO-трасс в лёгкую рамку → _auto.nlgx(+bck) [+ las через export_las];
   emit                — диспетчер: понимание всегда, nlgx — если дана рамка.
 """
-import json, math
+import json, math, os
 from pathlib import Path
 import numpy as np
 
@@ -31,7 +31,10 @@ def emit_understanding(sheet, traces, out, stem, rgb=None):
     js = out / f"{stem}_understanding.json"
     js.write_text(json.dumps(sheet.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
     res = {"understanding": str(js)}
-    if rgb is not None:
+    # ★ 26.09: `CARROTAGE_NO_OVERLAY=1` — не писать overlay.png (выдачу `.nlgx` не меняет). Стенды A/B пишут по оверлею на
+    #   КАЖДЫЙ лист каждого режима: к 26.09 их накопилось 18.9 тыс. файлов на 73 ГБ, и не читает их никто (§6.106). Прод —
+    #   по умолчанию как прежде.
+    if rgb is not None and os.environ.get("CARROTAGE_NO_OVERLAY", "") not in ("1", "true", "yes"):
         res["overlay"] = _overlay(rgb, sheet, traces, out, stem)
     return res
 

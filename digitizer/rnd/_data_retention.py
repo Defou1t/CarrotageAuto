@@ -36,6 +36,7 @@ ap.add_argument("--graphify-only", action="store_true")
 ap.add_argument("--keep-overlay-recent", type=int, default=3,
                 help="в скольких САМЫХ СВЕЖИХ каталогах прогонов оверлеи оставить")
 ap.add_argument("--overlay-only", action="store_true", help="только раздел оверлеев")
+ap.add_argument("--quarantine", default="", help="с --apply: ПЕРЕНОСИТЬ сюда (тот же том, манифест) вместо удаления")
 a = ap.parse_args()
 
 ROOT = Path(a.root)
@@ -103,7 +104,16 @@ def rm(p: Path, why: str, freed: dict, quiet: bool = False):
     freed["mb"] += size; freed["n"] += 1
     if not quiet:
         print(f"  {'УДАЛЯЮ ' if a.apply else 'удалил бы'} {str(p)[-64:]:<66} {size:>8.0f} МБ  {why}")
-    if a.apply:
+    if a.apply and a.quarantine:
+        # ★ 26.09: КАРАНТИН ВМЕСТО УДАЛЕНИЯ — перенос в `--quarantine` с тем же относительным путём (от корня диска) и
+        #   строкой манифеста; на том же томе это переименование, мгновенно. Окончательно чистит владелец.
+        q = Path(a.quarantine)
+        dst = q / Path(*p.resolve().parts[1:])
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(p), str(dst))
+        with open(q / "_manifest.tsv", "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M')}\t{p}\t{dst}\t{size:.1f} МБ\t{why}\n")
+    elif a.apply:
         shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
 
 

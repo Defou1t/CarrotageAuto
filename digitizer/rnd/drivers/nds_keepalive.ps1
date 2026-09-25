@@ -4,16 +4,9 @@
 # чужие живые шарды они подхватывают, а не дублируют. ⚠ UTF-8 С BOM; маркеры — ASCII.
 $log = 'F:\nds\output\taskS\_keepalive.log'
 function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-File -FilePath $log -Encoding utf8 -Append }
+# ★ 26.09: отработавшие задачи сняты с планировщика (аудит проекта); в списке — только живые драйверы.
 $jobs = @(
-  @{ task='nds_tcache';     log='F:\nds\output\taskS\_tcache.log';    done='=== TCACHE DONE ===' },
-  @{ task='nds_seqbig';     log='F:\nds\output\taskS\_seqbig.log';    done='=== SEQBIG DONE ===' },
-  @{ task='nds_seqdag';     log='F:\nds\output\taskS\_seqdag.log';    done='=== SEQDAG DONE ===' },
-  @{ task='nds_seqdag2';    log='F:\nds\output\taskS\_seqdag2.log';   done='=== SEQDAG2 DONE ===' },
-  @{ task='nds_holdA_ab';   log='F:\nds\output\taskS\_holdA_ab.log';  done='=== HOLDA DONE ===' },
-  @{ task='nds_slot_ab';   log='F:\nds\output\taskS\_slot_ab.log';   done='=== SLOT DONE ===' },
-  @{ task='nds_names_ab';   log='F:\nds\output\taskS\_names_ab.log';  done='=== NAMES DONE ===' },
-  @{ task='nds_train_bg1'; log='F:\nds\output\taskS\_train_bg1.log'; done='=== TRAIN DONE ===' },
-  @{ task='nds_bg1_ab';    log='F:\nds\output\taskS\_bg1_ab.log';    done='=== BG1 DONE ===' }
+  @{ task='nds_seqbig';     log='F:\nds\output\taskS\_seqbig.log';    done='=== SEQBIG DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue

@@ -95,7 +95,12 @@ ap.add_argument("--max-rss-gb", type=float, default=0.0, help="порог RSS, �
 ap.add_argument("--max-hours", type=float, default=0.0, help="партия: дамп и выход кодом 75, если шард работает дольше часов")
 ap.add_argument("--wlg-roots", nargs="+", default=[r"F:\nds\projects\Archive"],
                 help=r"корни, где лежат <скважина>/wlg/*.nlgx (держанный набор — intake\sorted)")
+ap.add_argument("--overlay", action="store_true", help="писать overlay.png на каждый лист (по умолчанию выкл., §6.222)")
 a = ap.parse_args()
+# ★ 26.09: оверлеи A/B никто не читает, а весили 73 ГБ — по умолчанию не пишем (выдачу .nlgx это не меняет)
+import os as _os
+if not a.overlay:
+    _os.environ["CARROTAGE_NO_OVERLAY"] = "1"
 SH_I, SH_N = (int(v) for v in a.shard.split("/"))
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
 
