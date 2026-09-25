@@ -47,6 +47,19 @@ def run(image_path, frame_nlgx=None, cfg=None, read_ruler=False, las=False,
     if read_ruler:
         scales_mod.count_levels(rgb, sheet, cfg)
     confidence_mod.classify(sheet)
+    # ★ §6.204: число слотов раскладки ПО ТРЕКУ — до ведения, чтобы декодер не был ограничен
+    # числом линий U1. Считается тем же `emit._slot_track`, что и сама раскладка, по тем же
+    # кривым шаблона (без DA — как в пуловых дампах). Без шаблона считать не по чему — ручка
+    # молча не действует (`sheet.k_slots` остаётся пустым, `rowdec` ведёт по линиям U1).
+    sheet.k_slots = {}
+    if getattr(cfg.cv, "rowdec_k_slots", False) and frame_nlgx:
+        from extract_nlgx import extract as _extract
+        _model = _extract(str(frame_nlgx))
+        for c in _model.get("curves", []):
+            if meta_mod.mnem_root(c.get("name", "")) == "DA":
+                continue
+            ti = emit_mod._slot_track(_model, c, sheet.frame)
+            sheet.k_slots[ti] = sheet.k_slots.get(ti, 0) + 1
     traces = trace2d.trace_auto(rgb, sheet, cfg.cv)
     stem = Path(image_path).stem
     res = emit_mod.emit(sheet, traces, cfg.ensure_out(), stem, rgb=rgb,

@@ -86,6 +86,13 @@ ap.add_argument("--out", default=r"F:\nds\output\taskS\prod_ab_trace")
 # глубины меняет разбор ровно 36 листов из 702, на остальных вход пайплайна побитово тот же).
 # Мерить такую правку на всей выборке — размывать её собственный сигнал. Файл: имя nlgx на строку.
 ap.add_argument("--only-from", default="", help="файл со списком имён nlgx (по одному на строку)")
+# ★ 18.09: ПАМЯТЬ ШАРДА РАСТЁТ С ЧИСЛОМ ЛИСТОВ (шард 0 прогона §6.213: 17.6 ГБ после 72 листов; в
+#   §6.209 так пропали 4 листа по MemoryError). Причина не найдена (4 листа подряд в одном процессе —
+#   RSS ровный), поэтому лечение механическое: выше порога — сохранить промежуточный дамп и выйти
+#   кодом 75; драйвер перезапускает шард, и тот продолжает с дампа. 0 = выкл.
+ap.add_argument("--max-rss-gb", type=float, default=0.0, help="порог RSS, ГБ: выше — дамп и выход кодом 75 (перезапуск)")
+# ★ 19.09 (правило заказчика): партия не дольше N часов — после листа, на котором время вышло, дамп и выход кодом 75.
+ap.add_argument("--max-hours", type=float, default=0.0, help="партия: дамп и выход кодом 75, если шард работает дольше часов")
 ap.add_argument("--wlg-roots", nargs="+", default=[r"F:\nds\projects\Archive"],
                 help=r"корни, где лежат <скважина>/wlg/*.nlgx (держанный набор — intake\sorted)")
 a = ap.parse_args()
@@ -170,6 +177,27 @@ def parse_mode(s):
             # ⚠ Требует `rowdec=`: без второго пути гейту нечего пропускать, и ключ молча ничего бы
             # не значил — а молчаливо пустая ручка уже стоила ветке замера (§6.153).
             kw["__pregate__"] = float(v or 0.0)
+        elif k == "kslots":
+            # ★ §6.204: K декодера не ниже числа слотов трека (`cv.rowdec_k_slots`). 0 = прод.
+            # ⚠ Требует `rowdec=`: без декодера ручка не значит ничего.
+            kw["__kslots__"] = bool(int(v or 0))
+        elif k == "rdpeak":
+            # ★ §6.207: порог пиков декодера (доля максимума строки), прод 0.6.
+            kw["__rdpeak__"] = float(v or 0.6)
+        elif k == "kspick":
+            # ★ §6.206: как считать n_dec для порога rowdec_pick при kslots: count (все слоты) | u1.
+            kw["__kspick__"] = v or "count"
+        elif k == "slotlen":
+            # ★ §6.213: выбор по слоту по длине (`cv.rowdec_slot_len`), порог log1p-разности
+            #   непустых строк; 0 = выкл. ⚠ Требует `rowdec=`.
+            kw["__slotlen__"] = float(v or 0.0)
+        elif k == "slotgeom":
+            # ★ §6.215: геометрия шкалы слота из шаблона как ограничение раскладки (`cv.slot_template_geom`).
+            kw["__slotgeom__"] = bool(int(v or 0))
+        elif k == "slotall":
+            # ★ §6.213: декодер и за предгейтом — ради выбора по слоту (`cv.rowdec_slot_all`).
+            #   ⚠ Требует `slotlen=`: без правила по слоту декодер за гейтом ничего не решает.
+            kw["__slotall__"] = bool(int(v or 0))
         elif k == "wellmap":
             # ★★ §6.153: карта «лист → скважина манифеста». Делает держанность `auto5`
             # настоящей; без неё 51% листов декодирует модель, видевшая скважину.
@@ -202,6 +230,16 @@ def parse_mode(s):
     if kw.get("__pregate__") and not rowdec:
         sys.exit(f"⛔ режим {nm!r}: `pregate=` без `rowdec=` — гейту нечего пропускать, "
                  f"ручка не значила бы ничего")
+    if kw.get("__kslots__") and not rowdec:
+        sys.exit(f"⛔ режим {nm!r}: `kslots=` без `rowdec=` — ручка декодера без декодера")
+    if ("__rdpeak__" in kw or "__kspick__" in kw) and not rowdec:
+        sys.exit(f"⛔ режим {nm!r}: `rdpeak=`/`kspick=` без `rowdec=` — ручка декодера без декодера")
+    if "__kspick__" in kw and not kw.get("__kslots__"):
+        sys.exit(f"⛔ режим {nm!r}: `kspick=` без `kslots=1` — считать нечего, режим молча совпал бы с K")
+    if kw.get("__slotlen__") and not rowdec:
+        sys.exit(f"⛔ режим {nm!r}: `slotlen=` без `rowdec=` — выбирать по слоту не из чего")
+    if kw.get("__slotall__") and not kw.get("__slotlen__"):
+        sys.exit(f"⛔ режим {nm!r}: `slotall=1` без `slotlen=` — декодер за гейтом ничего не решал бы, режим молча совпал бы с продом")
     if (kw.get("__rdpick__") or kw.get("__rdmodel__")) and not rowdec:
         sys.exit(f"режим {nm!r}: rdpick= задан, но rowdec= пуст — выбирать не из чего, режим молча совпал бы с продом")
     if order not in ("x_center", "med_x", "rough_n"):
@@ -209,7 +247,8 @@ def parse_mode(s):
     # ⚠ `__sib__` — ручка РАСКЛАДКИ (§6.130), а не параметр `trace_line`: под селектором она
     # действует, поэтому из этой проверки исключена.
     _kwv = [k for k in kw if k not in ("__sib__", "__rdcolor__", "__rdpool__", "__rdpick__",
-                                      "__rdmodel__", "__degen__", "__wellmap__", "__pregate__")]
+                                      "__rdmodel__", "__degen__", "__wellmap__", "__pregate__",
+                                      "__kslots__", "__kspick__", "__rdpeak__", "__slotlen__", "__slotall__", "__slotgeom__")]
     if seq and _kwv:
         print(f"⚠ режим {nm!r}: при включённом селекторе параметры {_kwv} НЕ действуют — "
               f"`trace_seq` строит свой трассировщик и правила вершины у него нет вовсе")
@@ -365,6 +404,8 @@ if SH_N > 1:
         print(f"★ ШАРД {SH_I}/{SH_N}: {len(sheets)} листов × {len(MODES)} режима")
 
 res, FP = {}, {}
+import time as _time_mod
+_T_RUN = _time_mod.time()
 # ★★★ ПРОМЕЖУТОЧНЫЙ ДАМП: ОСТАНОВКА ДОЛЖНА СТОИТЬ ЛИСТОВ, А НЕ ЧАСОВ (§6.186).
 # Прежде дамп писался ОДИН раз, в самом конце шарда. Значит снятый шард терял ВСЁ: 05.09 так ушли
 # 249 посчитанных листов, потому что дампов было ноль. Теперь раз в `--flush` листов пишется
@@ -375,8 +416,10 @@ res, FP = {}, {}
 PART = Path(a.out) / f"ab_{SH_I}of{SH_N}.part.pkl"
 if PART.is_file():
     try:
-        _prev = pickle.load(open(PART, "rb")).get("res", {})
+        _part = pickle.load(open(PART, "rb"))
+        _prev = _part.get("res", {})
         res.update(_prev)
+        FP.update(_part.get("fp", {}))            # ★ 19.09 (Д5 ревизии): отпечатки тоже подхватываем
         print(f"★ НАЙДЕН ПРОМЕЖУТОЧНЫЙ ДАМП: режимов {len(_prev)}, листов "
               f"{sum(len(v[1]) for v in _prev.values())} — они будут ПРОПУЩЕНЫ")
     except Exception as e:
@@ -407,13 +450,19 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
     rd_model = kw.pop("__rdmodel__", "") or ""
     degen = bool(kw.pop("__degen__", False))
     wellmap = kw.pop("__wellmap__", "") or ""
+    kslots = bool(kw.pop("__kslots__", False))
+    kspick = kw.pop("__kspick__", "count") or "count"
+    rdpeak = float(kw.pop("__rdpeak__", 0.6) or 0.6)
+    slotlen = float(kw.pop("__slotlen__", 0.0) or 0.0)
+    slotall = bool(kw.pop("__slotall__", False))
+    slotgeom = bool(kw.pop("__slotgeom__", False))
     M._depth_marker = _dm_orig if depth0 else _dm_zero   # depth0=1 → прод; 0 → прежнее
     T.trace_line = make(kw) if kw else _orig_trace
     # ★ §6.133: мягкий передний план — режим, а не умолчание (§6.71: путь задаёт стенд).
     T._color_fg = make_softfg(softfg) if softfg else _orig_color_fg
     # ★ ПОДХВАТ ПРОМЕЖУТОЧНОГО: если этот режим уже частично посчитан прошлым заходом, берём его
     #   счёт и словарь листов — тогда цикл ниже пропустит их по `if n.name in per`.
-    _since, _done_skip = 0, 0
+    _since, _done_skip, _redo = 0, 0, 0
     tot, per = res.get(nm_mode, (dict(hon=0, curves=0, sheets=0, leak=0), {}))
     tot, per = dict(tot), dict(per)
     FP[nm_mode] = FP.get(nm_mode, {})
@@ -430,6 +479,10 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
           f"rdmodel={rd_model or '— (выкл)'}, "
           f"degen={'ВКЛ' if degen else '— (выкл, прод)'}, "
           f"wellmap={'ЕСТЬ (честная держанность)' if wellmap else '— (скважина из имени)'}, "
+          f"kslots={'ВКЛ (K ≥ слотов трека, §6.204)' if kslots else '— (выкл, K от U1)'}, "
+          f"kspick={kspick}, rdpeak={rdpeak}, "
+          f"slotlen={slotlen or '— (выкл)'}, slotall={'ВКЛ (декодер и за предгейтом)' if slotall else '— (выкл)'}, "
+          f"slotgeom={'ВКЛ (полоса+ноль шкалы, §6.215)' if slotgeom else '— (выкл)'}, "
           f"{kw or 'константы trace_line по умолчанию'}\n{'='*78}")
     for n in sheets:
         img = find_image(n)
@@ -454,6 +507,12 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
         cfg.cv.rowdec_pick_model = rd_model
         cfg.cv.color_fg_degen = degen
         cfg.cv.rowdec_wellmap = wellmap
+        cfg.cv.rowdec_k_slots = kslots
+        cfg.cv.rowdec_k_slots_pick = kspick
+        cfg.cv.rowdec_peak_thr = rdpeak
+        cfg.cv.rowdec_slot_len = slotlen
+        cfg.cv.rowdec_slot_all = slotall
+        cfg.cv.slot_template_geom = slotgeom
         # ⚠⚠⚠ ИМЯ КАТАЛОГА — ПОЛНОЕ, А НЕ ОБРЕЗАННОЕ (§6.117). Здесь стояло `n.stem[:40]`, а варианты
         # одного бланка различаются ПОСЛЕ 40-го символа (`..._200_D_1`, `_D_2`, `_D_3`) — они писали
         # выдачу в ОДИН каталог, и чтение `sorted(glob("*_auto.nlgx"))[0]` возвращало файл ЧУЖОГО
@@ -463,15 +522,23 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
         # Хвост-хэш держит длину пути в узде и при этом уникален.
         cfg.out = (Path(a.out) / nm_mode.split()[0] /
                    f"{n.stem[:40]}_{hashlib.md5(n.stem.encode('utf-8')).hexdigest()[:8]}")
+        # ★ лист уже посчитан прошлым заходом — пропускаем, счёт для него уже в `per`.
+        # ⛔⛔ 20.09: ПОРЯДОК БЫЛ ОБРАТНЫМ — чистка выдачи стояла ДО этой проверки, и каждый перезапуск
+        #   шарда (партия 6 ч, память, гибель) СТИРАЛ `_auto.nlgx` всех уже посчитанных листов, а потом
+        #   пропускал их. A/B §6.213 дошёл до конца с полными дампами и БЕЗ выдач G и R (0 из 1123) —
+        #   ведущий счёт (`_name_cost_prod.py` читает файлы) остался без данных. Теперь пропуск требует
+        #   и записи в `per`, и файла выдачи; чистка — только перед пересчётом.
+        _have_out = cfg.out.is_dir() and any(cfg.out.glob("*_auto.nlgx"))
+        if n.name in per and _have_out:
+            _done_skip += 1
+            continue
+        if n.name in per and not _have_out:
+            _redo += 1                          # запись есть, файла нет — считаем заново
         # ⚠ Чистим выдачу прошлого прогона: иначе при повторе с другой конфигурацией прочтётся старый
         # файл, и правка окажется «нейтральной», хотя она просто не доехала.
         if cfg.out.is_dir():
             for old in cfg.out.glob("*_auto.nlgx"):
                 old.unlink()
-        # ★ лист уже посчитан прошлым заходом — пропускаем, счёт для него уже в `per`
-        if n.name in per:
-            _done_skip += 1
-            continue
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 pipe_run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
@@ -511,9 +578,25 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
             res[nm_mode] = (tot, per)
             _flush(f"{tot['sheets']} листов режима {nm_mode}")
             _since = 0
+        if a.max_hours > 0 and (_time_mod.time() - _T_RUN) / 3600 > a.max_hours:
+            res[nm_mode] = (tot, per)
+            _flush(f"партия окончена: {(_time_mod.time() - _T_RUN) / 3600:.1f} ч > {a.max_hours} ч")
+            print(f"★ ПАРТИЯ ОКОНЧЕНА: {(_time_mod.time() - _T_RUN) / 3600:.1f} ч — выхожу кодом 75, драйвер запустит шард заново с дампа")
+            sys.exit(75)
+        if a.max_rss_gb > 0:
+            import psutil
+            _rss = psutil.Process().memory_info().rss / 2**30
+            if _rss > a.max_rss_gb:
+                res[nm_mode] = (tot, per)
+                _flush(f"перезапуск по памяти: RSS {_rss:.1f} ГБ > {a.max_rss_gb} ГБ")
+                print(f"★ ПЕРЕЗАПУСК ПО ПАМЯТИ: RSS {_rss:.1f} ГБ после {tot['sheets']} листов режима {nm_mode} — "
+                      f"выхожу кодом 75, драйвер запустит шард заново с дампа")
+                sys.exit(75)
     res[nm_mode] = (tot, per)
     if _done_skip:
         print(f"★ пропущено как уже посчитанное: {_done_skip} листов")
+    if _redo:
+        print(f"★ пересчитано заново (запись была, выдачи не было): {_redo} листов")
     _flush(f"режим {nm_mode} завершён")
     print(f"ИТОГО {nm_mode}: листов {tot['sheets']}, кривых {tot['curves']}, "
           f"★честных {tot['hon']}, утечек {tot['leak']}")

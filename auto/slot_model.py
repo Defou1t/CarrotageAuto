@@ -176,14 +176,16 @@ def map_lines(traces, model, frame, mnemonics_path, cv):
     by_track = {}
     for L, tr in traces:
         by_track.setdefault(L.track_index, []).append((L, tr))
-    got = assign(slots, by_track, w, kind, thr, sib=float(getattr(cv, "slot_sib", 0.0) or 0.0))
+    from . import slot_geom
+    got = assign(slots, by_track, w, kind, thr, sib=float(getattr(cv, "slot_sib", 0.0) or 0.0),
+                 forbid=slot_geom.make_forbid(model, cv))
     if got is None:
         _announce("  (лист(ы) не прошли меру уверенности — там раскладка ПРАВИЛОМ)")
         return None
     return {nm: (L, tr) for nm, (L, tr, _) in got.items()}
 
 
-def rows(slots, by_track):
+def rows(slots, by_track, forbid=None):
     """Признаки всех пар (слот × линия ТОГО ЖЕ трека) → (матрица, [(имя слота, Line, трасса)]).
 
     ⚠ ИДЕНТИЧНО ОБУЧЕНИЮ (`_slot_abstain.build`), сверено побитово в `_slot_parity.py`. Кандидаты
@@ -197,6 +199,10 @@ def rows(slots, by_track):
         cache = [(L, tr, _tfeat(tr)) for L, tr in same]
         meds = sorted(f[5] for _, _, f in cache)
         for L, tr, f in cache:
+            # ★ §6.215: пара, нарушающая геометрию шкалы слота, не существует (как цветовой фильтр у
+            #   правила). `forbid=None` (умолчание) — поведение прежнее бит-в-бит.
+            if forbid is not None and forbid(s["name"], tr):
+                continue
             wig, rev, span, rough, n, med, dy = f
             cls = "SP" if L.behavior == "smooth" else "RES"
             rank = meds.index(min(meds, key=lambda v: abs(v - med))) / max(1, len(meds) - 1)
@@ -242,7 +248,7 @@ def _sib_term(slots, pairs):
     return out
 
 
-def assign(slots, by_track, w, kind, thr, sib=0.0):
+def assign(slots, by_track, w, kind, thr, sib=0.0, forbid=None):
     """Ядро: признаки → скор → жадное 1:1 → отказ листом. None = отказ.
 
     Вынесено из `map_lines`, чтобы стенд мог сверить прод-путь с обучением ПО ПУЛАМ, не запуская
@@ -255,7 +261,7 @@ def assign(slots, by_track, w, kind, thr, sib=0.0):
     рангом кандидата по x. Эталон не нужен — оба ранга известны на месте.
     ⚠ Направление конвенции ОДНО и прямое: по листу его выбрать нельзя (неоткуда узнать без
     эталона), берётся большинство — 53% против 20% (§6.129)."""
-    X, pairs = rows(slots, by_track)
+    X, pairs = rows(slots, by_track, forbid)
     if not len(X):
         return None
     sc = predict(w, X)

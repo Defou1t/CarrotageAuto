@@ -164,7 +164,12 @@ def trace_auto(rgb, sheet, p=None):
     # ★ ПОСТРОЧНЫЙ ДЕКОДЕР (Задача 9, §6.140): заменяет ведение целиком, а не выбор рана.
     # Выключен, пока не задан `row_decoder`; при недоступности говорит вслух и откатывается сюда.
     alt, pick, want_both = None, 0, False
-    if getattr(p, "row_decoder", "") and _pregate_ok(sheet, p):
+    # ★ §6.213: выбор по слоту (`rowdec_slot_len`) может просить декодер и ЗА предгейтом
+    #   (`rowdec_slot_all`); гейт при этом остаётся условием выбора ПО ТРЕКУ — `emit` узнаёт его
+    #   через `alt_gated`. При выключенной ручке условие тождественно прежнему.
+    slot_len = float(getattr(p, "rowdec_slot_len", 0.0) or 0.0)
+    gated = _pregate_ok(sheet, p)
+    if getattr(p, "row_decoder", "") and (gated or (slot_len > 0 and getattr(p, "rowdec_slot_all", False))):
         from . import rowdec
         alt = rowdec.trace_auto(rgb, sheet, p)
         pick = int(getattr(p, "rowdec_pick", 0) or 0)
@@ -179,7 +184,7 @@ def trace_auto(rgb, sheet, p=None):
         # первая правка починила ТОЛЬКО первый: `alt` переставал возвращаться целиком, но и не
         # прицеплялся, так что `emit` по-прежнему не видел второго пути. Держать условие в
         # переменной, а не повторять его дважды.
-        want_both = pick > 0 or bool(getattr(p, "rowdec_pick_model", "") or "")
+        want_both = pick > 0 or bool(getattr(p, "rowdec_pick_model", "") or "") or slot_len > 0
         if alt is not None and not want_both:
             return alt
         if alt is None:
@@ -229,6 +234,7 @@ def trace_auto(rgb, sheet, p=None):
         # разошёлся на 70 треках из 153 и стоил 14 кривых из 20 (см. §6.146). Поэтому оба пути
         # уезжают дальше, а решение принимается там, где известно назначение слотов.
         out = _WithAlt(out); out.alt = alt
+        out.alt_gated = gated          # §6.213: выбор по треку — только за предгейтом
     return out
 
 
@@ -238,6 +244,7 @@ class _WithAlt(list):
     `_overlay`, стенды), и все они ждут именно список. Прицеп невидим для тех, кто про него
     не знает, и это ровно то, что нужно — включённым он оказывается только в `emit`."""
     alt = None
+    alt_gated = True
 
 
 def _pick_by_track(prod, dec, pick):

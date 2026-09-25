@@ -13,7 +13,7 @@ DURABLE-ограничение (PLAN §6.6.10): фабрикация рамки 
   emit_into_frame     — инъекция AUTO-трасс в лёгкую рамку → _auto.nlgx(+bck) [+ las через export_las];
   emit                — диспетчер: понимание всегда, nlgx — если дана рамка.
 """
-import json
+import json, math
 from pathlib import Path
 import numpy as np
 
@@ -163,6 +163,9 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path, cv=None):
                           "color": info["color"], "class": info["class"],
                           "root": info["root"]})
     how = (getattr(cv, "slot_order", "") or "x_center") if cv is not None else "x_center"
+    # ★ §6.215: геометрия шкалы слота из шаблона (полоса, ноль) — запрет пар-нарушителей; None = прод
+    from . import slot_geom
+    _forbid = slot_geom.make_forbid(model, cv) if cv is not None else None
     used = set(); mapping = {}
     # внутри трека: назначение по ГЛОБАЛЬНОМУ score (не жадно по слотам — иначе первый слот
     # забирает единственную линию при полном несовпадении: G4-баг STK_4020, оранжевая ушла в
@@ -187,6 +190,8 @@ def _map_lines_to_slots(traces, model, frame, mnemonics_path, cv=None):
             strict_color = s["color"] is not None and s["color"] in colors_on_track
             for L, tr in tlines:
                 if strict_color and s["color"] != L.color:
+                    continue
+                if _forbid is not None and _forbid(s["curve"]["name"], tr):
                     continue
                 cls = "SP" if L.behavior == "smooth" else "RES"
                 class_ok = (s["class"] in (cls, "OTHER", "CALI"))
@@ -344,7 +349,11 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     alt = getattr(traces, "alt", None)
     pick = int(getattr(cv, "rowdec_pick", 0) or 0) if cv is not None else 0
     model_f = (getattr(cv, "rowdec_pick_model", "") or "") if cv is not None else ""
-    if alt is not None and (pick > 0 or model_f):
+    # ★ §6.213: выбор ПО СЛОТУ по длине (`rowdec_slot_len`); за предгейтом (`alt_gated=False`)
+    #   выбор по треку не действует — опора там прод, как и без ручки.
+    slot_len = float(getattr(cv, "rowdec_slot_len", 0.0) or 0.0) if cv is not None else 0.0
+    alt_gated = bool(getattr(traces, "alt_gated", True))
+    if alt is not None and (pick > 0 or model_f or slot_len > 0):
         m_alt = _map(alt)
         # ⚠⚠ ДВА СЧЁТА НАЗНАЧЕННЫХ СЛОТОВ, И ЭТО НЕ ИЗБЫТОЧНОСТЬ.
         #   `n_all`  — ВСЕ назначенные слоты трека. Именно на нём проверено тождество механизма
@@ -354,29 +363,70 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         #              а пустых в выдаче 6.2%, так что разница не косметическая.
         # Порог берёт первое, модель — второе. Каждый работает ровно на том, на чём померен.
         by_t = {}
+        # ★ §6.206: при `rowdec_k_slots` декодер выдаёт траектории сверх линий U1, и им даются
+        #   синтетические линии (`rowdec.SYNTH` в `flag_reason`). Порог `n_dec ≤ pick` калибровался,
+        #   когда n_dec был ограничен K_U1 (§6.157); с синтетическими он завышается ровно на тех
+        #   треках, где ручка добавила кривые, и на 24 треках из 125 (§6.205) ВЫКЛЮЧАЛ декодер.
+        #   `rowdec_k_slots_pick = "u1"` — синтетические в порог не считать. Умолчание "count".
+        _skip_synth = (getattr(cv, "rowdec_k_slots_pick", "count") if cv is not None else "count") == "u1"
         for src, mp in (("dec", m_alt), ("prod", mapping)):
             for nm, (L, t) in mp.items():
                 e = by_t.setdefault(L.track_index,
                                     {"dec": [], "prod": [], "n_all": {"dec": 0, "prod": 0}})
-                e["n_all"][src] += 1
+                if not (_skip_synth and src == "dec" and getattr(L, "flag_reason", None) == "kslots-synth"):
+                    e["n_all"][src] += 1
                 if t:
                     e[src].append((nm, t))
         use = {}
         for ti, e in by_t.items():
-            if model_f:
+            if not alt_gated:
+                use[ti] = False               # §6.213: лист за предгейтом — по треку всегда прод
+            elif model_f:
                 use[ti] = _pick_score(model_f, e) >= 0.5
             else:
                 use[ti] = 0 < e["n_all"]["dec"] <= pick
+                # ★ §6.206 (только при "u1"): трек, где у прода НЕТ ни одного слота (линий U1 не
+                #   было, декодер вёл по всей рамке), берёт декодер — иначе слоты трека уходят в
+                #   пустой прод-путь и лист теряет кривые, которых прод дать не может.
+                if _skip_synth and e["n_all"]["prod"] == 0 and any(
+                        getattr(L, "flag_reason", None) == "kslots-synth" for L, _ in
+                        (m_alt[nm] for nm in m_alt if m_alt[nm][0].track_index == ti)):
+                    use[ti] = True
         merged, took = {}, {"декодер": 0, "прод": 0}
+        # ★ §6.213: окно слота из каркаса — та же величина, что пишется в файл (`xs[i] = tr[top_y+i]`
+        #   либо NULL, см. запись ниже): непустых строк = |строки трассы ∩ [top_y, top_y+n_rows)|.
+        _win = {c["name"]: (int(c["top_y"]), int(c["n_rows"])) for c in model.get("curves", [])
+                if "top_y" in c and "n_rows" in c}
+        _slots = []
+
+        def _nn(nm, t):
+            w = _win.get(nm)
+            if w is None:
+                return len(t)
+            return sum(1 for y in t if w[0] <= y < w[0] + w[1])
         for nm in set(mapping) | set(m_alt):
             ti = (m_alt.get(nm) or mapping.get(nm))[0].track_index
             src = m_alt if use.get(ti) else mapping
             if nm in src:
                 merged[nm] = src[nm]
+            if slot_len > 0 and nm in src:
+                oth = mapping if use.get(ti) else m_alt
+                nb = _nn(nm, src[nm][1])
+                na = _nn(nm, oth[nm][1]) if nm in oth else 0
+                # ⚠ кандидат короче 30 строк не берётся: `emit` такую кривую не пишет, и в стенде
+                #   его нет (`have` = написанные кривые)
+                flip = na >= 30 and (math.log1p(na) - math.log1p(nb)) >= slot_len
+                if flip:
+                    merged[nm] = oth[nm]
+                _slots.append({"name": nm, "track": int(ti), "base": "dec" if use.get(ti) else "prod",
+                               "nn_base": int(nb), "nn_alt": int(na), "flip": bool(flip)})
         for ti in by_t:
             took["декодер" if use.get(ti) else "прод"] += 1
-        print(f"  выбор пути по треку ({'модель ' + model_f if model_f else 'порог ' + str(pick)}): "
-              f"декодер на {took['декодер']} треках, прод на {took['прод']}")
+        print(f"  выбор пути по треку ({'модель ' + model_f if model_f else 'порог ' + str(pick)}"
+              f"{'' if alt_gated else ', лист за предгейтом — прод'}): "
+              f"декодер на {took['декодер']} треках, прод на {took['прод']}"
+              + (f"; по слоту (длина ≥ {slot_len}): перевёрнуто {sum(1 for q in _slots if q['flip'])} "
+                 f"из {len(_slots)}" if slot_len > 0 else ""))
         # ⚠⚠ ВЫГРУЗКА ПРИЗНАКОВ РЯДОМ С ВЫДАЧЕЙ — НЕ ОТЛАДКА, А ЕДИНСТВЕННЫЙ СПОСОБ УЧИТЬ МОДЕЛЬ
         # НА ТОМ, ЧТО ОНА УВИДИТ. §6.146 повторился второй раз за день: признаки §6.145 считались
         # по ВЫДАННЫМ кривым (после нарезки уровней), а здесь доступны только трассы раскладки, и
@@ -387,9 +437,10 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         try:
             import json as _json
             (out / f"{stem}_pick.json").write_text(_json.dumps(
-                {"pick": pick, "model": model_f,
+                {"pick": pick, "model": model_f, "gated": alt_gated, "slot_len": slot_len,
                  "tracks": [{"track": int(ti), "dec": bool(use.get(ti)),
-                             "n_all": e["n_all"], **_pick_feats(e)} for ti, e in by_t.items()]},
+                             "n_all": e["n_all"], **_pick_feats(e)} for ti, e in by_t.items()],
+                 **({"slots": _slots} if slot_len > 0 else {})},
                 ensure_ascii=False), encoding="utf-8")
         except Exception as _e:                    # выгрузка не должна ронять выдачу
             print(f"  ⚠ признаки выбора не выгружены: {_e}")

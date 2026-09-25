@@ -61,6 +61,15 @@ ap.add_argument("--cap-well", type=int, default=0, help="листов на ск�
 ap.add_argument("--pad", type=int, default=12, help="запас вокруг полосы трека, px")
 ap.add_argument("--row-step", type=int, default=1, help="прореживание строк таргета")
 ap.add_argument("--manifest", action="store_true")
+# ★ §6.210: ПОЛОСА КАК НА ОТГРУЗКЕ. Кэш по осям эталона (`axes`) — вырезка вокруг экспертных слотов;
+#   прод режет весь трек U0 `[x_left, x_right]` (`rowdec.py:219`), и там чужой туши больше. Порог
+#   пиков 0.2 дал на кэше `axes` +68, на отгрузке −37 — стенд переоценивал расширение кандидатов.
+#   `--band u0` берёт границы трека из замороженной `_understanding.json` (`frame.tracks`).
+ap.add_argument("--band", default="axes", choices=["axes", "u0"],
+                help="axes = объединение scale-осей слотов ± pad (кэш §6.140); u0 = весь трек U0, как на отгрузке")
+ap.add_argument("--u0-from", default=r"F:/nds/output/taskS/ab_pregate/G",
+                help="каталог замороженной выдачи с `_understanding.json` (frame.tracks) для --band u0")
+ap.add_argument("--like", default="", help="взять ТЕ ЖЕ листы, что в манифестах этого кэша (сопоставимость)")
 a = ap.parse_args()
 OUT = Path(a.out)
 DELTA = 90.0            # §6.133: тот же относительный порог, что дал V3 (бумага строки − 90)
@@ -90,6 +99,25 @@ def sa_suffix(slot_name):
     return m.group(1) if m else None
 
 
+def u0_tracks(nlgx, img=None, rgb=None):
+    """→ [[x_left, x_right], …] трека U0: из замороженной `_understanding.json`, а если листа там
+    нет (кэш шире поля 1123) — той же рамкой, что строит прод при `--frame`: `frame_from_nlgx`."""
+    import hashlib
+    stem = Path(nlgx).stem
+    pd = Path(a.u0_from) / f"{stem[:40]}_{hashlib.md5(stem.encode('utf-8')).hexdigest()[:8]}"
+    u = next(iter(sorted(pd.glob("*_understanding.json"))), None) if pd.is_dir() else None
+    if u:
+        return json.loads(u.read_text(encoding="utf-8"))["frame"]["tracks"]
+    if img is None:
+        return None
+    from auto import frame as frame_mod, meta as meta_mod
+    from auto.config import Config
+    cfg = Config()
+    m = meta_mod.parse_filename(str(img), cfg.mnemonics)
+    fr = frame_mod.frame_from_nlgx(str(nlgx), m, cfg.cv, rgb=rgb)
+    return [[int(t.x_left), int(t.x_right)] for t in fr.tracks]
+
+
 def build_sheet(dump, nlgx, img):
     """→ list[dict] по ТРЕКАМ листа."""
     mo = extract(str(nlgx))
@@ -103,6 +131,9 @@ def build_sheet(dump, nlgx, img):
 
     rgb = im.load_rgb(str(img))
     H, W = rgb.shape[:2]
+    u0 = u0_tracks(nlgx, img, rgb) if a.band == "u0" else None
+    if a.band == "u0" and not u0:
+        return []                                   # рамки нет — лист пропускаем честно
     V = im.value_channel(rgb)
     paper = np.empty(H, np.float32)
     for y0 in range(0, H, 4096):                    # ⚠ память: см. _row_ceiling
@@ -128,8 +159,13 @@ def build_sheet(dump, nlgx, img):
                  if sa_suffix(nm) and sa_suffix(nm) in ax]
         if not spans:
             continue                                # рамка не дала полосу — лист пропускаем честно
-        lo = max(0, min(s[0] for s in spans) - a.pad)
-        hi = min(W, max(s[1] for s in spans) + a.pad + 1)
+        if a.band == "u0":
+            if t is None or t >= len(u0):
+                continue
+            lo, hi = max(0, int(u0[t][0])), min(W, int(u0[t][1]) + 1)   # ровно rowdec.py:219
+        else:
+            lo = max(0, min(s[0] for s in spans) - a.pad)
+            hi = min(W, max(s[1] for s in spans) + a.pad + 1)
         if hi - lo < 16:
             continue
         names = sorted(names)                       # порядок слотов — из рамки, а не из картинки
@@ -148,6 +184,12 @@ def build_sheet(dump, nlgx, img):
 
 def collect(i, n):
     sheets = sheet_index()
+    if a.like:
+        keep = set()
+        for f in sorted(Path(a.like).glob("manifest_*of*.json")):
+            keep |= {m["sheet"] for m in json.loads(f.read_text(encoding="utf-8"))}
+        sheets = [x for x in sheets if x[1].name in keep]
+        print(f"★ ТЕ ЖЕ ЛИСТЫ, ЧТО В {a.like}: {len(sheets)} из {len(keep)} в манифестах")
     if a.cap_well:
         per, keep = defaultdict(int), []
         for f, q, well in sheets:

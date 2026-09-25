@@ -28,19 +28,26 @@ ap.add_argument("--dir", required=True, help="каталог фолда (в нё
 ap.add_argument("--mode", default="M")
 ap.add_argument("--sheets", required=True, help="список листов, который просили посчитать")
 ap.add_argument("--out", default="", help="куда записать список НЕДОСТАЮЩИХ листов")
+# ★ 20.09: полнота ПО ФАЙЛАМ ВЫДАЧИ, а не только по дампам. A/B §6.213 дошёл до конца с полными дампами
+#   и без файлов `_auto.nlgx` режимов G и R (дефект чистки в `_trace_prod_ab.py`) — эта проверка сказала
+#   «ПОЛОН», а ведущему счёту читать было нечего. С `--files` лист считается разобранным, только если
+#   есть и запись в дампе, и файл выдачи `<dir>/<mode>/<стем40_md5-8>/*_auto.nlgx`.
+ap.add_argument("--files", action="store_true", help="требовать и файл выдачи, не только запись в дампе")
 a = ap.parse_args()
 
 want = [l.strip() for l in open(a.sheets, encoding="utf-8") if l.strip()]
 d = Path(a.dir)
-files = sorted(d.glob("ab_*of*.pkl"))
+files = sorted(f for f in d.glob("ab_*of*.pkl") if not f.name.endswith(".part.pkl"))
+if not files:                                   # ★ 20.09: готовых нет — смотрим промежуточные (ход прогона)
+    files = sorted(d.glob("ab_*of*.part.pkl"))
 if not files:
     print(f"⛔ в {d} нет дампов — фолд не считан вовсе")
     sys.exit(1)
 
 # ★ знаменатель берётся из ИМЁН дампов, а не задаётся: разные прогоны шардуются по-разному
-den = sorted({f.stem.split("of")[1] for f in files},
-             key=lambda q: max(f.stat().st_mtime for f in files if f.stem.endswith("of" + q)))[-1]
-files = [f for f in files if f.stem.endswith("of" + den)]
+den = sorted({f.name.split("of")[1].split(".")[0] for f in files},
+             key=lambda q: max(f.stat().st_mtime for f in files if f.name.split("of")[1].split(".")[0] == q))[-1]
+files = [f for f in files if f.name.split("of")[1].split(".")[0] == den]
 got = set()
 for f in files:
     dd = pickle.load(open(f, "rb"))
@@ -62,10 +69,22 @@ if fix.is_dir():
 norm = lambda s: s[:-5] if s.endswith(".nlgx") else s
 gotn = {norm(x) for x in got}
 missing = [w for w in want if norm(w) not in gotn]
+nofile = []
+if a.files:
+    import hashlib
+    for w in want:
+        if norm(w) not in gotn:
+            continue
+        stem = norm(w)
+        pd = d / a.mode / f"{stem[:40]}_{hashlib.md5(stem.encode('utf-8')).hexdigest()[:8]}"
+        if not (pd.is_dir() and any(pd.glob("*_auto.nlgx"))):
+            nofile.append(w)
+    missing = missing + nofile
 
 print(f"★ ФОЛД {d.name}: дампов {len(files)} из {den}; "
       f"листов в списке {len(want)}, РАЗОБРАНО {len(got)}, НЕДОСТАЁТ {len(missing)}"
-      f"   {'★ ПОЛОН' if not missing else '⛔ НЕПОЛОН'}")
+      f"   {'★ ПОЛОН' if not missing else '⛔ НЕПОЛОН'}"
+      + (f"; из них без файла выдачи {len(nofile)}" if a.files else ""))
 if missing:
     print("  недостающие листы (память кончается на КРУПНЫХ — §6.157, смещение по размеру бланка):")
     for m in missing[:20]:

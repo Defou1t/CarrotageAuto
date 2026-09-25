@@ -48,6 +48,16 @@ ap.add_argument("--ablate-emb", action="store_true",
                 help="ГЕЙТ G3: выключить эмбеддинг, матчить только по положению. Если потеря "
                      "меньше 8 пунктов — выигрыш дал мостик и передний план, а не личность")
 ap.add_argument("--win", type=int, default=512, help="ширина окна инференса, колонок")
+ap.add_argument("--step", type=int, default=512, help="высота окна инференса, строк (прод: 512; обучение шло на кропах 128 — §6.202 B1b)")
+ap.add_argument("--peak-thr", type=float, default=0.6,
+                help="§6.203 B1b кандидат 3: порог пиков как доля максимума СВОЕЙ строки (прод 0.6, rowdec.py:254); бледная кривая рядом с тёмной выпадает из кандидатов целиком")
+ap.add_argument("--diag-out", default="", help="§6.208: pickle с диагностикой по кривым — назначенная ошибка, МИНИМАЛЬНАЯ ошибка по всем траекториям, число траекторий ближе 3px (дубль против чужой линии)")
+ap.add_argument("--extra", type=int, default=0,
+                help="§6.208: вести K+extra траекторий (прототипов K+extra — чужая линия получает свою) и оставить K лучших по средней вероятности вдоль трассы")
+ap.add_argument("--peak-cap", type=int, default=8, help="потолок пиков на строку = cap·K (прод 8, rowdec.py)")
+ap.add_argument("--k-offset", type=int, default=0,
+                help="§6.203 B1b: декодер ведёт K+offset траекторий вместо K эталона — цена неверного K (на отгрузке K берётся от U1, rowdec.py:371). Зачёт — ПО ЭТАЛОННЫМ кривым")
+ap.add_argument("--ov", type=int, default=64, help="перекрытие окон по строкам (прод: 64; при --step 128 обязано быть < 64, иначе шаг нулевой)")
 ap.add_argument("--wjump", type=float, default=0.15, help="штраф прыжка в Витерби (на строку)")
 ap.add_argument("--wemb", type=float, default=1.0, help="вес расстояния эмбеддинга")
 # ★ §6.140: эмбеддинг помогает при K≥3 (+12.7 и +7.1 пункта) и ВРЕДИТ при K≤2 (−3.0 и −2.2):
@@ -61,6 +71,13 @@ ap.add_argument("--two-pass", action="store_true",
 ap.add_argument("--wpred", type=float, default=0.08, help="вес приора сглаженной траектории")
 ap.add_argument("--fold", type=int, default=-1, help="оценивать только держанный фолд (-1 = все треки)")
 ap.add_argument("--folds", type=int, default=5)
+# ⛔⛔ §6.212: ФОЛД СКВАЖИНЫ ОБЯЗАН СОВПАДАТЬ С ОБУЧЕНИЕМ. Первая редакция делила скважины по СВОЕМУ
+#   списку (манифесты кэша `rowdec`, 200 скважин), а обучение — по списку кропов (`rowdec_crops`, 199:
+#   у BVU_BV_167 кропов нет). Лишняя скважина сортируется первой и сдвигает индексы 190 скважин на +1
+#   ⇒ «держанный фолд f» стенда — это обучающие скважины чекпойнта f: 499 треков из 528 оценивались
+#   моделью, видевшей скважину. `train` = `rowdec.fold_of_well` (то же, чем делит `_rowdec_net.load`);
+#   `cache` — прежнее поведение, только чтобы воспроизвести старые (утёкшие) числа.
+ap.add_argument("--fold-src", default="train", choices=["train", "cache"])
 ap.add_argument("--sum", action="store_true")
 a = ap.parse_args()
 OUT = Path(a.out)
@@ -88,6 +105,9 @@ def match_1to1(err):
 
 
 _NET = {}
+DIAG = []          # --diag-out: (K, ошибка назначенной трассы, min ошибка по всем трассам, трасс ≤3px,
+                   #              recall кандидатов: доля строк эталона с пиком ближе 3px)
+_LAST = {}         # пики последнего decode_model (для диагностики)
 
 
 def net_maps(band, y0, y1, x0, x1):
@@ -110,8 +130,15 @@ def decode_model(band, ys, xs):
     import torch
     H, Wb = band.shape
     K = xs.shape[1]
+    # ★ --k-offset: декодер ведёт Kd траекторий, НЕ ЗНАЯ истинного K — как на отгрузке, где K
+    #   приходит от U1. Ниже везде, где решает ДЕКОДЕР (пики, прототипы, число путей), стоит Kd;
+    #   K эталона остаётся только в зачёте (run_track).
+    K = max(1, K + a.k_offset)
+    K_keep = K
+    K = K + max(0, a.extra)                  # ★ --extra: лишние траектории, отсев ниже по средней prob
     ours = np.full((len(ys), K), np.nan, np.float32)
-    STEP, OV = 512, 64
+    STEP, OV = a.step, a.ov            # прод: 512/64 (rowdec.py:228); --step 128 — как кропы обучения
+    assert STEP - 2 * OV > 0, 'шаг окна по строкам нулевой: уменьшите --ov'
     # окно по колонкам: полоса шире окна режется тоже, с перекрытием
     xcuts = [(c, min(Wb, c + a.win)) for c in range(0, max(1, Wb - 1), a.win - 64)]
     prob = np.zeros((len(ys), Wb), np.float32)
@@ -162,14 +189,15 @@ def decode_model(band, ys, xs):
         # ⚠ БЫЛО `max(0.5, 0.5*row.max())` — и это ТОЖДЕСТВЕННО 0.5: prob идёт из sigmoid, значит
         # row.max() < 1, значит 0.5*row.max() < 0.5 ВСЕГДА. «Относительный порог» не срабатывал ни
         # разу, а выглядел рабочим, потому что 0.5 сам по себе даёт правдоподобные 12-17 пиков.
-        thr = 0.6 * float(row.max())
+        thr = a.peak_thr * float(row.max())     # прод: 0.6 (rowdec.py:254); --peak-thr меняет
         idx = np.where((row >= thr) & (row >= np.roll(row, 1)) & (row >= np.roll(row, -1)))[0]
         # ⚠ Отсечка «оставить 3K лучших ПО ВЕРОЯТНОСТИ» опиралась на то самое ранжирование, которое
         # замер признал негодным (верный пик top-1 лишь у 23-32% строк). Теперь предел мягче и
         # печатается recall кандидатов — иначе потеря верного пика невидима.
-        if len(idx) > 8 * K:
-            idx = np.sort(idx[np.argsort(row[idx])[-8 * K:]])
+        if len(idx) > a.peak_cap * K:
+            idx = np.sort(idx[np.argsort(row[idx])[-a.peak_cap * K:]])
         peaks.append(idx)
+    _LAST["peaks"] = peaks
     # прототипы личности: k-means по эмбеддингам пиков (K кластеров на трек)
     pts = [(i, x) for i in range(0, len(ys), 7) for x in peaks[i]]
     if len(pts) < K * 8:
@@ -235,8 +263,18 @@ def decode_model(band, ys, xs):
             if j < 0:
                 break
 
+    if a.extra > 0:
+        # ★ отсев: K_keep траекторий с наибольшей средней вероятностью вдоль трассы; пустые — в конец
+        sc = []
+        for k in range(K):
+            ok = ~np.isnan(ours[:, k])
+            sc.append(float(np.mean([prob[i, int(ours[i, k])] for i in np.where(ok)[0]])) if ok.sum() >= 30 else -1.0)
+        keep = np.argsort(sc)[::-1][:K_keep]
+        ours = ours[:, np.sort(keep)]
+        K = K_keep
     if not a.two_pass:
         return ours
+    assert a.k_offset == 0 and a.extra == 0, "--two-pass не поддерживает --k-offset/--extra"
 
     # ── ВТОРОЙ ПРОХОД: СОВМЕСТНОЕ НАЗНАЧЕНИЕ ПО СТРОКЕ ────────────────────────────────────
     # Первый проход ведёт кривые ПО ОДНОЙ и жадно: кто раньше занял пик, тот его и держит, а
@@ -324,19 +362,50 @@ def run_track(p):
         idx = np.linspace(0, len(ys) - 1, a.max_rows).astype(int)
         ys, xs = ys[idx], xs[idx]
     ours = decode(band, ys, xs, a.ident)
+    Kd = ours.shape[1]                       # траекторий у декодера (= K при --k-offset 0)
 
-    err = np.full((K, K), 1e9, np.float32)
-    for j in range(K):
+    err = np.full((Kd, K), 1e9, np.float32)
+    for j in range(Kd):
         ok = ~np.isnan(ours[:, j])
         if ok.sum() < 30:
             continue
         for k in range(K):
             err[j, k] = float(np.median(np.abs(ours[ok, j] - xs[ok, k])))
-    perm = match_1to1(err)
+    if Kd == K:
+        perm = match_1to1(err)               # прежний путь: побитово то же при --k-offset 0
+        pair = {perm[j]: j for j in range(K)}
+    else:
+        # ★ прямоугольное 1:1 жадно по возрастанию ошибки — та же механика, что match_1to1 при K>6
+        order = np.dstack(np.unravel_index(np.argsort(err, axis=None), err.shape))[0]
+        uj, pair = set(), {}
+        for j, k in order:
+            if int(j) in uj or int(k) in pair:
+                continue
+            uj.add(int(j)); pair[int(k)] = int(j)
 
     out = []
-    for j in range(K):
-        k = perm[j]
+    if a.diag_out:
+        pk = _LAST.get("peaks")
+        for k in range(K):
+            j = pair.get(k)
+            col = err[:, k]
+            rec = None
+            if pk is not None and len(pk) == len(ys):
+                hit = tot_ = 0
+                for i in range(len(ys)):
+                    gx = xs[i, k]
+                    if gx < 0:
+                        continue
+                    tot_ += 1
+                    if len(pk[i]) and np.abs(pk[i] - gx).min() <= 3.0:
+                        hit += 1
+                rec = hit / tot_ if tot_ else None
+            DIAG.append((K, None if j is None else float(err[j, k]), float(col.min()),
+                         int((col <= 3.0).sum()), rec))
+    for k in range(K):                       # ★ ЗАЧЁТ ПО ЭТАЛОННЫМ КРИВЫМ: строка на кривую, не на трассу
+        j = pair.get(k)
+        if j is None:
+            out.append((K, None, 0.0, 0)); continue
         ok = ~np.isnan(ours[:, j]); idx = np.where(ok)[0]
         cov = float(ok.sum()) / max(1, len(ys))
         med = float(np.median(np.abs(ours[ok, j] - xs[ok, k]))) if ok.sum() >= 30 else None
@@ -359,7 +428,16 @@ def collect(i, n):
     # модель померится на том, чему училась, и узнается это только прямой сверкой.
     if a.fold >= 0:
         uw = sorted({m["well"] for m in man})
-        hold = {w for k, w in enumerate(uw) if k % a.folds == a.fold}
+        if a.fold_src == "train":
+            from auto import rowdec as _rd
+            fo = {w: _rd.fold_of_well(w) for w in uw}
+            lost = sorted(w for w in uw if fo[w] is None)
+            hold = {w for w in uw if fo[w] == a.fold}
+            print(f"★ фолд по ОБУЧЕНИЮ (`rowdec.fold_of_well`, кропы); скважин без кропов "
+                  f"(не оцениваются): {len(lost)} {lost[:3]}")
+        else:
+            hold = {w for k, w in enumerate(uw) if k % a.folds == a.fold}
+            print("⚠ фолд по списку КЭША — воспроизведение утёкших чисел (§6.212), не держанная оценка")
         man = [m for m in man if m["well"] in hold]
         print(f"★ ДЕРЖАННЫЙ ФОЛД {a.fold}/{a.folds}: скважин {len(hold)} из {len(uw)}, "
               f"треков {len(man)}")
@@ -378,6 +456,9 @@ def collect(i, n):
     p = OUT / f"{TAG}_{i}of{n}.pkl"
     pickle.dump(dict(rows=rows, tracks=len(mine), bad=dict(bad), ident=a.ident,
                      bridge=not a.no_bridge), open(p, "wb"))
+    if a.diag_out:
+        pickle.dump(DIAG, open(OUT / a.diag_out, "wb"))
+        print(f"★ диагностика: {len(DIAG)} кривых → {OUT / a.diag_out}")
     print(f"★ готово: кривых {len(rows)} → {p}")
     for s, c in bad.items():
         print(f"    ⚠ {s}: {c}")

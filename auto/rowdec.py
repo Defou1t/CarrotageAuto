@@ -248,10 +248,15 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     if embs is None:
         return [{} for _ in range(k)]
 
+    # ★ §6.207: порог пиков — ручка `cv.rowdec_peak_thr` (умолчание 0.6 = прежний прод бит-в-бит).
+    #   На пуловом пути 0.3 даёт +49 из 1441 (+3.4 п.п., 4 фолда из 5 вверх): бледная кривая рядом
+    #   с тёмной при 0.6 выпадает из кандидатов строки целиком. Критерий приёмки задан в §6.207.
+    _v = getattr(p, "rowdec_peak_thr", None)
+    pthr = 0.6 if _v is None else float(_v)      # ⚠ не `or 0.6`: 0.0 («все пики») превращался бы в 0.6
     peaks = []
     for i in range(prob.shape[0]):
         row = prob[i]
-        thr = 0.6 * float(row.max())
+        thr = pthr * float(row.max())
         idx = np.where((row >= thr) & (row >= np.roll(row, 1)) & (row >= np.roll(row, -1)))[0]
         if len(idx) > 8 * k:
             idx = np.sort(idx[np.argsort(row[idx])[-8 * k:]])
@@ -364,11 +369,27 @@ def trace_auto(rgb, sheet, p):
             continue
         by_track.setdefault(L.track_index, []).append(L)
 
+    # ★ §6.204: K НЕ НИЖЕ ЧИСЛА СЛОТОВ ТРЕКА (`cv.rowdec_k_slots`, умолчание False = прежний путь
+    # бит-в-бит). Декодер выдаёт ровно K траекторий, и при K_U1 < K_слотов недостающие кривые
+    # не выдаются физически: на 124 треках честного поля так теряются 106 проводимых кривых, а
+    # недосчёт на одну стоит 9.5 п.п. против 1.6 за пересчёт на три (`_rowdec_eval.py --k-offset`).
+    # Треки, где U1 не нашёл ни одной линии, при включённой ручке тоже ведутся — по всей рамке.
+    kslots = (getattr(sheet, "k_slots", None) or {}) if getattr(p, "rowdec_k_slots", False) else {}
+    for ti, n in kslots.items():
+        if n > 0 and ti not in by_track and 0 <= ti < len(sheet.frame.tracks):
+            by_track[ti] = []
+
     out = []
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
-        y0 = min(L.y0 for L in lines); y1 = max(L.y1 for L in lines)
-        trs = trace_track(rgb, track, len(lines), p, ck, y0, y1)
+        if lines:
+            y0 = min(L.y0 for L in lines); y1 = max(L.y1 for L in lines)
+        else:
+            y0, y1 = int(sheet.frame.top_y), int(sheet.frame.bottom_y)
+        K = max(len(lines), int(kslots.get(ti, 0)))
+        if K <= 0:
+            continue
+        trs = trace_track(rgb, track, K, p, ck, y0, y1)
         # ── ПРИВЯЗКА ТРАЕКТОРИИ К ЛИНИИ: 1:1 ПО СТОИМОСТИ, А НЕ СОРТИРОВКОЙ ────────────────
         # ⚠⚠ ЗАЧЕМ. Подпись решает не декодер, а то, КАКОЙ ЛИНИИ досталась траектория: линия несёт
         # цвет, класс и полосу, по которым `emit._map_lines_to_slots` раскладывает по слотам.
@@ -416,7 +437,7 @@ def trace_auto(rgb, sheet, p):
                 for j, L in enumerate(lines):
                     if L.x_lo - 8 <= med[i] <= L.x_hi + 8:
                         out.append((L, t)); added += 1
-            if not added:      # ни одна не попала в полосу — лучшая пара, чтобы лист не опустел
+            if not added and lines:   # ни одна не попала в полосу — лучшая пара, чтобы лист не опустел
                 i = int(np.argmin(cost.min(axis=1))); j = int(np.argmin(cost[i]))
                 out.append((lines[j], trs[i]))
         else:
@@ -427,4 +448,34 @@ def trace_auto(rgb, sheet, p):
                     continue
                 used_i.add(i); used_j.add(j)
                 out.append((lines[j], trs[i]))
+            # ★ §6.204: траекториям сверх числа линий U1 — СИНТЕТИЧЕСКАЯ линия, иначе раскладке
+            #   нечего сажать в слот (она узнаёт кривую по цвету, классу и x_center линии).
+            #   Только при включённой ручке: без неё len(trs) ≤ len(lines) и ветка мертва.
+            if kslots:
+                for i, t in enumerate(trs):
+                    if i not in used_i:
+                        out.append((_synth_line(lines, ti, t, med[i], rgb, p), t))
     return out
+
+
+SYNTH = "kslots-synth"      # маркер синтетической линии в `flag_reason` (§6.206): читает `emit`
+
+
+def _synth_line(lines, ti, tr, mx, rgb, p):
+    """Линия для траектории, у которой нет линии U1 (§6.204). Клон БЛИЖАЙШЕЙ по x линии трека —
+    цвет и класс наследуются (по ним раскладка узнаёт кривую), полоса ставится вокруг медианы
+    трассы. Если линий на треке нет вовсе — цвет по туши под траекторией, класс неизвестен."""
+    from dataclasses import replace
+    ys = sorted(tr)
+    y0, y1 = int(ys[0]), int(ys[-1])
+    if lines:
+        L = min(lines, key=lambda q: abs(q.x_center - mx))
+        half = max(8.0, L.x_band / 2)
+        return replace(L, x_center=float(mx), x_lo=float(mx - half), x_hi=float(mx + half),
+                       y0=y0, y1=y1, confidence="AUTO", flag_reason=SYNTH,
+                       x_hard_lo=None, x_hard_hi=None)
+    from .understand import Line
+    col = ink_color(rgb, p, tr)[0] or "black"
+    return Line(track_index=ti, color=col, x_center=float(mx), x_lo=float(mx - 20),
+                x_hi=float(mx + 20), y0=y0, y1=y1, thickness=2.0, rough_n=None, behavior="?",
+                n_strokes=1, density=0.0, confidence="AUTO", flag_reason=SYNTH)

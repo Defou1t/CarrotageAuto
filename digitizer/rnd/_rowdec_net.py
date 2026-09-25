@@ -56,11 +56,17 @@ ap.add_argument("--overfit", type=int, default=0, help="смоук: переоб
 # что стоит на пути замера (§6 правило 3), поэтому 0; вариант с фоном просят явно.
 ap.add_argument("--bg", type=int, default=0,
                 help="1 = чужая тушь отталкивается от прототипов (третий член emb_loss)")
+# ★ 19.09 (правило заказчика «не дольше 6 часов подряд»): выйти кодом 75 после эпохи, на которой
+#   время вышло — снимок эпохи уже записан, следующий запуск подхватит его. 0 = без предела.
+ap.add_argument("--max-hours", type=float, default=0.0, help="партия: выйти кодом 75 после эпохи, если прошло больше часов")
+ap.add_argument("--no-resume", action="store_true",
+                help="не подхватывать снимок эпохи (по умолчанию — подхватывать: правило заказчика 12.09, "
+                     "долгое идёт этапами; снимок пишется КАЖДУЮ эпоху)")
 ap.add_argument("--force", action="store_true",
                 help="перезаписать существующий чекпойнт (по умолчанию ОТКАЗ, см. §6.141)")
 a = ap.parse_args()
 OUT = Path(a.out); OUT.mkdir(parents=True, exist_ok=True)
-DEV = "cuda" if torch.cuda.is_available() else "cpu"
+DEV = "cuda" if torch.cuda.is_available() and torch.cuda.device_count() else "cpu"   # CUDA_VISIBLE_DEVICES="" → cpu
 
 
 class Net(nn.Module):
@@ -211,7 +217,24 @@ def main():
     steps = max(1, len(idx_tr) // a.batch)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=a.epochs * steps)
     pw = torch.tensor(a.pos_weight, device=DEV)
-    for ep in range(a.epochs):
+    # ★ СНИМОК КАЖДУЮ ЭПОХУ + ПОДХВАТ (правило заказчика 12.09: долгое — этапами, чтобы срыв не
+    #   терял сделанное). Снимок — веса, оптимизатор, расписание, состояния ГСЧ; лежит рядом с
+    #   чекпойнтом как `<имя>.epN.pt`. Подхват автоматический, если снимок есть и итогового
+    #   чекпойнта нет; `--no-resume` выключает. ⚠ Подхваченный прогон побитово НЕ равен
+    #   непрерывному (CUDA недетерминирована) — в чекпойнт пишется `resumed_from`.
+    _snap = lambda n: OUT / f"{_ck.stem}.ep{n}.pt"
+    ep0, resumed = 0, None
+    if not a.no_resume and not a.overfit:
+        have = sorted((int(q.stem.rsplit(".ep", 1)[1]), q) for q in OUT.glob(f"{_ck.stem}.ep*.pt"))
+        if have:
+            n, q = have[-1]
+            st = torch.load(q, map_location="cpu", weights_only=False)   # снимок несёт состояние ГСЧ numpy
+            net.load_state_dict(st["sd"]); opt.load_state_dict(st["opt"]); sched.load_state_dict(st["sched"])
+            np.random.set_state(st["np_rng"]); torch.set_rng_state(st["torch_rng"])
+            ep0, resumed = n, q.name
+            print(f"★ ПОДХВАТ со снимка {q.name}: продолжаю с эпохи {n + 1}/{a.epochs}")
+    _t_run = time.time()
+    for ep in range(ep0, a.epochs):
         net.train(); np.random.shuffle(idx_tr); t0 = time.time(); tot = tp = tu = ts = 0.0
         for s in range(steps):
             b = idx_tr[s * a.batch:(s + 1) * a.batch]
@@ -243,6 +266,17 @@ def main():
         print(f"эпоха {ep+1}/{a.epochs}  loss {tot/steps:.4f} (bce {tp/steps:.4f}, "
               f"pull {tu/steps:.4f}, push {ts/steps:.4f})  ДЕРЖАННЫЙ bce {vb/max(1,vn):.4f}  "
               f"{time.time()-t0:.0f}с")
+        if not a.overfit:
+            torch.save(dict(sd=net.state_dict(), opt=opt.state_dict(), sched=sched.state_dict(),
+                            np_rng=np.random.get_state(), torch_rng=torch.get_rng_state(),
+                            epoch=ep + 1), _snap(ep + 1))
+            _prev = _snap(ep)
+            if _prev.exists():
+                _prev.unlink()                      # держим только последний снимок
+            if a.max_hours > 0 and ep + 1 < a.epochs and (time.time() - _t_run) / 3600 > a.max_hours:
+                print(f"★ ПАРТИЯ ОКОНЧЕНА: {(time.time() - _t_run) / 3600:.1f} ч > {a.max_hours} ч, снимок "
+                      f"{_snap(ep + 1).name} записан — выхожу кодом 75, следующий запуск продолжит")
+                sys.exit(75)
     ck = OUT / (f"rowdec_of{a.folds}_f{a.fold}_s{a.seed}.pt" if not a.overfit else "rowdec_overfit.pt")
     # ⚠⚠ ПРОИСХОЖДЕНИЕ — В САМ ЧЕКПОЙНТ. 24.08 выяснилось, что вариант лосса и число эпох у
     # замороженного набора восстанавливаются ТОЛЬКО по меткам времени и по строке предупреждения
@@ -252,7 +286,7 @@ def main():
     torch.save(dict(sd=net.state_dict(), emb=a.emb, ch=a.ch, sigma=a.sigma, fold=a.fold,
                     folds=a.folds, seed=a.seed, pos_weight=a.pos_weight,
                     bg=int(a.bg), epochs=a.epochs, lam=a.lam, lr=a.lr, batch=a.batch,
-                    crops=str(a.crops)), ck)
+                    crops=str(a.crops), resumed_from=resumed), ck)
     print(f"★ чекпойнт → {ck}   (bg={a.bg}, эпох {a.epochs})")
 
 
