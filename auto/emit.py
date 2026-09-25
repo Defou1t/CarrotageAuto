@@ -355,6 +355,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     # ★ §6.213: выбор ПО СЛОТУ по длине (`rowdec_slot_len`); за предгейтом (`alt_gated=False`)
     #   выбор по треку не действует — опора там прод, как и без ручки.
     slot_len = float(getattr(cv, "rowdec_slot_len", 0.0) or 0.0) if cv is not None else 0.0
+    slot_fill = bool(getattr(cv, "rowdec_slot_fill", False)) if cv is not None else False
     alt_gated = bool(getattr(traces, "alt_gated", True))
     if alt is not None and (pick > 0 or model_f or slot_len > 0):
         m_alt = _map(alt)
@@ -412,9 +413,11 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
             src = m_alt if use.get(ti) else mapping
             if nm in src:
                 merged[nm] = src[nm]
-            if slot_len > 0 and nm in src:
-                oth = mapping if use.get(ti) else m_alt
-                nb = _nn(nm, src[nm][1])
+            oth = mapping if use.get(ti) else m_alt
+            # ★ 26.09 (аудит, §6.223): `rowdec_slot_fill` — слот, который базовый путь оставил ПУСТЫМ, а второй путь заполнил,
+            #   проходит то же правило с nb = 0 (прежде такой слот уходил в выдачу пустым — правило его не видело). Выкл = прежнее.
+            if slot_len > 0 and (nm in src or (slot_fill and nm in oth)):
+                nb = _nn(nm, src[nm][1]) if nm in src else 0
                 na = _nn(nm, oth[nm][1]) if nm in oth else 0
                 # ⚠ кандидат короче 30 строк не берётся: `emit` такую кривую не пишет, и в стенде
                 #   его нет (`have` = написанные кривые)

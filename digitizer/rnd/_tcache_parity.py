@@ -18,16 +18,21 @@ for pr in a.pairs:
     m, ref = pr.split("=", 1)
     same = diff = miss = 0; bad = []
     root = Path(a.out) / m
-    for d in sorted(root.iterdir()) if root.is_dir() else []:
-        x = next(d.glob("*_auto.nlgx"), None); rd = TS / ref / d.name
-        y = next(rd.glob("*_auto.nlgx"), None) if rd.is_dir() else None
-        if not x or not y:
+    # ⛔ 26.09 (аудит): прежде обход шёл по каталогам ПОВТОРА — лист, выпавший из кэша, был невидим («1122 равны» из 1123).
+    #   Теперь обход по ЭТАЛОНУ: лист эталона без пары в повторе — «без пары», и больше 0.5% таких — провал.
+    refroot = TS / ref
+    for rd in sorted(refroot.iterdir()) if refroot.is_dir() else []:
+        y = next(rd.glob("*_auto.nlgx"), None); d = root / rd.name
+        x = next(d.glob("*_auto.nlgx"), None) if d.is_dir() else None
+        if not y:
+            continue
+        if not x:
             miss += 1; continue
         if x.read_bytes() == y.read_bytes():
             same += 1
         else:
             diff += 1; bad.append(d.name)
-    ok = diff == 0 and same > 0
+    ok = diff == 0 and same > 0 and miss <= 0.005 * (same + diff + miss)
     code = code if ok else 2
     print(f"{'★' if ok else '⛔'} повтор {m} против {ref}: равны {same}, различаются {diff}, без пары {miss}")
     for b in bad[:15]:

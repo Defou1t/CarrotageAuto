@@ -36,7 +36,7 @@ ap.add_argument("--no-zero", action="store_true")
 a = ap.parse_args()
 TS = Path(a.ts)
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
-SIGNED = {"MV", "M", "US", "US/M", "DB/M", "UE", "G/CM3", "MKS", "MKS/M", "%"}
+from auto.slot_geom import SIGNED_UNITS as SIGNED   # ★ 26.09 (аудит): одна константа с продом (там есть «MM» — так измерен A/B §6.215)
 WELL = {}
 
 

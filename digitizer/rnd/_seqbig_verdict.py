@@ -47,6 +47,11 @@ O, N = load(a.old), load(a.new)
 ok_all = True
 for name, sheets in (("ПОЛЕ", lst("wellmap_sheets.txt")), ("ДЕРЖАННЫЙ СОРТ A", lst("holdoutA_sheets.txt"))):
     com = sorted(s for s in sheets if s in O and s in N)
+    # ⛔ 26.09 (аудит): критерий задан на ВСЁ поле / весь сорт A — неполное покрытие (> 0.5% листов нет хотя бы в одном
+    #   счёте) приговором не считается: код 3, драйвер не пишет маркер конца.
+    if len(com) < 0.995 * len(sheets):
+        print(f"⛔ {name}: НЕПОЛНО — в обоих счётах {len(com)} листов из {len(sheets)}; приговор не выносится")
+        sys.exit(3)
     du = np.array([N[s][1] - O[s][1] for s in com], float)
     dn = np.array([N[s][0] - O[s][0] for s in com], float)
     pu = perm_p(du)

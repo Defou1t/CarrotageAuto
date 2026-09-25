@@ -100,16 +100,27 @@ def cmd_build():
         import _seq_fast
         _seq_fast.install()
     sheets = sheet_list()
-    done = skip = fail = 0
+    done = skip = fail = perm = 0
+    # ⛔ 26.09 (аудит): прежде упавший лист молча выпадал — `build` выходил кодом 0, супервизор считал шард готовым, и лист
+    #   не пересчитывался никогда (кэш 1433 из 1434). Теперь: падение пишется в `_failed.txt`; лист, упавший уже ДВАЖДЫ, дальше
+    #   пропускается (постоянный); при новых падениях — код 3, супервизор перезапустит, и лист получит вторую попытку.
+    FAILED = CACHE / "_failed.txt"
+    prev = [l.split("\t")[0] for l in FAILED.read_text(encoding="utf-8").splitlines()] if FAILED.exists() else []
     print(f"★ СБОРКА КЭША: листов в шарде {len(sheets)}, конфигурация ведения {TRACE_KNOBS}")
     for n in sheets:
         dst = CACHE / (sheet_dir(n) + ".pkl")
         if dst.exists():
             skip += 1
             continue
+        if prev.count(n.name) >= 2:
+            perm += 1
+            continue
         img = find_image(n)
         if not img:
-            fail += 1; print(f"  {n.stem[:44]} нет скана"); continue
+            fail += 1; print(f"  {n.stem[:44]} нет скана")
+            with open(FAILED, "a", encoding="utf-8") as fh:
+                fh.write(f"{n.name}\tнет скана\n")
+            continue
         cfg = Config()
         for k, v in TRACE_KNOBS.items():
             setattr(cfg.cv, k, v)
@@ -120,7 +131,10 @@ def cmd_build():
             with contextlib.redirect_stdout(io.StringIO()):
                 P.run(str(img), frame_nlgx=str(n), cfg=cfg, stages=False)
         except Exception as e:
-            fail += 1; print(f"  {n.stem[:44]} ПАДЕНИЕ {type(e).__name__}: {e}"); continue
+            fail += 1; print(f"  {n.stem[:44]} ПАДЕНИЕ {type(e).__name__}: {e}")
+            with open(FAILED, "a", encoding="utf-8") as fh:
+                fh.write(f"{n.name}\t{type(e).__name__}: {str(e)[:200]}\n")
+            continue
         tmp = dst.with_suffix(".tmp")
         pickle.dump(grab["v"], open(tmp, "wb"), protocol=4)
         tmp.replace(dst)
@@ -129,11 +143,14 @@ def cmd_build():
               f"декодер {len(grab['v']['alt']) if grab['v']['alt'] is not None else '—'}, гейт {grab['v']['alt_gated']}")
         if a.max_hours and (time.time() - T0) / 3600 > a.max_hours:
             print(f"★ ПАРТИЯ ОКОНЧЕНА ({(time.time() - T0) / 3600:.1f} ч) — выхожу кодом 75"); sys.exit(75)
-    print(f"★ ГОТОВО: собрано {done}, уже было {skip}, падений {fail}")
+    print(f"★ ГОТОВО: собрано {done}, уже было {skip}, падений {fail}, постоянных (≥ 2 попыток) {perm}")
+    if fail:
+        sys.exit(3)
 
 
 REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", str), "kspick": ("rowdec_k_slots_pick", str),
                "slotlen": ("rowdec_slot_len", float), "slotall": ("rowdec_slot_all", lambda v: bool(int(v))),
+               "slotfill": ("rowdec_slot_fill", lambda v: bool(int(v))),
                "slotgeom": ("slot_template_geom", lambda v: bool(int(v))), "sib": ("slot_sib", float),
                "gate": ("slot_gate", str), "slot": ("slot_model", str), "order": ("slot_order", str)}
 

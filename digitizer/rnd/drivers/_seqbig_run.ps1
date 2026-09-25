@@ -96,6 +96,8 @@ Say "чекпойнт грузится прод-кодом"
 
 Say "жду конца сборки и сверки кэша (_tcache.log: === TCACHE DONE ===)"
 while (-not ((Test-Path 'F:\nds\output\taskS\_tcache.log') -and (Select-String -Path 'F:\nds\output\taskS\_tcache.log' -Pattern '=== TCACHE DONE ===' -SimpleMatch -CaseSensitive -Quiet))) { Start-Sleep -Seconds 300 }
+# ⛔ 26.09 (аудит): маркер конца кэша пишется и при ПРОВАЛЕННОЙ сверке — тогда повтор с кэша не тождествен A/B, и A/B не имеет смысла
+if (Select-String -Path 'F:\nds\output\taskS\tcache_parity.txt' -Pattern 'различаются 0' -SimpleMatch -Quiet) { } else { Say "⛔ сверка кэша не подтверждена (tcache_parity.txt) — A/B не запускаю"; Say "=== SEQBIG DONE ==="; exit 2 }
 # ★ 25.09 16:15 (§6.221): в A/B идёт seq_model_dag (DAgger-раунд) — на своих траекториях 40–60 листов поля лучший
 #   по строкам на эталоне (63.9% против 61.9% у big и 59.2% у прода); критерий §6.220 без изменений.
 # ── 4. кэш трасс с новым селектором: 1434 листа, 4 шарда, партии <= 6 ч ──────────────────────────────
@@ -129,11 +131,24 @@ Say "кэш dag собран: файлов $(@(Get-ChildItem "$ts/tcache_dag/*.p
 
 # ── 5. повтор режима «нынешний прод» на обоих кэшах, счёт, приговор ───────────────────────────────────
 $modeN='N:rdpick=3,slotlen=0.18,slotall=1,slotgeom=1'
-$null = RunPy @('_trace_cache.py','replay','--sheets','tcache_sheets.txt','--cache',"$ts/tcache",'--out',"$ts/rp_old",'--mode',$modeN) "$ts/seqbig_logs/replay_old.log"
-$null = RunPy @('_trace_cache.py','replay','--sheets','tcache_sheets.txt','--cache',"$ts/tcache_dag",'--out',"$ts/rp_dag",'--mode',$modeN) "$ts/seqbig_logs/replay_dag.log"
+# ⛔ 26.09 (аудит): прежде коды повторов и счёта не проверялись — упади любой, в журнал шёл «приговор» и маркер конца.
+#   Теперь сбой шага 5 — выход без маркера (сторож перезапустит); после трёх сбоев — маркер с пометкой провала.
+$fails5 = @(Select-String -Path $log -Pattern 'SHAG5 FAIL' -SimpleMatch -CaseSensitive).Count
+function Step5Fail($what, $c) {
+  Say "⛔ шаг 5: $what — код $c (SHAG5 FAIL)"
+  if ($fails5 -ge 2) { Say "⛔ шаг 5 провалился трижды — стоп"; Say "=== SEQBIG DONE ==="; exit 2 }
+  exit 2
+}
+$c = RunPy @('_trace_cache.py','replay','--sheets','tcache_sheets.txt','--cache',"$ts/tcache",'--out',"$ts/rp_old",'--mode',$modeN) "$ts/seqbig_logs/replay_old.log"
+if ($c -ne 0) { Step5Fail 'повтор старого кэша' $c }
+$c = RunPy @('_trace_cache.py','replay','--sheets','tcache_sheets.txt','--cache',"$ts/tcache_dag",'--out',"$ts/rp_dag",'--mode',$modeN) "$ts/seqbig_logs/replay_dag.log"
+if ($c -ne 0) { Step5Fail 'повтор кэша dag' $c }
 Say "повторы готовы; считаю"
-$null = RunPy @('_name_cost_prod.py','--dir',"$ts/rp_old",'--mode','N','--dump',"$ts/percurve_rpold_N.pkl") "$ts/seqbig_logs/score_old.log"
-$null = RunPy @('_name_cost_prod.py','--dir',"$ts/rp_dag",'--mode','N','--dump',"$ts/percurve_rpdag_N.pkl") "$ts/seqbig_logs/score_dag.log"
+$c = RunPy @('_name_cost_prod.py','--dir',"$ts/rp_old",'--mode','N','--dump',"$ts/percurve_rpold_N.pkl") "$ts/seqbig_logs/score_old.log"
+if ($c -ne 0 -or -not (Test-Path "$ts/percurve_rpold_N.pkl")) { Step5Fail 'счёт старого' $c }
+$c = RunPy @('_name_cost_prod.py','--dir',"$ts/rp_dag",'--mode','N','--dump',"$ts/percurve_rpdag_N.pkl") "$ts/seqbig_logs/score_dag.log"
+if ($c -ne 0 -or -not (Test-Path "$ts/percurve_rpdag_N.pkl")) { Step5Fail 'счёт dag' $c }
 $vc = RunPy @('_seqbig_verdict.py','--old','percurve_rpold_N.pkl','--new','percurve_rpdag_N.pkl') "$ts/seqbig_verdict.txt"
 Say "приговор: seqbig_verdict.txt (код $vc)"
+if ($vc -ge 3) { Step5Fail 'приговор: покрытие неполное' $vc }
 Say "=== SEQBIG DONE ==="

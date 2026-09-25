@@ -85,8 +85,10 @@ def ps(cmd):
 
 # ★ 25.09: ВАЖНОСТЬ процессов счёта — кого держать активным, когда активных меньше, чем живых. Первыми — критический путь
 #   (сборка кэша трасс и A/B на GPU), затем счёт и обучение, последними — сборы выборок на CPU.
-PRIO = [r"_trace_cache\.py", r"_trace_prod_ab\.py", r"_name_cost_prod\.py", r"_decoder_seq\.py", r"_rowdec_net\.py",
-        r"_seq_onpolicy\.py", r"_seq_data_big\.py"]
+#   ★ 26.09: короткие задачи с готовым ответом (повтор с кэша, счёт) — выше долгих сборок: иначе при двух активных
+#   20-минутный повтор стоял за многочасовой сборкой кэша.
+PRIO = [r"_trace_cache\.py replay", r"_name_cost_prod\.py", r"_trace_cache\.py", r"_trace_prod_ab\.py", r"_decoder_seq\.py",
+        r"_rowdec_net\.py", r"_seq_onpolicy\.py", r"_seq_data_big\.py"]
 RANK = {}
 
 

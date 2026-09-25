@@ -65,8 +65,9 @@ def make_forbid(model, cv):
     """→ callable(slot_name, tr) → bool, либо None, если ручка выключена."""
     if not bool(getattr(cv, "slot_template_geom", False)):
         return None
-    pad = float(getattr(cv, "slot_geom_pad", 15.0) or 15.0)
-    viol = float(getattr(cv, "slot_geom_viol", 0.5) or 0.5)
+    # ⛔ 26.09 (аудит): `x or дефолт` превращал явный 0.0 в дефолт (ловушка, описанная в rowdec.py) — теперь 0 задаётся
+    _pd = getattr(cv, "slot_geom_pad", None); pad = 15.0 if _pd is None else float(_pd)
+    _vl = getattr(cv, "slot_geom_viol", None); viol = 0.5 if _vl is None else float(_vl)
     cache = {}
 
     def fb(slot_name, tr):

@@ -22,7 +22,9 @@ def make_prob_provider(ckpt, device=None, tile=256, ov=96):
     """Собрать callable rgb->prob[HxW float32 0..1] из чекпойнта. Ленивая загрузка torch."""
     import torch                       # lazy: чистый пайплайн без torch не падает
     from infer import load_model, predict_prob
-    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    # ⛔ 26.09 (аудит): `is_available()` при CUDA_VISIBLE_DEVICES="" даёт True при 0 устройств — та же ловушка, что уже
+    #   исправлена в trace_seq.py; выбор — по числу устройств
+    dev = device or ("cuda" if torch.cuda.device_count() > 0 else "cpu")
     net, ck = load_model(str(ckpt), dev)
 
     def provider(rgb):

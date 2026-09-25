@@ -220,23 +220,17 @@ projects/<well>/
 - Delivery = `.nlgx + .bck (+ .las)` per scan; the expert re-checks every curve in NeuraLOG, so the
   digitizer must *understand* the sheet (scales, identity, behaviour) rather than trace blindly.
 
-## Status (2026-09-01)
+## Status (2026-09-26)
 
-**Metric.** Curves must not get confused with each other; naming them is *not* required at this
-stage (Eduard's decision, 2026-08-20). So the leading count is **nameless**: maximum 1:1 matching
-inside a track. The named count is reported second, as a reference. Both are always taken in **one
-pass** — taken separately they diverged once and the error stood for three weeks.
+**Metric.** Curves must not get confused with each other; naming them is *not* required at this stage (Eduard's decision,
+2026-08-20). The leading count is **nameless** (maximum 1:1 matching inside a track); the named count is second. Both are taken
+in one pass.
 
-**In production** (`auto/config.py`): `slot_gate = "frac0.0"` + `slot_sib = 2.0` — together
-**+22.8 %** honest curves on the shipped path, p < 0.00001. `row_decoder = ""` — the row decoder
-is **off**.
+**In production** (`auto/config.py`, chain on the 1123-sheet field, nameless): 965 → 1107 (row decoder + per-track choice +
+pre-gate, 05.09) → 1144 (`rowdec_k_slots`, 11.09) → 1171 (per-slot length rule, 21.09); names by slot template geometry
+(`slot_template_geom`, 25.09): named 778 → 838. Held-out tier A (311 sheets outside the field): nameless 303 → 319 → 328 → 330,
+named 196 → 208 → 213 → 223. Fast selector input path since 26.09 (byte-identical output).
 
-**The open decision.** A second tracing path (the row decoder) plus a per-track choice between it
-and production is written, measured and switched off pending a product call: it is worth roughly
-**+7…15 %** honest curves for **+30…60 %** run time. The exact figures, what is proven and what is
-only an estimate on frozen outputs, are in the top block of
-[`digitizer/rnd/HANDOFF.md`](digitizer/rnd/HANDOFF.md) — that block is kept current; this line is not.
-
-Phase A complete; Phase B core complete (identity tracker, ~0 % swaps); end-to-end assembly and a
-single-entry CLI in place. Roughly **half** of the expert curves are still taken by no path, and
-that remainder is **geometry, not coverage** — the open lever is identity.
+The current state, what is running and what is next is in the top block of
+[`digitizer/rnd/HANDOFF.md`](digitizer/rnd/HANDOFF.md) — that block is kept current; this one is a summary.
+Project folder map: `E:\Carrotagki_auto\README.md`.
