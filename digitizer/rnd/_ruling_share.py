@@ -108,6 +108,10 @@ for si, sh in enumerate(sheets, 1):
         Wt = [k for k in W if tm.get(k) == t and W[k]]
         ok = {(g, k): HON(*st(W[k], gts[g])) for g in ns for k in Wt}
         mt = match(ns, Wt, ok)
+        # ⛔ 25.09 (ревизия агентом): две не взятые кривые трека часто выбирают ОДНУ выдачу — её строки ухода считались
+        #   дважды (27% веса). Теперь строка (выдача, y) отдаётся кривой с меньшей медианой. Итог §6.218 «80/18/3»
+        #   пересчитан без двойного счёта стендом `_drift_anatomy.py` (§6.219).
+        cand = defaultdict(list)
         for g in ns:
             if g in mt or not Wt:
                 continue
@@ -117,11 +121,17 @@ for si, sh in enumerate(sheets, 1):
                 if m is not None and (best is None or m < best[0]):
                     best = (m, k)
             if best and best[0] > 3:
-                w = W[best[1]]
-                raw = RAW.get(best[1], set())
-                off = [y for y in w if y in raw and y in gts[g] and all(not (y in gts[o] and abs(w[y] - gts[o][y]) <= 3) for o in ns)]
+                cand[best[1]].append((best[0], g))
+        for kname, lst in cand.items():
+            w = W[kname]
+            raw = RAW.get(kname, set())
+            claimed = set()
+            for _m, g in sorted(lst):
+                off = [y for y in w if y in raw and y in gts[g] and y not in claimed
+                       and all(not (y in gts[o] and abs(w[y] - gts[o][y]) <= 3) for o in ns)]
+                claimed.update(off)
                 if len(off) >= 30:
-                    todo.append((g, w, off, best[1]))
+                    todo.append((g, w, off, kname))
     if not todo:
         continue
     img = find_image(q)

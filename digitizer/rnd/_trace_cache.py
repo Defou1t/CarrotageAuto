@@ -38,6 +38,7 @@ ap.add_argument("--mode", action="append", default=[])
 ap.add_argument("--shard", default="0/1")
 ap.add_argument("--max-hours", type=float, default=0.0)
 ap.add_argument("--fast", action="store_true", help="сборка с ускоренным селектором `_seq_fast` (выдача побайтно та же, §6.218)")
+ap.add_argument("--seq", default="", help="чекпойнт селектора для сборки (пусто = прод `seq_model`); путь с каталогом — как есть (§6.220)")
 ap.add_argument("--wlg-roots", nargs="+", default=[r"F:\nds\projects\Archive"])
 a = ap.parse_args()
 TS = Path(a.ts)
@@ -47,6 +48,8 @@ T0 = time.time()
 # ── конфигурация ВЕДЕНИЯ, под которую собирается кэш (прод + декодер на всех листах) ────────────
 WM = str(TS / "rowdec_wellmap.json").replace("\\", "/")
 TRACE_KNOBS = dict(row_decoder="auto5", rowdec_wellmap=WM, rowdec_slot_all=True, rowdec_slot_len=0.18)
+if a.seq:                                  # ★ §6.220: кэш под ДРУГИМ селектором (ключ ведения, пишется в кэш)
+    TRACE_KNOBS["seq_model"] = a.seq
 
 
 def sheet_dir(n):
@@ -164,6 +167,7 @@ def cmd_replay():
             for k, v in c["trace_knobs"].items():
                 setattr(cfg.cv, k, v)
             cfg.cv.rowdec_slot_len, cfg.cv.rowdec_slot_all = 0.0, False      # умолчание режима повтора = прод до §6.213
+            cfg.cv.slot_template_geom = False     # ★ 25.09: имена §6.215 включены в прод; повтор без `slotgeom=1` — как A/B до них
             for k, v in kw.items():
                 attr, conv = REPLAY_KEYS[k]
                 setattr(cfg.cv, attr, conv(v))

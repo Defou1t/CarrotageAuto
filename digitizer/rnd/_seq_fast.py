@@ -44,13 +44,17 @@ NEW_COPY = """        _nP, _nF, _nM = G["n"]; h = G["hnp"]
         h[:_nP] = pt.reshape(-1); h[_nP:_nP + _nF] = f.reshape(-1); h[_nP + _nF:] = mm.reshape(-1)
         G["dbuf"].copy_(G["hbuf"], non_blocking=True)
 """
-for old in (OLD_ALLOC, OLD_UPD, OLD_COPY):
-    assert SRC.count(old) == 1, "исходник make_tracer изменился — правка не применима:\n" + old
-FAST_SRC = SRC.replace(OLD_ALLOC, NEW_ALLOC).replace(OLD_UPD, NEW_UPD).replace(OLD_COPY, NEW_COPY)
-FAST_SRC = FAST_SRC.replace("def make_tracer(", "def make_tracer_fast(", 1)
-ns = dict(vars(TS_mod))
-exec(compile(textwrap.dedent(FAST_SRC), "<make_tracer_fast>", "exec"), ns)
-make_tracer_fast = ns["make_tracer_fast"]
+if NEW_ALLOC.strip().splitlines()[-1].strip() in SRC and NEW_COPY.strip().splitlines()[-1].strip() in SRC:
+    # ★ правка уже перенесена в `auto/trace_seq.py` (§6.219) — прод и есть быстрый селектор
+    make_tracer_fast = TS_mod.make_tracer
+else:
+    for old in (OLD_ALLOC, OLD_UPD, OLD_COPY):
+        assert SRC.count(old) == 1, "исходник make_tracer изменился — правка не применима:\n" + old
+    FAST_SRC = SRC.replace(OLD_ALLOC, NEW_ALLOC).replace(OLD_UPD, NEW_UPD).replace(OLD_COPY, NEW_COPY)
+    FAST_SRC = FAST_SRC.replace("def make_tracer(", "def make_tracer_fast(", 1)
+    ns = dict(vars(TS_mod))
+    exec(compile(textwrap.dedent(FAST_SRC), "<make_tracer_fast>", "exec"), ns)
+    make_tracer_fast = ns["make_tracer_fast"]
 
 
 def install():
@@ -93,6 +97,7 @@ if __name__ == "__main__":
             q = src[nm]; img = find_image(q)
             d = f"{q.stem[:40]}_{hashlib.md5(q.stem.encode('utf-8')).hexdigest()[:8]}"
             cfg = Config(); cfg.cv.row_decoder = "auto5"; cfg.cv.rowdec_wellmap = r"F:/nds/output/taskS/rowdec_wellmap.json"
+            cfg.cv.slot_template_geom = False     # эталон ab_slot/RA считан до включения имён §6.215
             cfg.out = out_root / d
             for old in cfg.out.glob("*_auto.nlgx") if cfg.out.is_dir() else []:
                 old.unlink()

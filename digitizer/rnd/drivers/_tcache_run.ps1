@@ -4,6 +4,8 @@
 # выдача побайтно та же) в 4 шардах, партии <= 6 ч, пропуск готовых листов; супервизор перезапускает шард, пока тот не
 # завершится кодом 0. Затем повтор G / RA / N на поле и сверка с ab_slot/G, ab_slot/RA, ab_names/N по всем 1123 листам —
 # это одновременно проверка кэша и быстрого селектора на всём поле. ⚠ UTF-8 С BOM, шаблоны ожидания — ASCII.
+# ★ 25.09 11:59: драйвер заменён на ходу — ранний дескриптор процесса (иначе ExitCode пуст и готовый шард
+#   перезапускался бы до 40 раз) и подхват живых шардов прежнего драйвера.
 $py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
 $rnd='F:/nds/Auto/digitizer/rnd'
 $ts='F:/nds/output/taskS'
@@ -15,15 +17,20 @@ Say "жду конца проверки сорта A (_holdA_ab.log: === HOLDA D
 while (-not ((Test-Path 'F:\nds\output\taskS\_holdA_ab.log') -and (Select-String -Path 'F:\nds\output\taskS\_holdA_ab.log' -Pattern '=== HOLDA DONE ===' -SimpleMatch -CaseSensitive -Quiet))) { Start-Sleep -Seconds 300 }
 Say "старт сборки кэша: 1434 листа, $N шардов"
 New-Item -ItemType Directory -Force -Path "$ts/tcache/logs" | Out-Null
-$live=@{}; $runs=@{}; $done=@{}
+$live=@{}; $runs=@{}; $done=@{}; $adopted=@{}
 while ($done.Count -lt $N) {
   foreach ($i in 0..($N-1)) {
     if ($done.ContainsKey($i)) { continue }
     $p=$live[$i]
     if ($p -and -not $p.HasExited) { continue }
     if ($p) {
-      if ($p.ExitCode -eq 0) { $done[$i]=$true; Say "кэш: шард $i готов"; continue }
-      Say "кэш: шард $i вышел кодом $($p.ExitCode) — перезапуск"
+      if ($adopted[$i]) { $adopted.Remove($i); Say "кэш: подхваченный шард $i завершился (код неизвестен) — контрольный перезапуск (готовые листы пропустит)" }
+      elseif ($p.ExitCode -eq 0) { $done[$i]=$true; Say "кэш: шард $i готов"; continue }
+      else { Say "кэш: шард $i вышел кодом $($p.ExitCode) — перезапуск" }
+    } else {
+      # ★ 25.09: ЧУЖОЙ ЖИВОЙ ШАРД (драйвер заменён, шард его пережил) — не дублировать, ждать
+      $orphan = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like "*_trace_cache.py build*" -and $_.CommandLine -like "*--shard $i/$N*" -and $_.CommandLine -like "*$ts/tcache *" })
+      if ($orphan.Count -gt 0) { $live[$i] = Get-Process -Id $orphan[0].ProcessId; $adopted[$i]=$true; Say "кэш: шард $i уже считается процессом $($orphan[0].ProcessId) — жду его"; continue }
     }
     if (-not $runs.ContainsKey($i)) { $runs[$i]=0 }
     if ($runs[$i] -ge 40) { $done[$i]=$true; Say "⛔ кэш: шард $i — 40 запусков исчерпаны"; continue }
@@ -31,6 +38,7 @@ while ($done.Count -lt $N) {
     $ar=@('_trace_cache.py','build','--sheets','tcache_sheets.txt','--cache',"$ts/tcache",'--shard',"$i/$N",'--max-hours','6','--fast')
     $live[$i] = Start-Process -FilePath $py -ArgumentList $ar -WorkingDirectory $rnd -WindowStyle Hidden `
       -RedirectStandardOutput "$ts/tcache/logs/sh$i.r$r.log" -RedirectStandardError "$ts/tcache/logs/sh$i.r$r.err" -PassThru
+    $null = $live[$i].Handle     # ★ 25.09: без раннего дескриптора PS 5.1 при перенаправлении вывода отдаёт ПУСТОЙ ExitCode
     Say "кэш: шард $i — запуск $r"
   }
   Start-Sleep -Seconds 60
