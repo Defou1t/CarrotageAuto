@@ -185,6 +185,7 @@ def cmd_replay():
                 setattr(cfg.cv, k, v)
             cfg.cv.rowdec_slot_len, cfg.cv.rowdec_slot_all = 0.0, False      # умолчание режима повтора = прод до §6.213
             cfg.cv.slot_template_geom = False     # ★ 25.09: имена §6.215 включены в прод; повтор без `slotgeom=1` — как A/B до них
+            cfg.cv.rowdec_slot_fill = False       # ★ 26.09: §6.223 включена в прод; повтор без `slotfill=1` — как до неё
             for k, v in kw.items():
                 attr, conv = REPLAY_KEYS[k]
                 setattr(cfg.cv, attr, conv(v))

@@ -199,6 +199,9 @@ def parse_mode(s):
         elif k == "slotgeom":
             # ★ §6.215: геометрия шкалы слота из шаблона как ограничение раскладки (`cv.slot_template_geom`).
             kw["__slotgeom__"] = bool(int(v or 0))
+        elif k == "slotfill":
+            # ★ §6.223: правило слота видит и слоты, заполненные только вторым путём (`cv.rowdec_slot_fill`).
+            kw["__slotfill__"] = bool(int(v or 0))
         elif k == "slotall":
             # ★ §6.213: декодер и за предгейтом — ради выбора по слоту (`cv.rowdec_slot_all`).
             #   ⚠ Требует `slotlen=`: без правила по слоту декодер за гейтом ничего не решает.
@@ -253,7 +256,7 @@ def parse_mode(s):
     # действует, поэтому из этой проверки исключена.
     _kwv = [k for k in kw if k not in ("__sib__", "__rdcolor__", "__rdpool__", "__rdpick__",
                                       "__rdmodel__", "__degen__", "__wellmap__", "__pregate__",
-                                      "__kslots__", "__kspick__", "__rdpeak__", "__slotlen__", "__slotall__", "__slotgeom__")]
+                                      "__kslots__", "__kspick__", "__rdpeak__", "__slotlen__", "__slotall__", "__slotgeom__", "__slotfill__")]
     if seq and _kwv:
         print(f"⚠ режим {nm!r}: при включённом селекторе параметры {_kwv} НЕ действуют — "
               f"`trace_seq` строит свой трассировщик и правила вершины у него нет вовсе")
@@ -461,6 +464,9 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
     slotlen = float(kw.pop("__slotlen__", 0.0) or 0.0)
     slotall = bool(kw.pop("__slotall__", False))
     slotgeom = bool(kw.pop("__slotgeom__", False))
+    # ⚠ 26.09: `rowdec_slot_fill` в проде True — режим задаёт его ЯВНО (умолчание режима — выкл), иначе прежние режимы
+    #   P/K/RA/N молча получили бы новую правку и перестали бы значить то, что значили в журналах
+    slotfill = bool(kw.pop("__slotfill__", False))
     M._depth_marker = _dm_orig if depth0 else _dm_zero   # depth0=1 → прод; 0 → прежнее
     T.trace_line = make(kw) if kw else _orig_trace
     # ★ §6.133: мягкий передний план — режим, а не умолчание (§6.71: путь задаёт стенд).
@@ -488,6 +494,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
           f"kspick={kspick}, rdpeak={rdpeak}, "
           f"slotlen={slotlen or '— (выкл)'}, slotall={'ВКЛ (декодер и за предгейтом)' if slotall else '— (выкл)'}, "
           f"slotgeom={'ВКЛ (полоса+ноль шкалы, §6.215)' if slotgeom else '— (выкл)'}, "
+          f"slotfill={'ВКЛ (пустые слоты, §6.223)' if slotfill else '— (выкл)'}, "
           f"{kw or 'константы trace_line по умолчанию'}\n{'='*78}")
     for n in sheets:
         img = find_image(n)
@@ -518,6 +525,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
         cfg.cv.rowdec_slot_len = slotlen
         cfg.cv.rowdec_slot_all = slotall
         cfg.cv.slot_template_geom = slotgeom
+        cfg.cv.rowdec_slot_fill = slotfill
         # ⚠⚠⚠ ИМЯ КАТАЛОГА — ПОЛНОЕ, А НЕ ОБРЕЗАННОЕ (§6.117). Здесь стояло `n.stem[:40]`, а варианты
         # одного бланка различаются ПОСЛЕ 40-го символа (`..._200_D_1`, `_D_2`, `_D_3`) — они писали
         # выдачу в ОДИН каталог, и чтение `sorted(glob("*_auto.nlgx"))[0]` возвращало файл ЧУЖОГО
