@@ -5,7 +5,7 @@ $ts='F:/nds/output/taskS'
 $log='F:\nds\output\taskS\_tiff.log'
 function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-File -FilePath $log -Encoding utf8 -Append }
 $self = Split-Path -Leaf $MyInvocation.MyCommand.Path
-if (@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$self*" }).Count -gt 0) { exit 0 }
+if (@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$self*" -and $_.CommandLine -notlike "*nds_detach*" }).Count -gt 0) { exit 0 }
 Say "старт сжатия TIFF"
 $p = Start-Process -FilePath $py -ArgumentList @('_tiff_lossless.py','--apply','--smallest-first') -WorkingDirectory $rnd -WindowStyle Hidden `
   -RedirectStandardOutput "$ts/tiff_result.txt" -RedirectStandardError "$ts/tiff_result.err" -PassThru

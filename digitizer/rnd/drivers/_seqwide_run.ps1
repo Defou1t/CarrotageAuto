@@ -13,7 +13,7 @@ $env:OMP_NUM_THREADS='2'
 $N=4
 function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-File -FilePath $log -Encoding utf8 -Append }
 $self = Split-Path -Leaf $MyInvocation.MyCommand.Path
-function Others { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$self*" }) }
+function Others { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$self*" -and $_.CommandLine -notlike "*nds_detach*" }) }
 if ((Others).Count -gt 0) { Say "⚠ уже работает экземпляр — жду его конца"; while ((Others).Count -gt 0) { Start-Sleep -Seconds 60 }; if (Select-String -Path $log -Pattern '=== SEQWIDE DONE ===' -SimpleMatch -Quiet) { exit 0 } }
 function RunPy([string[]]$A, [string]$Out) {
   $p = Start-Process -FilePath $py -ArgumentList $A -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput $Out -RedirectStandardError "$Out.err" -PassThru

@@ -14,7 +14,7 @@ function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-F
 #   комплекту шардов — дубли считали одни листы и дрались за один .tmp (PermissionError, шард падал кодом 1).
 #   Второй экземпляр не запускает ничего: ждёт конца первого и выходит, если тот дописал маркер конца.
 $self = Split-Path -Leaf $MyInvocation.MyCommand.Path
-function Others { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$self*" }) }
+function Others { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$self*" -and $_.CommandLine -notlike "*nds_detach*" }) }
 if ((Others).Count -gt 0) {
   Say "⚠ уже работает экземпляр $((Others)[0].ProcessId) этого драйвера — второй не запускаю, жду его конца"
   while ((Others).Count -gt 0) { Start-Sleep -Seconds 60 }
