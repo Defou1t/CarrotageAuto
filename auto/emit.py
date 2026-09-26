@@ -331,11 +331,11 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     # None, если её не просили, нет веса ИЛИ лист не прошёл меру уверенности ⇒ работает ПРАВИЛО.
     # ⚠ Правило вызывается тем же именем, что и раньше: стенды, которые его перехватывают
     # (`_pool_oracle`, `_pick_gate`, …), продолжают перехватывать именно правило.
-    def _map(tr):
+    def _map(tr, path="prod"):
         m = None
         if cv is not None and getattr(cv, "slot_model", ""):
             from . import slot_model as slot_mod
-            m = slot_mod.map_lines(tr, model, frame, mnemonics_path, cv)
+            m = slot_mod.map_lines(tr, model, frame, mnemonics_path, cv, path=path)
         return m if m is not None else _map_lines_to_slots(tr, model, frame, mnemonics_path, cv)
 
     mapping = _map(traces)
@@ -358,7 +358,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     slot_fill = bool(getattr(cv, "rowdec_slot_fill", False)) if cv is not None else False
     alt_gated = bool(getattr(traces, "alt_gated", True))
     if alt is not None and (pick > 0 or model_f or slot_len > 0):
-        m_alt = _map(alt)
+        m_alt = _map(alt, "dec")                    # §6.231: путь — признак расширенной раскладки (вес на 14 его не видит)
         # ⚠⚠ ДВА СЧЁТА НАЗНАЧЕННЫХ СЛОТОВ, И ЭТО НЕ ИЗБЫТОЧНОСТЬ.
         #   `n_all`  — ВСЕ назначенные слоты трека. Именно на нём проверено тождество механизма
         #              офлайновому расчёту (§6.146: 170 = 170 на 137 листах, 45 = 45 на 12), и

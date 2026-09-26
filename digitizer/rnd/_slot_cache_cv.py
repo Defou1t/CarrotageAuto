@@ -39,7 +39,7 @@ if a.train:
     X, y, W, S, H = d["X"], d["y"], d["well"], d["sheet"], d["hon"]
     F = np.array([fold_of(w) for w in W])
     old = SM.load("slot_model_g250.npz")
-    oof = np.zeros(len(y)); sc_old = SM.predict(old, X)          # скор «больше = лучше»
+    oof = np.zeros(len(y)); sc_old = SM.predict(old, X[:, :SM.NF])  # скор «больше = лучше»; старый вес — по первым 14
     for f in range(a.k):
         tr, te = F != f, F == f
         est = GradientBoostingRegressor(n_estimators=a.trees, max_depth=3, random_state=0).fit(X[tr], y[tr])

@@ -63,7 +63,7 @@ for i, f in enumerate(files, 1):
         by_track = {}
         for L, t in lst:
             by_track.setdefault(L.track_index, []).append((L, unpack(t)))
-        X, pairs = SM.rows(slots, by_track, forbid)
+        X, pairs = SM.rows(slots, by_track, forbid, dict(model=model, path=path))   # §6.231: 21 признак
         for k, (nm, L, tr) in enumerate(pairs):
             if nm not in gts:
                 continue

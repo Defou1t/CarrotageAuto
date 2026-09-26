@@ -44,6 +44,7 @@ MODELS_DIR = Path(__file__).resolve().parent / "models"
 DEFAULT_MODEL = "slot_model_g250.npz"     # лежит В РЕПОЗИТОРИИ (§6.68), 37 КБ
 DEFAULT_GATE = "frac0.8"
 NF = 14
+NF_EXT = 21                               # ★ §6.231: + окно слота, полоса шкалы, путь, синтетика, скачки, ранг покрытия
 
 _W = {}                                   # имя → выгруженные деревья (грузятся один раз)
 _SAID = set()
@@ -78,8 +79,8 @@ def load(model_path):
     if key not in _W:
         z = np.load(p)
         w = {k: z[k] for k in z.files}
-        if int(w["n_features"][0]) != NF:
-            raise ValueError(f"вес {p.name}: признаков {int(w['n_features'][0])}, код ждёт {NF}")
+        if int(w["n_features"][0]) not in (NF, NF_EXT):
+            raise ValueError(f"вес {p.name}: признаков {int(w['n_features'][0])}, код ждёт {NF} или {NF_EXT}")
         _W[key] = w
     return _W[key]
 
@@ -88,8 +89,9 @@ def predict(w, X):
     """Скор пар = ПРЕДСКАЗАННАЯ ВЕЛИЧИНА ОШИБКИ (log1p(px) + штраф покрытия), чем МЕНЬШЕ, тем лучше.
     Возвращается уже со знаком «больше = лучше», как в стенде (`SR = -reg.predict`)."""
     X = np.asarray(X, np.float32).astype(np.float64)
-    if X.ndim != 2 or X.shape[1] != NF:
-        raise ValueError(f"ожидалась матрица (n, {NF}), пришло {X.shape}")
+    nf = int(w["n_features"][0]) if "n_features" in w else NF
+    if X.ndim != 2 or X.shape[1] != nf:
+        raise ValueError(f"ожидалась матрица (n, {nf}), пришло {X.shape}")
     cl, cr, fe, th = w["children_left"], w["children_right"], w["feature"], w["threshold"]
     va, off = w["value"], w["offsets"]
     rows = np.arange(len(X))
@@ -144,7 +146,7 @@ def _parse_gate(spec):
     raise ValueError(f"slot_gate={spec!r}: ожидалось frac<порог>, minx<порог>, mean<порог> или off")
 
 
-def map_lines(traces, model, frame, mnemonics_path, cv):
+def map_lines(traces, model, frame, mnemonics_path, cv, path="prod"):
     """{slot_name: (Line, trace)} по ОБУЧЕННОЙ раскладке, либо None = «отказ, берите правило».
 
     ⚠ Кандидаты слота — ВСЕ линии его трека, без фильтра цвета: так строилось обучение. Фильтр
@@ -177,26 +179,56 @@ def map_lines(traces, model, frame, mnemonics_path, cv):
     for L, tr in traces:
         by_track.setdefault(L.track_index, []).append((L, tr))
     from . import slot_geom
+    ext = dict(model=model, path=path) if int(w["n_features"][0]) == NF_EXT else None
     got = assign(slots, by_track, w, kind, thr, sib=float(getattr(cv, "slot_sib", 0.0) or 0.0),
-                 forbid=slot_geom.make_forbid(model, cv))
+                 forbid=slot_geom.make_forbid(model, cv), ext=ext)
     if got is None:
         _announce("  (лист(ы) не прошли меру уверенности — там раскладка ПРАВИЛОМ)")
         return None
     return {nm: (L, tr) for nm, (L, tr, _) in got.items()}
 
 
-def rows(slots, by_track, forbid=None):
+def _ext_feats(s, L, tr, win, band, path):
+    """★ §6.231: 7 признаков «та ли это линия для ЭТОГО слота» — то, чего нет среди 14: покрытие окна слота по глубине,
+    доля строк окна в полосе шкалы слота (±15 px) и положение медианы в полосе (по шаблону), путь, синтетическая линия,
+    частота крупных скачков; ранг покрытия добавляется в `rows` (нужны все кандидаты слота)."""
+    ys = [y for y in tr if win is None or win[0] <= y < win[0] + win[1]]
+    cov = len(ys) / max(1, win[1]) if win is not None else 1.0
+    if band is not None and ys:
+        xl, xr = band
+        inb = float(np.mean([xl - 15 <= tr[y] <= xr + 15 for y in ys]))
+        pos = float(np.clip((np.median([tr[y] for y in ys]) - xl) / max(1.0, xr - xl), -1.0, 2.0))
+    else:
+        inb, pos = 1.0, 0.5
+    srt = sorted(tr)
+    x = np.array([tr[y] for y in srt], float)
+    jumps = float(np.sum(np.abs(np.diff(x)) > 30) * 1000.0 / max(1, len(x))) if len(x) > 1 else 0.0
+    return [cov, inb, pos, 1.0 if path == "dec" else 0.0,
+            1.0 if getattr(L, "flag_reason", None) == "kslots-synth" else 0.0, jumps / 10.0]
+
+
+def rows(slots, by_track, forbid=None, ext=None):
     """Признаки всех пар (слот × линия ТОГО ЖЕ трека) → (матрица, [(имя слота, Line, трасса)]).
 
     ⚠ ИДЕНТИЧНО ОБУЧЕНИЮ (`_slot_abstain.build`), сверено побитово в `_slot_parity.py`. Кандидаты
     слота — ВСЕ линии его трека, без фильтра цвета: фильтр цвета есть у правила и остаётся его
     свойством, а модель про цвет узнаёт из признаков 1-2."""
     out, pairs = [], []
+    if ext is not None:                                  # §6.231: окно и полоса шкалы слота из шаблона
+        from . import slot_geom as _sg
+        _win = {c["name"]: (int(c["top_y"]), int(c["n_rows"])) for c in ext["model"].get("curves", [])
+                if "top_y" in c and "n_rows" in c}
     for s in slots:
         same = by_track.get(s["track"], [])
         if not same:
             continue
         cache = [(L, tr, _tfeat(tr)) for L, tr in same]
+        if ext is not None:
+            win = _win.get(s["name"])
+            g = _sg.geom(ext["model"], s["name"])
+            band = (g[0], g[1]) if g else None
+            efs = {id(L): _ext_feats(s, L, tr, win, band, ext["path"]) for L, tr, _ in cache}
+            covs = sorted((efs[id(L)][0] for L, _, _ in cache), reverse=True)
         meds = sorted(f[5] for _, _, f in cache)
         for L, tr, f in cache:
             # ★ §6.215: пара, нарушающая геометрию шкалы слота, не существует (как цветовой фильтр у
@@ -212,9 +244,10 @@ def rows(slots, by_track, forbid=None):
                         1.0 if s["cls"] == "SP" else 0.0,
                         rank, float(L.x_center) / 1000.0, med / 1000.0,
                         wig, rev, rough, span / 1000.0, n / 10000.0,
-                        len(same) / 10.0, dy / 10000.0])
+                        len(same) / 10.0, dy / 10000.0]
+                       + ((efs[id(L)] + [covs.index(efs[id(L)][0]) / max(1, len(covs) - 1)]) if ext is not None else []))
             pairs.append((s["name"], L, tr))
-    return (np.array(out, float) if out else np.zeros((0, NF))), pairs
+    return (np.array(out, float) if out else np.zeros((0, NF_EXT if ext is not None else NF))), pairs
 
 
 def _sib_term(slots, pairs):
@@ -248,7 +281,7 @@ def _sib_term(slots, pairs):
     return out
 
 
-def assign(slots, by_track, w, kind, thr, sib=0.0, forbid=None):
+def assign(slots, by_track, w, kind, thr, sib=0.0, forbid=None, ext=None):
     """Ядро: признаки → скор → жадное 1:1 → отказ листом. None = отказ.
 
     Вынесено из `map_lines`, чтобы стенд мог сверить прод-путь с обучением ПО ПУЛАМ, не запуская
@@ -261,7 +294,7 @@ def assign(slots, by_track, w, kind, thr, sib=0.0, forbid=None):
     рангом кандидата по x. Эталон не нужен — оба ранга известны на месте.
     ⚠ Направление конвенции ОДНО и прямое: по листу его выбрать нельзя (неоткуда узнать без
     эталона), берётся большинство — 53% против 20% (§6.129)."""
-    X, pairs = rows(slots, by_track, forbid)
+    X, pairs = rows(slots, by_track, forbid, ext)
     if not len(X):
         return None
     sc = predict(w, X)
