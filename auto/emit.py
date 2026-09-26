@@ -450,6 +450,36 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                 ensure_ascii=False), encoding="utf-8")
         except Exception as _e:                    # выгрузка не должна ронять выдачу
             print(f"  ⚠ признаки выбора не выгружены: {_e}")
+        # ★ §6.228: ДВЕ КРИВЫЕ ТРЕКА НА ОДНОЙ ЛИНИИ (`rowdec_dedup` — доля общих строк в 3 px, выше которой пара — дубль;
+        #   0 = выкл, прод бит-в-бит). Замер 26.09 (`_dup_traces.py`): на поле 447 треков с дублями, в 476 парах одна кривая
+        #   занимает место, а эталон трека не взят. Слот пары берёт версию ДРУГОГО пути, если она сама ни с кем в треке не
+        #   дублируется и не короче 30 строк в окне слота.
+        dedup = float(getattr(cv, "rowdec_dedup", 0.0) or 0.0) if cv is not None else 0.0
+        if dedup > 0:
+            def _close(t1, t2):
+                com = [y for y in t1 if y in t2]
+                if len(com) < 200:
+                    return 0.0
+                return sum(1 for y in com if abs(t1[y] - t2[y]) <= 3) / max(1, min(len(t1), len(t2)))
+            _bt = {}
+            for nm, (L, _t) in merged.items():
+                _bt.setdefault(L.track_index, []).append(nm)
+            n_sw = 0
+            for ti, names in _bt.items():
+                for i in range(len(names)):
+                    for j in range(i + 1, len(names)):
+                        s1, s2 = names[i], names[j]
+                        if _close(merged[s1][1], merged[s2][1]) < dedup:
+                            continue
+                        for s in (s2, s1):
+                            alt_v = m_alt.get(s) if merged[s] is mapping.get(s) else mapping.get(s)
+                            if alt_v is None or alt_v is merged[s] or _nn(s, alt_v[1]) < 30:
+                                continue
+                            if any(_close(alt_v[1], merged[o][1]) >= 0.2 for o in names if o != s):
+                                continue
+                            merged[s] = alt_v; n_sw += 1
+                            break
+            print(f"  дубли трека (≥ {dedup:.0%} строк в 3 px): заменено слотов {n_sw}")
         mapping = merged
     ifds = read_full(open(frame_nlgx, "rb").read())
 

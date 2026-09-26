@@ -74,7 +74,12 @@ for sz, p, c in todo:
     if ok and a.apply:
         dst = Q / Path(*Path(p).resolve().parts[1:])
         dst.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(p, dst)                 # оригинал — в карантин (тот же том)
+        try:
+            os.rename(p, dst)             # оригинал — в карантин (тот же том)
+        except PermissionError:
+            # ⚠ 26.09: файл в этот момент читал другой процесс (сбор выборки) — не падать, пропустить до следующего запуска
+            print(f"  ⚠ занят другим процессом — пропускаю: {Path(p).name[:60]}")
+            os.remove(tmp); bad += 1; continue
         os.rename(tmp, p)                 # сжатая копия — на его место, то же имя
         with open(man, "a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%Y-%m-%d %H:%M')}\t{p}\t{dst}\t{sz/2**20:.1f} → {nsz/2**20:.1f} МБ\t{c} → deflate, пиксели PIL и CV равны\n")

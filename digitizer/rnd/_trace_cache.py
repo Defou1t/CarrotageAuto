@@ -151,6 +151,7 @@ def cmd_build():
 REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", str), "kspick": ("rowdec_k_slots_pick", str),
                "slotlen": ("rowdec_slot_len", float), "slotall": ("rowdec_slot_all", lambda v: bool(int(v))),
                "slotfill": ("rowdec_slot_fill", lambda v: bool(int(v))),
+               "dedup": ("rowdec_dedup", float),
                "slotgeom": ("slot_template_geom", lambda v: bool(int(v))), "sib": ("slot_sib", float),
                "gate": ("slot_gate", str), "slot": ("slot_model", str), "order": ("slot_order", str)}
 
