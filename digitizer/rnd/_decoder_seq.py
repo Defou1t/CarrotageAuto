@@ -166,7 +166,9 @@ def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat"):
         print(f"эпоха {ep+1}/{epochs}  loss {run/max(1,nb):.4f}  "
               f"ВАЛ(держанные скважины, {tot} решений): модель {am:.1f}%  база(ближайший) {an:.1f}%"
               + (f"  точка {oe:.2f}px" if has_off else "") + f"  [{time.time()-t0:.0f}с]")
-    torch.save({"sd": net.state_dict(), "geom": [NROW, NCOL, MAXC, COL_STEP]}, CKPT)
+    from _decoder_seq_data import R_ROWS as _RR, ROW_STEP as _RS
+    torch.save({"sd": net.state_dict(), "geom": [NROW, NCOL, MAXC, COL_STEP],
+                "geom_full": [_RR, _RS, R_COLS, COL_STEP]}, CKPT)   # ★ 26.09: полная геометрия окна (§6.225)
     print(f"-> {CKPT}")
     return net
 

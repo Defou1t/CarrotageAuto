@@ -38,6 +38,11 @@ OUT = Path(r"F:\nds\output\taskS\decoder")
 # ── ГЕОМЕТРИЯ ОКНА (общая для обучения и инференса; менять только вместе с моделью) ──
 R_ROWS, ROW_STEP = 64, 4          # ±64 строки, каждая 4-я  → 33 строки
 R_COLS, COL_STEP = 96, 2          # ±96 px, каждый 2-й      → 97 колонок
+# ★ 26.09 (§6.225): геометрию окна можно задать `SEQ_GEOM="R_ROWS,ROW_STEP,R_COLS,COL_STEP"` (широкое окно селектора);
+#   без переменной — прежняя, побайтно. Сеть от геометрии не зависит (строки усредняются, колонка — по шагу).
+import os as _os
+if _os.environ.get("SEQ_GEOM"):
+    R_ROWS, ROW_STEP, R_COLS, COL_STEP = (int(v) for v in _os.environ["SEQ_GEOM"].split(","))
 NROW = 2 * R_ROWS // ROW_STEP + 1
 NCOL = 2 * R_COLS // COL_STEP + 1
 MAXC = 6                          # кандидатов на решение (= n_pick в features())

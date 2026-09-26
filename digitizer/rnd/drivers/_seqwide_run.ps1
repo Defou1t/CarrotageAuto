@@ -1,0 +1,83 @@
+﻿# _seqwide_run.ps1 — СЕЛЕКТОР С ШИРОКИМ ОКНОМ (§6.225): ±160 строк / 8, ±192 px / 4 (41×97 вместо 33×97).
+# Выборка (600 листов вне поля и сорта A) -> обучение -> DAgger-раунд на своих траекториях -> дообучение -> проверка
+# на своих траекториях БЕЗ сбросов на тех же листах поля, что dag (строки на эталоне 63.9%, честных 83/120).
+# Шаги с пропуском готового, один экземпляр, вывод python — прямым перенаправлением. ⚠ UTF-8 С BOM, маркеры — ASCII.
+$py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
+$rnd='F:/nds/Auto/digitizer/rnd'
+$ts='F:/nds/output/taskS'
+$dec="$ts/decoder"
+$L="$ts/seqwide_logs"
+$log='F:\nds\output\taskS\_seqwide.log'
+$env:SEQ_GEOM='160,8,192,4'
+$env:OMP_NUM_THREADS='2'
+$N=4
+function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-File -FilePath $log -Encoding utf8 -Append }
+$self = Split-Path -Leaf $MyInvocation.MyCommand.Path
+function Others { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$self*" }) }
+if ((Others).Count -gt 0) { Say "⚠ уже работает экземпляр — жду его конца"; while ((Others).Count -gt 0) { Start-Sleep -Seconds 60 }; if (Select-String -Path $log -Pattern '=== SEQWIDE DONE ===' -SimpleMatch -Quiet) { exit 0 } }
+function RunPy([string[]]$A, [string]$Out) {
+  $p = Start-Process -FilePath $py -ArgumentList $A -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput $Out -RedirectStandardError "$Out.err" -PassThru
+  $null = $p.Handle; $p.WaitForExit(); return $p.ExitCode
+}
+function Shards([string]$script, [string[]]$common, [string]$tag, [string]$pat) {
+  # шарды i/N с подхватом живых и до 3 запусков; готовность — файл $dec/<tag>_i of N.npz
+  $live=@{}; $runs=@{}
+  while ($true) {
+    $todo=@(0..($N-1) | Where-Object { -not (Test-Path "$dec/${tag}_${_}of$N.npz") })
+    if ($todo.Count -eq 0) { return $true }
+    $alive=0
+    foreach ($i in $todo) {
+      $p=$live[$i]
+      if ($p -and -not $p.HasExited) { $alive++; continue }
+      if (-not $p) {
+        $o=@(Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like "*$script*--tag $tag*--shard $i/$N*" })
+        if ($o.Count -gt 0) { $live[$i]=Get-Process -Id $o[0].ProcessId; $alive++; continue }
+      }
+      if (-not $runs.ContainsKey($i)) { $runs[$i]=0 }
+      if ($runs[$i] -ge 3) { continue }
+      $runs[$i]++
+      $live[$i]=Start-Process -FilePath $py -ArgumentList ($common + @('--tag',$tag,'--shard',"$i/$N")) -WorkingDirectory $rnd -WindowStyle Hidden `
+        -RedirectStandardOutput "$L/${tag}_$i.r$($runs[$i]).log" -RedirectStandardError "$L/${tag}_$i.r$($runs[$i]).err" -PassThru
+      $null=$live[$i].Handle; $alive++
+      Say "${tag}: шард $i — запуск $($runs[$i])"
+    }
+    if ($alive -eq 0) { return $false }
+    Start-Sleep -Seconds 60
+  }
+}
+New-Item -ItemType Directory -Force -Path $L | Out-Null
+Say "старт: широкое окно $env:SEQ_GEOM"
+# 1. синтетическая выборка
+if (-not (Test-Path "$dec/seqw_train_big.npz")) {
+  if (-not (Shards '_seq_data_big.py' @('_seq_data_big.py','--sheets','600','--cap','3000','--max-hours','6') 'seqw_big' '')) { Say "⛔ выборка не собралась"; Say "=== SEQWIDE DONE ==="; exit 2 }
+  $c = RunPy @('_seq_data_big.py','--merge',"$N",'--tag','seqw_big','--out','seqw_train_big.npz') "$L/merge_big.log"
+  if (-not (Test-Path "$dec/seqw_train_big.npz")) { Say "⛔ склейка выборки"; Say "=== SEQWIDE DONE ==="; exit 2 }
+  Say "выборка склеена"
+}
+# 2. обучение на синтетике
+if (-not (Test-Path "$dec/seqw_model_big.pt")) {
+  $c = RunPy @('_decoder_seq.py','--data','seqw_train_big.npz','--epochs','6','--ckpt','seqw_model_big.pt','--no-gate') "$L/train_big.log"
+  if (-not (Test-Path "$dec/seqw_model_big.pt")) { Say "⛔ обучение big (код $c)"; Say "=== SEQWIDE DONE ==="; exit 2 }
+  Say "обучена seqw_model_big"
+}
+# 3. DAgger-раунд на своих траекториях
+if (-not (Test-Path "$dec/seqw_train_dag.npz")) {
+  if (-not (Shards '_seq_onpolicy.py' @('_seq_onpolicy.py','--drive','seqw_model_big.pt','--sheets','600','--cap','3000','--every','2','--threads','2','--max-hours','6') 'seqwdag1' '')) { Say "⛔ сбор DAgger"; Say "=== SEQWIDE DONE ==="; exit 2 }
+  # ⚠ Start-Process склеивает аргументы через пробел БЕЗ кавычек — код для -c берём в кавычки явно
+  $code = "import numpy as np; D='F:/nds/output/taskS/decoder/'; Z=[np.load(D+'seqw_train_big.npz')]+[np.load(D+f'seqwdag1_{i}of4.npz') for i in range(4)]; K=['P','F','L','M','D','wells']; C={k: np.concatenate([z[k] for z in Z]) for k in K}; np.savez(D+'seqw_train_dag.npz', **C, geom=Z[0]['geom']); print(len(C['P']))"
+  $c = RunPy @('-c', ('"' + $code + '"')) "$L/merge_dag.log"
+  if (-not (Test-Path "$dec/seqw_train_dag.npz")) { Say "⛔ склейка DAgger"; Say "=== SEQWIDE DONE ==="; exit 2 }
+  Say "DAgger склеен"
+}
+# 4. дообучение
+if (-not (Test-Path "$dec/seqw_model_dag.pt")) {
+  $c = RunPy @('_decoder_seq.py','--data','seqw_train_dag.npz','--epochs','6','--ckpt','seqw_model_dag.pt','--no-gate') "$L/train_dag.log"
+  if (-not (Test-Path "$dec/seqw_model_dag.pt")) { Say "⛔ обучение dag (код $c)"; Say "=== SEQWIDE DONE ==="; exit 2 }
+  Say "обучена seqw_model_dag"
+}
+# 5. проверка на своих траекториях без сбросов — те же 60 листов поля, что nr_old/big/dag
+foreach ($m in @('seqw_model_big.pt','seqw_model_dag.pt')) {
+  $o = "$L/nr_$m.log"
+  if (-not (Test-Path $o)) { $c = RunPy @('_seq_onpolicy.py','--drive',$m,'--only-list','wellmap_sheets.txt','--sheets','60','--reset-px','1e9','--no-save','--tag','x') $o; Say "проверка $m (код $c)" }
+}
+Say "=== SEQWIDE DONE ==="

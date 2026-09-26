@@ -6,7 +6,9 @@ $log = 'F:\nds\output\taskS\_keepalive.log'
 function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-File -FilePath $log -Encoding utf8 -Append }
 # ★ 26.09: отработавшие задачи сняты с планировщика (аудит проекта); в списке — только живые драйверы.
 $jobs = @(
-  @{ task='nds_seqbig';     log='F:\nds\output\taskS\_seqbig.log';    done='=== SEQBIG DONE ===' }
+  @{ task='nds_seqbig';     log='F:\nds\output\taskS\_seqbig.log';    done='=== SEQBIG DONE ===' },
+  @{ task='nds_sweep';      log='F:\nds\output\taskS\_sweep.log';     done='=== SWEEP DONE ===' },
+  @{ task='nds_seqwide';    log='F:\nds\output\taskS\_seqwide.log';   done='=== SEQWIDE DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue
