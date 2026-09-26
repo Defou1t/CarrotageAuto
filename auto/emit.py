@@ -455,6 +455,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         #   занимает место, а эталон трека не взят. Слот пары берёт версию ДРУГОГО пути, если она сама ни с кем в треке не
         #   дублируется и не короче 30 строк в окне слота.
         dedup = float(getattr(cv, "rowdec_dedup", 0.0) or 0.0) if cv is not None else 0.0
+        refill = bool(getattr(cv, "rowdec_refill", False)) if cv is not None else False
         if dedup > 0:
             def _close(t1, t2):
                 com = [y for y in t1 if y in t2]
@@ -464,13 +465,34 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
             _bt = {}
             for nm, (L, _t) in merged.items():
                 _bt.setdefault(L.track_index, []).append(nm)
-            n_sw = 0
+            n_sw = n_rf = 0
             for ti, names in _bt.items():
                 for i in range(len(names)):
                     for j in range(i + 1, len(names)):
                         s1, s2 = names[i], names[j]
                         if _close(merged[s1][1], merged[s2][1]) < dedup:
                             continue
+                        # ★ §6.229 (`rowdec_refill`): сначала — СВОБОДНАЯ линия трека (не взятая ни одним слотом), самая
+                        #   длинная в окне слота и ни с кем не дублирующая; §6.229: у 182 потерянных кривых честная трасса
+                        #   есть, но линия не получила слота, а слоты трека заняты другими (часто дублями).
+                        if refill:
+                            used = {id(merged[o][0]) for o in merged}
+                            pool = [(L, t) for L, t in list(traces) + list(alt or [])
+                                    if L.track_index == ti and id(L) not in used]
+                            done_pair = False
+                            for s in (s2, s1):
+                                best = None
+                                for L, t in pool:
+                                    nn = _nn(s, t)
+                                    if nn < 30 or any(_close(t, merged[o][1]) >= 0.2 for o in names):
+                                        continue
+                                    if best is None or nn > best[0]:
+                                        best = (nn, (L, t))
+                                if best:
+                                    merged[s] = best[1]; n_sw += 1; n_rf += 1; done_pair = True
+                                    break
+                            if done_pair:
+                                continue
                         for s in (s2, s1):
                             alt_v = m_alt.get(s) if merged[s] is mapping.get(s) else mapping.get(s)
                             if alt_v is None or alt_v is merged[s] or _nn(s, alt_v[1]) < 30:
@@ -479,7 +501,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                                 continue
                             merged[s] = alt_v; n_sw += 1
                             break
-            print(f"  дубли трека (≥ {dedup:.0%} строк в 3 px): заменено слотов {n_sw}")
+            print(f"  дубли трека (≥ {dedup:.0%} строк в 3 px): заменено слотов {n_sw}, из них свободной линией {n_rf}")
         mapping = merged
     ifds = read_full(open(frame_nlgx, "rb").read())
 
