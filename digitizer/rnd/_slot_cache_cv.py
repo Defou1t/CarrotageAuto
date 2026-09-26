@@ -103,7 +103,8 @@ if a.replay:
         assert r.returncode == 0, r.stderr[-800:]
 
 if a.compare:
-    r = subprocess.run([PY, str(RND / "_replay_sweep.py"), "--skip-replay", "--tag", "slotcv", "--out", a.out,
+    # ⚠ 26.09: метка счёта — от каталога прогона (прежде «slotcv» для всех: второй прогон взял файлы счёта первого)
+    r = subprocess.run([PY, str(RND / "_replay_sweep.py"), "--skip-replay", "--tag", Path(a.dir).name, "--out", a.out,
                         "--base", a.base, "--var", "SC:slot=cv"], cwd=str(RND), capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
     print(r.stdout[-2500:]); print(r.stderr[-500:])
