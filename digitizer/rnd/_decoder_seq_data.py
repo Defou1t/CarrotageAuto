@@ -65,6 +65,22 @@ def patch(band, lo, y, pred):
     return ink & val, val
 
 
+def hist_cols(hist, y, pred):
+    """★ §6.226: ИСТОРИЯ СВОЕЙ ТРАССЫ в окне — для каждой строки окна ВЫШЕ текущей колонка, где трасса была (−1 — не было
+    или вне окна). Это то, что в тесте VLM давали зелёные точки: чью линию вели до развилки."""
+    h = np.full(NROW, -1, np.int16)
+    for i in range(NROW):
+        r = y - R_ROWS + i * ROW_STEP
+        if r >= y:
+            break
+        x = hist.get(r)
+        if x is not None:
+            c = int(round((x - pred) / COL_STEP)) + NCOL // 2
+            if 0 <= c < NCOL:
+                h[i] = c
+    return h
+
+
 def pack(ink, val):
     return np.packbits(np.concatenate([ink.ravel(), val.ravel()]))
 
@@ -85,7 +101,7 @@ def extract_sheet(n, pad, p, drift, rng, row_step, cap=0):
         return None                                    # для латч-обучения нужны соседи
     colors = ["black", "red", "orange", "green", "blue"]
     fgs = {c: T._color_fg(rgb, c, p) for c in colors}
-    P, F, L, M, D = [], [], [], [], []
+    P, F, L, M, D, HH = [], [], [], [], [], []
     near_ok = near_n = 0
 
     for g in gts:
@@ -106,7 +122,7 @@ def extract_sheet(n, pad, p, drift, rng, row_step, cap=0):
 
         allr = np.arange(rows.min(), rows.max() + 1)
         allx = np.interp(allr, rows, xsr)
-        v = 0.0; prevx = None; dr = 0.0
+        v = 0.0; prevx = None; dr = 0.0; hist = {}
         for j, y in enumerate(allr):
             gt_x = allx[j]
             if prevx is None:
@@ -139,18 +155,19 @@ def extract_sheet(n, pad, p, drift, rng, row_step, cap=0):
                             hw = np.maximum((b - a) / 2, 1.0)
                             df[:len(idx)] = np.clip((gt_x - C[idx]) / hw, -1, 1)
                             P.append(pack(ink, val)); F.append(xf); L.append(lf); M.append(mf)
-                            D.append(df)
+                            D.append(df); HH.append(hist_cols(hist, y, pred))
                             k = int(np.argmin(np.abs(C[idx] - pred)))
                             near_ok += int(lab[k]); near_n += 1
+            hist[y] = xhat                              # §6.226: где «трасса» была на этой строке
             v = v_next; prevx = gt_x
     if not P:
         return None
     P = np.array(P, np.uint8); F = np.array(F, np.float32)
-    L = np.array(L, np.uint8); M = np.array(M, np.uint8); D = np.array(D, np.float32)
+    L = np.array(L, np.uint8); M = np.array(M, np.uint8); D = np.array(D, np.float32); HH = np.array(HH, np.int16)
     if cap and len(P) > cap:                           # лист не должен доминировать в выборке
         s = rng.choice(len(P), cap, replace=False)
-        P, F, L, M, D = P[s], F[s], L[s], M[s], D[s]
-    return (P, F, L, M, D, near_ok, near_n)
+        P, F, L, M, D, HH = P[s], F[s], L[s], M[s], D[s], HH[s]
+    return (P, F, L, M, D, near_ok, near_n, HH)
 
 
 if __name__ == "__main__":
@@ -181,7 +198,7 @@ if __name__ == "__main__":
         if r is None:
             SKIP["нет данных"] = SKIP.get("нет данных", 0) + 1
             print(f"  -- {n.name[:44]:<46} нет данных"); continue
-        P, F, L, M, D, k, m = r
+        P, F, L, M, D, k, m = r[:7]
         PA.append(P); FA.append(F); LA.append(L); MA.append(M); DA.append(D)
         WA += [n.parent.parent.name] * len(P)
         ok += k; nn += m; done += 1

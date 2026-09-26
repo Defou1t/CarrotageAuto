@@ -8,7 +8,8 @@ function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-F
 $jobs = @(
   @{ task='nds_seqbig';     log='F:\nds\output\taskS\_seqbig.log';    done='=== SEQBIG DONE ===' },
   @{ task='nds_sweep';      log='F:\nds\output\taskS\_sweep.log';     done='=== SWEEP DONE ===' },
-  @{ task='nds_seqwide';    log='F:\nds\output\taskS\_seqwide.log';   done='=== SEQWIDE DONE ===' }
+  @{ task='nds_seqwide';    log='F:\nds\output\taskS\_seqwide.log';   done='=== SEQWIDE DONE ===' },
+  @{ task='nds_seqhist';    log='F:\nds\output\taskS\_seqhist.log';   done='=== SEQHIST DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue

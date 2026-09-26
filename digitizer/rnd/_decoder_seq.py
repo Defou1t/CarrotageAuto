@@ -43,11 +43,12 @@ class WindowSelector(nn.Module):
     отличает свою кривую от соседней. Пулинг только по строкам (окно сворачивается в
     «согласованность хода»)."""
 
-    def __init__(self, ch=32, emb=48, ctx=3):
+    def __init__(self, ch=32, emb=48, ctx=3, hist=False):
         super().__init__()
         self.ctx = ctx                                   # сколько соседних колонок берёт кандидат
+        self.hist = hist                                 # ★ §6.226: третий канал — история своей трассы
         self.cnn = nn.Sequential(
-            nn.Conv2d(2, 16, 3, padding=1), nn.ReLU(),
+            nn.Conv2d(3 if hist else 2, 16, 3, padding=1), nn.ReLU(),
             nn.Conv2d(16, ch, 3, stride=(2, 1), padding=1), nn.ReLU(),
             nn.Conv2d(ch, ch, 3, stride=(2, 1), padding=1), nn.ReLU(),
             nn.Conv2d(ch, ch, 3, stride=(2, 1), padding=1), nn.ReLU(),
@@ -62,10 +63,16 @@ class WindowSelector(nn.Module):
         # признак «где внутри рана идёт ход» тот же, что отличает свой ран от чужого.
         self.head_off = nn.Sequential(nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 1), nn.Tanh())
 
-    def forward(self, P, F, M, want_off=False):
-        """P (B,2,NROW,NCOL) float; F (B,MAXC,NF); M (B,MAXC) — маска живых кандидатов.
-        Возвращает скоры (B,MAXC) с -inf на мёртвых; при want_off — ещё и смещение точки."""
+    def forward(self, P, F, M, want_off=False, H=None):
+        """P (B,2,NROW,NCOL) float; F (B,MAXC,NF); M (B,MAXC) — маска живых кандидатов; H (B,NROW) — колонки своей трассы
+        по строкам окна (−1 — нет), только при hist. Возвращает скоры (B,MAXC); при want_off — ещё и смещение точки."""
         B = P.shape[0]
+        if self.hist:
+            hc = torch.zeros(B, 1, P.shape[2], P.shape[3], device=P.device)
+            if H is not None:
+                ok = (H >= 0).float().unsqueeze(1).unsqueeze(-1)            # (B,1,NROW,1)
+                hc.scatter_(3, H.clamp(min=0).long().unsqueeze(1).unsqueeze(-1), ok)
+            P = torch.cat([P, hc], dim=1)
         z = self.cnn(P).mean(dim=2)                      # (B, ch, NCOL) — свёртка окна по строкам
         e = self.col(z)                                  # (B, emb, NCOL)
         # колонка кандидата: signed_off = (c-pred)/50 → px → индекс колонки патча
@@ -103,9 +110,12 @@ def offset_loss(off, D, L, F=None):
     return ((off - D).abs() * w).sum() / w.sum().clamp(min=1)
 
 
-def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat"):
+def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat", hist=False):
     d = np.load(OUT / data, allow_pickle=False)
     P, F, L, M = d["P"], d["F"], d["L"], d["M"]
+    Hs = d["H"] if "H" in d.files else np.full((len(P), NROW), -1, np.int16)
+    if hist and "H" not in d.files:
+        print("⚠ в выборке нет истории H — канал истории будет пустым")
     D = d["D"] if "D" in d.files else np.zeros_like(L, np.float32)
     has_off = "D" in d.files
     wells = d["wells"]
@@ -117,29 +127,30 @@ def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat"):
     print(f"решений {len(P)}: train {int(tr.sum())} / val {int(va.sum())} "
           f"(валидационные скважины {sorted(val_w)})")
 
-    net = WindowSelector().to(dev)
+    net = WindowSelector(hist=hist).to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
     ntr = int(tr.sum())
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=max(1, epochs * (ntr // bs)))
-    Pt, Ft, Lt, Mt, Dt = P[tr], F[tr], L[tr], M[tr], D[tr]
-    Pv, Fv, Lv, Mv, Dv = P[va], F[va], L[va], M[va], D[va]
+    Pt, Ft, Lt, Mt, Dt, Ht = P[tr], F[tr], L[tr], M[tr], D[tr], Hs[tr]
+    Pv, Fv, Lv, Mv, Dv, Hv = P[va], F[va], L[va], M[va], D[va], Hs[va]
     rng = np.random.default_rng(0)
 
-    def batch(Pb, Fb, Lb, Mb, Db, ii):
+    def batch(Pb, Fb, Lb, Mb, Db, ii, Hb=None):
         p = np.stack([unpack(Pb[i]) for i in ii])
         return (torch.from_numpy(p).to(dev),
                 torch.from_numpy(Fb[ii]).to(dev),
                 torch.from_numpy(Lb[ii].astype(np.float32)).to(dev),
                 torch.from_numpy(Mb[ii].astype(np.float32)).to(dev),
-                torch.from_numpy(Db[ii].astype(np.float32)).to(dev))
+                torch.from_numpy(Db[ii].astype(np.float32)).to(dev),
+                None if Hb is None else torch.from_numpy(Hb[ii].astype(np.int64)).to(dev))
 
     def evaluate():
         net.eval(); accm = accn = tot = 0; oe = []
         with torch.no_grad():
             for s in range(0, len(Pv), 4096):
                 ii = np.arange(s, min(s + 4096, len(Pv)))
-                p, f, l, m, dd = batch(Pv, Fv, Lv, Mv, Dv, ii)
-                sc, off = net(p, f, m, want_off=True)
+                p, f, l, m, dd, hh = batch(Pv, Fv, Lv, Mv, Dv, ii, Hv)
+                sc, off = net(p, f, m, want_off=True, H=hh)
                 k = sc.argmax(1)
                 near = (f[:, :, 7] * m).argmax(1)         # is_nearest = что взяла бы база
                 good = l.sum(1) > 0
@@ -156,8 +167,8 @@ def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat"):
         idx = rng.permutation(ntr); t0 = time.time(); run = 0.0; nb = 0
         for s in range(0, ntr - bs + 1, bs):
             ii = idx[s:s + bs]
-            p, f, l, m, dd = batch(Pt, Ft, Lt, Mt, Dt, ii)
-            sc, off = net(p, f, m, want_off=True)
+            p, f, l, m, dd, hh = batch(Pt, Ft, Lt, Mt, Dt, ii, Ht)
+            sc, off = net(p, f, m, want_off=True, H=hh)
             loss = listwise_loss(sc, l, m) + (
                 lam_off * offset_loss(off, dd, l, f if off_w == "width" else None) if has_off else 0.0)
             opt.zero_grad(set_to_none=True); loss.backward(); opt.step(); sched.step()
@@ -168,7 +179,7 @@ def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat"):
               + (f"  точка {oe:.2f}px" if has_off else "") + f"  [{time.time()-t0:.0f}с]")
     from _decoder_seq_data import R_ROWS as _RR, ROW_STEP as _RS
     torch.save({"sd": net.state_dict(), "geom": [NROW, NCOL, MAXC, COL_STEP],
-                "geom_full": [_RR, _RS, R_COLS, COL_STEP]}, CKPT)   # ★ 26.09: полная геометрия окна (§6.225)
+                "geom_full": [_RR, _RS, R_COLS, COL_STEP], "hist": bool(hist)}, CKPT)   # §6.225 / §6.226
     print(f"-> {CKPT}")
     return net
 
@@ -250,6 +261,7 @@ if __name__ == "__main__":
     ap.add_argument("--gate-only", action="store_true")
     ap.add_argument("--no-gate", action="store_true")
     ap.add_argument("--ckpt", default=None)
+    ap.add_argument("--hist", action="store_true", help="§6.226: канал истории своей трассы (нужна выборка с H)")
     ap.add_argument("--point", default="rule", choices=["rule", "center", "pred", "head"],
                     help="точка внутри рана: правило прода / центр / clamp(предсказание) / голова регрессии")
     ap.add_argument("--lam-off", type=float, default=1.0, help="вес L1-лосса головы точки")
@@ -265,7 +277,7 @@ if __name__ == "__main__":
         net = WindowSelector().to(dev)
         net.load_state_dict(torch.load(CKPT, map_location=dev)["sd"]); net.eval()
     else:
-        net = train(a.data, a.epochs, a.bs, a.lr, dev, a.lam_off, a.off_w); net.eval()
+        net = train(a.data, a.epochs, a.bs, a.lr, dev, a.lam_off, a.off_w, a.hist); net.eval()
 
     if not a.no_gate:
         # §6.106: объём — ИЗ СЧЁТЧИКА. «24 кривые» стояли строкой; смени bench состав — и шапка

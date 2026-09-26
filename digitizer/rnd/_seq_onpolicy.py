@@ -50,14 +50,15 @@ from _multi_replica_probe import dense
 from auto import imaging as im, trace2d as T
 from auto.config import DEFAULT
 from _decoder_core import features
-from _decoder_seq_data import patch, pack, OUT, R_ROWS, ROW_STEP, R_COLS, COL_STEP, NROW, NCOL, MAXC
+from _decoder_seq_data import patch, pack, OUT, R_ROWS, ROW_STEP, R_COLS, COL_STEP, NROW, NCOL, MAXC, hist_cols
 from _decoder_seq import WindowSelector
 SLMAX = 30.0
 NFEAT = 10
 
 ck = Path(a.drive) if Path(a.drive).parent != Path(".") else OUT / a.drive
-net = WindowSelector()
-net.load_state_dict(torch.load(ck, map_location="cpu")["sd"]); net.eval()
+_ck = torch.load(ck, map_location="cpu")
+net = WindowSelector(hist=bool(_ck.get("hist", False)))     # §6.226: модель с каналом истории — по чекпойнту
+net.load_state_dict(_ck["sd"]); net.eval()
 
 # ── листы (та же логика, что `_seq_data_big.py`) ──
 _CROSS = ("BKZ", "MK", "MGZ", "STK", ", ")
@@ -93,13 +94,14 @@ print(f"★ СБОР НА СВОИХ ТРАЕКТОРИЯХ: ведёт {ck.name
       f"сброс {a.reset_px:.0f} px × {a.reset_rows} строк")
 
 
-def score(band, lo, y, pred, X, n):
+def score(band, lo, y, pred, X, n, h=None):
     ink, val = patch(band, lo, y, pred)
     p = torch.from_numpy(np.stack([ink, val]).astype(np.float32))[None]
     f = np.zeros((1, MAXC, NFEAT), np.float32); f[0, :n] = X
     m = np.zeros((1, MAXC), np.float32); m[0, :n] = 1
+    hh = None if h is None else torch.from_numpy(h.astype(np.int64))[None]
     with torch.no_grad():
-        return net(p, torch.from_numpy(f), torch.from_numpy(m))[0].numpy()
+        return net(p, torch.from_numpy(f), torch.from_numpy(m), H=hh)[0].numpy()
 
 
 def sheet(n, rng):
@@ -112,7 +114,7 @@ def sheet(n, rng):
     p = DEFAULT.cv
     colors = ["black", "red", "orange", "green", "blue"]
     fgs = {c: T._color_fg(rgb, c, p) for c in colors}
-    P, F, L, M, D = [], [], [], [], []
+    P, F, L, M, D, HH = [], [], [], [], [], []
     st = dict(dec=0, ok=0, near_ok=0, hard=0, hard_ok=0, resets=0, rows=0, on=0, don=0, don_ok=0, doff=0, doff_ok=0,
               curves=0, hon=0, hon90=0)
     for g in gts:
@@ -131,7 +133,7 @@ def sheet(n, rng):
         band = np.ascontiguousarray(fgs[best_c][:, lo:hi] > 0)
         allr = np.arange(rows.min(), rows.max() + 1)
         allx = np.interp(allr, rows, xsr)
-        x = float(allx[0]); v = 0.0; far = 0; cnt = 0; errs = []
+        x = float(allx[0]); v = 0.0; far = 0; cnt = 0; errs = []; hist = {}
         for j in range(1, len(allr)):
             y = int(allr[j]); gt_x = allx[j]
             st["rows"] += 1
@@ -143,12 +145,13 @@ def sheet(n, rng):
                 C = np.array([r[2] + lo for r in runs], float)
                 pred = x + float(np.clip(v, -SLMAX, SLMAX))
                 idx, X = features(A, B, C, pred, x, v, base, MAXC)
+                hrow = hist_cols(hist, y, pred)
                 aa = A[idx].astype(float); bb = B[idx].astype(float)
                 lab = ((aa - 3 <= gt_x) & (gt_x <= bb + 3)).astype(np.uint8)
                 if len(idx) == 1:
                     kk = 0
                 else:
-                    sc = score(band, lo, y, pred, X, len(idx))
+                    sc = score(band, lo, y, pred, X, len(idx), hrow)
                     kk = int(np.argmax(sc[:len(idx)]))
                     if lab.sum():
                         cnt += 1
@@ -168,9 +171,10 @@ def sheet(n, rng):
                             df = np.zeros(MAXC, np.float32)
                             hw = np.maximum((bb - aa) / 2, 1.0)
                             df[:len(idx)] = np.clip((gt_x - C[idx]) / hw, -1, 1)
-                            P.append(pack(ink, val)); F.append(xf); L.append(lf); M.append(mf); D.append(df)
+                            P.append(pack(ink, val)); F.append(xf); L.append(lf); M.append(mf); D.append(df); HH.append(hrow)
                 nx = float(C[idx[kk]])
                 v = 0.6 * v + 0.4 * (nx - x); x = nx
+            hist[y] = x                                  # §6.226: где трасса фактически была на этой строке
             st["on"] += int(abs(x - gt_x) <= 3)
             errs.append(abs(x - gt_x))
             far = far + 1 if abs(x - gt_x) > a.reset_px else 0
@@ -183,15 +187,15 @@ def sheet(n, rng):
     if not P:
         return None, st
     P = np.array(P, np.uint8); F = np.array(F, np.float32); L = np.array(L, np.uint8)
-    M = np.array(M, np.uint8); D = np.array(D, np.float32)
+    M = np.array(M, np.uint8); D = np.array(D, np.float32); HH = np.array(HH, np.int16)
     if a.cap and len(P) > a.cap:
         s = rng.choice(len(P), a.cap, replace=False)
-        P, F, L, M, D = P[s], F[s], L[s], M[s], D[s]
-    return (P, F, L, M, D), st
+        P, F, L, M, D, HH = P[s], F[s], L[s], M[s], D[s], HH[s]
+    return (P, F, L, M, D, HH), st
 
 
 rng = np.random.default_rng(777 + SH_I)
-PA, FA, LA, MA, DA, WA = [], [], [], [], [], []
+PA, FA, LA, MA, DA, WA, HA = [], [], [], [], [], [], []
 TOT = dict(dec=0, ok=0, near_ok=0, hard=0, hard_ok=0, resets=0, rows=0, on=0, don=0, don_ok=0, doff=0, doff_ok=0,
            curves=0, hon=0, hon90=0)
 T0 = time.time(); done = 0
@@ -209,8 +213,8 @@ for n in mine:
     for k in TOT:
         TOT[k] += st[k]
     if data is not None:
-        P, F, L, M, D = data
-        PA.append(P); FA.append(F); LA.append(L); MA.append(M); DA.append(D)
+        P, F, L, M, D, HH = data
+        PA.append(P); FA.append(F); LA.append(L); MA.append(M); DA.append(D); HA.append(HH)
         WA += [n.parent.parent.name] * len(P)
     done += 1
     print(f"  {n.name[:44]:<46} решений {st['dec']:>6}: модель {100*st['ok']/max(1,st['dec']):5.1f}%, ближайший "
@@ -220,7 +224,7 @@ for n in mine:
         print("★ ПАРТИЯ ОКОНЧЕНА — сохраняю собранное"); break
 dst = OUT / f"{a.tag}_{SH_I}of{SH_N}.npz"
 if PA and not a.no_save:
-    np.savez(dst, P=np.vstack(PA), F=np.vstack(FA), L=np.vstack(LA), M=np.vstack(MA), D=np.vstack(DA),
+    np.savez(dst, P=np.vstack(PA), F=np.vstack(FA), L=np.vstack(LA), M=np.vstack(MA), D=np.vstack(DA), H=np.vstack(HA),
              wells=np.array(WA), geom=np.array([R_ROWS, ROW_STEP, R_COLS, COL_STEP, NROW, NCOL, MAXC]))
 print(f"ИТОГО листов {done}: решений {TOT['dec']}, модель верна {100*TOT['ok']/max(1,TOT['dec']):.2f}%, ближайший "
       f"{100*TOT['near_ok']/max(1,TOT['dec']):.2f}%, трудных {TOT['hard']} ({100*TOT['hard']/max(1,TOT['dec']):.1f}%), "

@@ -31,8 +31,9 @@ print(f"решений {len(P)} (с верным раном {int(good.sum())}), 
       f"ближайший прав {100*near_ok[good].mean():.1f}% ⇒ трудных {int(hard.sum())}")
 res = {}
 for ck in a.ckpt:
-    net = WindowSelector().to(dev)
-    net.load_state_dict(torch.load(ck, map_location=dev)["sd"]); net.eval()
+    _ck = torch.load(ck, map_location=dev)
+    net = WindowSelector(hist=bool(_ck.get("hist", False))).to(dev)
+    net.load_state_dict(_ck["sd"]); net.eval()
     pick = np.zeros(len(P), np.int64)
     with torch.no_grad():
         for s in range(0, len(P), 4096):

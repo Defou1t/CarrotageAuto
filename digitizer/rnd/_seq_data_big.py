@@ -47,7 +47,7 @@ if a.merge:
     if miss:
         sys.exit(f"⛔ нет шардов: {miss}")
     Z = [np.load(p) for p in parts]
-    keys = ["P", "F", "L", "M", "D", "wells"]
+    keys = ["P", "F", "L", "M", "D", "wells"] + (["H"] if all("H" in z.files for z in Z) else [])
     cat = {k: np.concatenate([z[k] for z in Z]) for k in keys}
     np.savez(OUT / a.out, **cat, geom=Z[0]["geom"])
     print(f"★ склеено: {len(cat['P'])} решений, скважин {len(set(cat['wells'].tolist()))} → {OUT / a.out}")
@@ -97,7 +97,7 @@ print(f"★ ВЫБОРКА СЕЛЕКТОРА: исключено скважин
       f"листов в отборе {len(order)}; шард {SH_I}/{SH_N}: {len(mine)} листов, cap {a.cap}, дрейф σ={a.drift}")
 p = DEFAULT.cv
 rng = np.random.default_rng(12345 + SH_I)
-PA, FA, LA, MA, DA, WA = [], [], [], [], [], []
+PA, FA, LA, MA, DA, WA, HA = [], [], [], [], [], [], []
 ok = nn = done = 0; SKIP = {}
 T0 = time.time()
 dst = OUT / f"{a.tag}_{SH_I}of{SH_N}.npz"
@@ -112,8 +112,8 @@ for n in mine:
         print(f"  !! {n.name[:44]:<46} {type(e).__name__}: {e}"); continue
     if r is None:
         SKIP["нет данных (< 2 кривых)"] = SKIP.get("нет данных (< 2 кривых)", 0) + 1; continue
-    P, F, L, M, D, k, m = r
-    PA.append(P); FA.append(F); LA.append(L); MA.append(M); DA.append(D)
+    P, F, L, M, D, k, m = r[:7]
+    PA.append(P); FA.append(F); LA.append(L); MA.append(M); DA.append(D); HA.append(r[7])
     WA += [n.parent.parent.name] * len(P)
     ok += k; nn += m; done += 1
     print(f"  {n.name[:44]:<46} {len(P):>6} решений, ближайший прав {100*k/max(1,m):.1f}%")
@@ -123,6 +123,6 @@ for n in mine:
 _sk = sum(SKIP.values())
 print(f"  СВЕРКА: обработано {done} + пропущено {_sk} из {len(mine)}; " + ", ".join(f"{k} {v}" for k, v in SKIP.items()))
 OUT.mkdir(parents=True, exist_ok=True)
-np.savez(dst, P=np.vstack(PA), F=np.vstack(FA), L=np.vstack(LA), M=np.vstack(MA), D=np.vstack(DA),
+np.savez(dst, P=np.vstack(PA), F=np.vstack(FA), L=np.vstack(LA), M=np.vstack(MA), D=np.vstack(DA), H=np.vstack(HA),
          wells=np.array(WA), geom=np.array([R_ROWS, ROW_STEP, R_COLS, COL_STEP, NROW, NCOL, MAXC]))
 print(f"ИТОГО шард {SH_I}: {sum(len(x) for x in PA)} решений, скважин {len(set(WA))}; ближайший прав {100*ok/max(1,nn):.1f}% → {dst}")
