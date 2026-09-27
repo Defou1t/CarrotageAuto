@@ -40,6 +40,7 @@ ap.add_argument("--max-hours", type=float, default=0.0)
 ap.add_argument("--fast", action="store_true", help="сборка с ускоренным селектором `_seq_fast` (выдача побайтно та же, §6.218)")
 ap.add_argument("--seq", default="", help="чекпойнт селектора для сборки (пусто = прод `seq_model`); путь с каталогом — как есть (§6.220)")
 ap.add_argument("--wlg-roots", nargs="+", default=[r"F:\nds\projects\Archive"])
+ap.add_argument("--conf", default="", help="§6.240: сайдкар уверенности декодера (`_dec_conf.py`) — в повторе даётся emit как `traces.alt_conf`")
 ap.add_argument("--knob", action="append", default=[], help="§6.236: ручка ВЕДЕНИЯ для сборки, `имя=значение` (пишется в кэш)")
 a = ap.parse_args()
 TS = Path(a.ts)
@@ -158,7 +159,7 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "dedup": ("rowdec_dedup", float),
                "refill": ("rowdec_refill", lambda v: bool(int(v))),
                "slotgeom": ("slot_template_geom", lambda v: bool(int(v))), "sib": ("slot_sib", float),
-               "gapfill": ("rowdec_gapfill", int),
+               "gapfill": ("rowdec_gapfill", int), "confveto": ("rowdec_conf_veto", float),
                "gate": ("slot_gate", str), "slot": ("slot_model", str), "order": ("slot_order", str)}
 
 
@@ -177,6 +178,12 @@ def cmd_replay():
         modes.append((nm, kw))
     sheets = sheet_list()
     stat = {nm: [0, 0] for nm, _ in modes}
+    CONF = {}
+    for cf in ([a.conf] if a.conf else []):
+        for part in (sorted(Path(cf).parent.glob(Path(cf).stem + "_*of*.pkl")) or [Path(cf)]):
+            CONF.update(pickle.load(open(part, "rb")))
+    if a.conf:
+        print(f"★ уверенность декодера: {len(CONF)} листов из {a.conf}")
     for n in sheets:
         src = CACHE / (sheet_dir(n) + ".pkl")
         if not src.exists():
@@ -211,6 +218,7 @@ def cmd_replay():
                 traces = prod
             else:
                 traces = T._WithAlt(prod); traces.alt = alt; traces.alt_gated = gated
+                traces.alt_conf = CONF.get(src.name)
             out = Path(a.out) / nm / sheet_dir(n)
             out.mkdir(parents=True, exist_ok=True)
             for old in out.glob("*_auto.nlgx"):

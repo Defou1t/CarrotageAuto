@@ -363,6 +363,15 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     gapfill = int(getattr(cv, "rowdec_gapfill", 0) or 0) if cv is not None else 0
     if alt is not None and gapfill > 0:
         alt = [(L, _fill_gaps(tr, gapfill)) for L, tr in alt]
+    # ★ §6.240 ВЕТО НЕУВЕРЕННОЙ ВЕРСИИ ДЕКОДЕРА (`cv.rowdec_conf_veto`, 0 = выкл = прежнее бит-в-бит). Уверенность трассы
+    #   декодера — медиана вероятности его карты вдоль трассы (`traces.alt_conf`, по порядку `alt`). Стенд §6.240: ни один
+    #   честный путь не имел медианы < 0.8 (AUC 0.95 против 0.69 у длины, по которой решает правило слота). Слот, получивший
+    #   версию декодера с уверенностью ниже порога, берёт прод-версию, если она есть.
+    veto = float(getattr(cv, "rowdec_conf_veto", 0.0) or 0.0) if cv is not None else 0.0
+    alt_conf = getattr(traces, "alt_conf", None)
+    cmap = {}
+    if veto > 0 and alt is not None and alt_conf is not None and len(alt_conf) == len(alt):
+        cmap = {id(tr): (c[0] if c else None) for (L, tr), c in zip(alt, alt_conf)}
     if alt is not None and (pick > 0 or model_f or slot_len > 0):
         m_alt = _map(alt, "dec")                    # §6.231: путь — признак расширенной раскладки (вес на 14 его не видит)
         # ⚠⚠ ДВА СЧЁТА НАЗНАЧЕННЫХ СЛОТОВ, И ЭТО НЕ ИЗБЫТОЧНОСТЬ.
@@ -432,6 +441,10 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                     merged[nm] = oth[nm]
                 _slots.append({"name": nm, "track": int(ti), "base": "dec" if use.get(ti) else "prod",
                                "nn_base": int(nb), "nn_alt": int(na), "flip": bool(flip)})
+            if cmap and nm in m_alt and nm in mapping and merged.get(nm) is m_alt[nm]:
+                dc = cmap.get(id(m_alt[nm][1]))
+                if dc is not None and dc < veto:
+                    merged[nm] = mapping[nm]          # §6.240: неуверенная версия декодера уступает прод-версии
         for ti in by_t:
             took["декодер" if use.get(ti) else "прод"] += 1
         print(f"  выбор пути по треку ({'модель ' + model_f if model_f else 'порог ' + str(pick)}"

@@ -33,6 +33,7 @@ ap.add_argument("--wskip", type=float, nargs="+", default=[0.5])
 ap.add_argument("--gmax", type=int, default=30)
 ap.add_argument("--rounds", type=int, default=0, help="кругов перекладки путей (0 — без варианта)")
 ap.add_argument("--hjump", type=float, default=0.15, help="цена прыжка В ВАРИАНТАХ С УДЕРЖАНИЕМ (V0 — всегда прод 0.15)")
+ap.add_argument("--pathstats", action="store_true", help="признаки уверенности каждого пути (V0 и удержание) и честен ли он — AUC")
 ap.add_argument("--kplus", type=int, default=0, help="вариант «удержание W + K+N путей» (0 — без варианта)")
 ap.add_argument("--diag", action="store_true", help="по НЕвзятым вариантом кривым — медиана и покрытие лучшего пути")
 ap.add_argument("--near", type=float, default=3.0, help="радиус «своя кривая есть»: удержание, если пиков нет в near·dy + near px")
@@ -258,7 +259,7 @@ for w in a.wskip:
         VARS += [(f"удержание {w} + перекладка {a.rounds}", 0.6, w, a.rounds)]
     if a.kplus:
         VARS += [(f"удержание {w} + K+{a.kplus}", 0.6, w, -a.kplus)]     # отрицательный rr = добавка к K
-C = Counter(); PAR = Counter(); REC = []; DIAG = []
+C = Counter(); PAR = Counter(); REC = []; DIAG = []; PST = []
 files = sorted(Path(a.cache).glob("*.pkl"))[a.offset::a.every]
 if a.parity_cache:
     files = [Path(a.cache) / f.name for f in sorted(Path(a.parity_cache).glob("*.pkl"))]
@@ -308,6 +309,15 @@ for fi, f in enumerate(files, 1):
             ok = {(g, i): hon(t, G[g]) for g in gs for i, t in enumerate(trs)}
             mt = match(gs, list(range(len(trs))), ok)
             res[name] = set(mt)
+            if a.pathstats:
+                honest_paths = set(mt.values())
+                for i, t in enumerate(trs):
+                    ys = np.array(sorted(t)); xs = np.array([t[y] for y in ys])
+                    pv = prob[ys - py0, (xs - x0).astype(int)]
+                    span = int(ys[-1] - ys[0] + 1)
+                    jumps = np.abs(np.diff(xs)) / np.maximum(1, np.diff(ys))
+                    PST.append((name, i in honest_paths, len(t), span, float(np.mean(-np.log(np.clip(pv, 1e-6, 1)))),
+                                float(np.median(pv)), 1.0 - len(t) / span, float(np.mean(jumps > 3)) if len(jumps) else 0.0))
             if a.diag and ws is not None:
                 for g in gs:
                     if g in mt:
@@ -362,3 +372,17 @@ if a.diag:
             m3 = (med <= 3) & (cov < 0.9)
             if m3.any():
                 print(f"   у «рядом, но коротко»: покрытие — медиана {np.median(cov[m3]):.2f}")
+if a.pathstats:
+    def auc(sc, y):
+        sc = np.asarray(sc, float); y = np.asarray(y, bool)
+        if y.all() or (~y).all():
+            return float("nan")
+        r = np.argsort(np.argsort(sc)) + 1
+        return float((r[y].sum() - y.sum() * (y.sum() + 1) / 2) / (y.sum() * (~y).sum()))
+    pickle.dump(PST, open(str(a.dump).replace(".pkl", "_paths.pkl"), "wb"))
+    for name in sorted({x[0] for x in PST}):
+        X = [x for x in PST if x[0] == name]
+        y = [x[1] for x in X]
+        print(f"\n★ ПУТИ «{name}»: {len(X)}, честных {sum(y)} ({100*np.mean(y):.0f}%); AUC признака «путь честный»:")
+        print(f"   длина {auc([x[2] for x in X], y):.3f}; −средний log p {auc([-x[4] for x in X], y):.3f}; медиана p {auc([x[5] for x in X], y):.3f}; "
+              f"−доля пропусков {auc([-x[6] for x in X], y):.3f}; −доля прыжков > 3 px/строку {auc([-x[7] for x in X], y):.3f}")

@@ -26,6 +26,7 @@ ap.add_argument("--base", required=True, help="ключи повтора баз�
 ap.add_argument("--var", action="append", default=[], help="ИМЯ:ключ=зн[,ключ=зн] — ОТЛИЧИЯ от базы")
 ap.add_argument("--perm", type=int, default=200000)
 ap.add_argument("--skip-replay", action="store_true")
+ap.add_argument("--conf", default="", help="§6.240: сайдкар уверенности декодера, передаётся повтору")
 a = ap.parse_args()
 TS = Path(a.ts); PY = sys.executable; RND = Path(__file__).resolve().parent
 
@@ -43,6 +44,8 @@ for nm, spec in modes:
     print(f"   {nm}: {spec}")
 if not a.skip_replay:
     cmd = [PY, str(RND / "_trace_cache.py"), "replay", "--sheets", a.sheets, "--cache", a.cache, "--out", a.out]
+    if a.conf:
+        cmd += ["--conf", a.conf]
     for nm, spec in modes:
         cmd += ["--mode", f"{nm}:{spec}"]
     r = subprocess.run(cmd, cwd=str(RND), capture_output=True, text=True, encoding="utf-8", errors="replace")
