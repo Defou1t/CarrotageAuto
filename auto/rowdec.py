@@ -325,7 +325,21 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             if s < 0:
                 break
         out.append(tr)
+    # ★ §6.240: уверенность траектории — медиана вероятности карты вдоль неё (для вето в `emit`); ключ — id словаря
+    for tr in out:
+        if tr:
+            ys = np.fromiter(tr.keys(), np.int64, len(tr)) - y0
+            xs = np.fromiter(tr.values(), np.float64, len(tr)).astype(np.int64) - x0
+            _CONF[id(tr)] = float(np.median(prob[ys, xs]))
     return out
+
+
+_CONF = {}      # §6.240: id(трасса) → медиана p; живёт в пределах одного `trace_auto`
+
+
+class _Trs(list):
+    """Список (Line, трасса) декодера с уверенностью трасс `.conf` (§6.240) по тому же порядку."""
+    conf = None
 
 
 def _viterbi_hold(rows, cands, locs, taken, x0, y0, k, wjump, wskip, gmax):
@@ -432,6 +446,7 @@ def trace_auto(rgb, sheet, p):
             by_track[ti] = []
 
     out = []
+    _CONF.clear()
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
         if lines:
@@ -510,7 +525,10 @@ def trace_auto(rgb, sheet, p):
                 for i, t in enumerate(trs):
                     if i not in used_i:
                         out.append((_synth_line(lines, ti, t, med[i], rgb, p), t))
-    return out
+    res = _Trs(out)
+    res.conf = [(_CONF.get(id(t)),) for _, t in out]
+    _CONF.clear()
+    return res
 
 
 SYNTH = "kslots-synth"      # маркер синтетической линии в `flag_reason` (§6.206): читает `emit`

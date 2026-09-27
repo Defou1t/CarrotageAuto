@@ -97,6 +97,7 @@ def cmd_build():
             traces=[(L, pack(tr)) for L, tr in traces],
             alt=None if getattr(traces, "alt", None) is None else [(L, pack(tr)) for L, tr in traces.alt],
             alt_gated=bool(getattr(traces, "alt_gated", True)),
+            alt_conf=getattr(traces, "alt_conf", None),       # §6.240 (кэши до 27.09 — без него; тогда сайдкар `--conf`)
             frame=sheet.frame, stem=stem, image=str(image), frame_nlgx=str(frame_nlgx),
             trace_knobs=dict(TRACE_KNOBS))
         return {}
@@ -218,7 +219,7 @@ def cmd_replay():
                 traces = prod
             else:
                 traces = T._WithAlt(prod); traces.alt = alt; traces.alt_gated = gated
-                traces.alt_conf = CONF.get(src.name)
+                traces.alt_conf = c.get("alt_conf") or CONF.get(src.name)
             out = Path(a.out) / nm / sheet_dir(n)
             out.mkdir(parents=True, exist_ok=True)
             for old in out.glob("*_auto.nlgx"):
