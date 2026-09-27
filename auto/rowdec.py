@@ -287,6 +287,13 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
 
     out = []
     taken = [set() for _ in range(prob.shape[0])]
+    # ★ §6.237 УДЕРЖАНИЕ (`cv.rowdec_hold` — штраф за строку; 0 = выкл = прежний путь бит-в-бит). Путь обязан брать пик в
+    #   каждой строке, где пики есть; на пересечении, занятом прежним путём, своей кривой в строке нет, и путь прыгал на
+    #   чужую. С ручкой путь может «удержаться» — не брать пик, сохранив x, — но ТОЛЬКО если доступных пиков в 3·dy + 3 px
+    #   от него нет (слабый живой пик своей кривой обязан быть взят), не дольше `rowdec_hold_gmax` строк подряд. Строки
+    #   удержания в трассу не пишутся и не занимают пиков.
+    hold = float(getattr(p, "rowdec_hold", 0.0) or 0.0)
+    gmax = int(getattr(p, "rowdec_hold_gmax", 29) or 29)
     for j in range(k):
         rows, cands, locs = [], [], []
         for i in range(prob.shape[0]):
@@ -301,6 +308,8 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             rows.append(i); cands.append(idx.astype(float)); locs.append(loc)
         if len(rows) < 30:
             out.append({}); continue
+        if hold > 0:
+            out.append(_viterbi_hold(rows, cands, locs, taken, x0, y0, k, wjump, hold, gmax)); continue
         dp = [locs[0]]; bp = [np.full(len(cands[0]), -1, int)]
         for t in range(1, len(rows)):
             dy = max(1, rows[t] - rows[t - 1])
@@ -317,6 +326,44 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                 break
         out.append(tr)
     return out
+
+
+def _viterbi_hold(rows, cands, locs, taken, x0, y0, k, wjump, wskip, gmax):
+    """§6.237: Витерби одного пути с состоянием удержания. Состояния строки = пики + удержания (копии состояний прошлой
+    строки с той же x; не больше max(2k, 6) лучших). Удержание: +wskip за строку, счётчик ≤ gmax, и только если рядом с x
+    нет доступного пика. Путь кончается в состоянии пика. Копия проверена против `digitizer/rnd/_dec_joint.py`."""
+    Hmax = max(2 * k, 6)
+    X = cands[0].copy(); D = locs[0].copy(); G = np.zeros(len(X), int); PK = np.ones(len(X), bool)
+    hist = [(X, np.full(len(X), -1, int), PK)]
+    for t in range(1, len(rows)):
+        dy = max(1, rows[t] - rows[t - 1])
+        jump = np.abs(cands[t][:, None] - X[None, :]) / dy
+        tot = D[None, :] + wjump * jump
+        arg = tot.argmin(1)
+        Dp = locs[t] + tot[np.arange(len(cands[t])), arg]
+        near = np.abs(cands[t][None, :] - X[:, None]).min(1) if len(cands[t]) else np.full(len(X), np.inf)
+        hold_ok = np.flatnonzero((G + dy <= gmax) & (near > 3 * dy + 3))
+        if len(hold_ok):
+            hc = D[hold_ok] + wskip * dy
+            keep = hold_ok[np.argsort(hc)[:Hmax]]
+            Xh = X[keep]; Dh = D[keep] + wskip * dy; Gh = G[keep] + dy
+        else:
+            keep = np.zeros(0, int); Xh = np.zeros(0); Dh = np.zeros(0); Gh = np.zeros(0, int)
+        X = np.concatenate([cands[t], Xh]); D = np.concatenate([Dp, Dh])
+        G = np.concatenate([np.zeros(len(cands[t]), int), Gh])
+        PK = np.concatenate([np.ones(len(cands[t]), bool), np.zeros(len(Xh), bool)])
+        hist.append((X, np.concatenate([arg, keep]), PK))
+    endc = np.flatnonzero(hist[-1][2])
+    s = int(endc[np.argmin(D[endc])]) if len(endc) else int(np.argmin(D))
+    tr = {}
+    for t in range(len(rows) - 1, -1, -1):
+        Xt, bpt, pkt = hist[t]
+        if pkt[s]:
+            x = int(Xt[s]); tr[rows[t] + y0] = float(x + x0); taken[rows[t]].add(x)
+        s = int(bpt[s])
+        if s < 0:
+            break
+    return tr
 
 
 def trace_auto(rgb, sheet, p):

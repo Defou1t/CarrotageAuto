@@ -9,7 +9,8 @@ $jobs = @(
   @{ task='nds_seqbig';     log='F:\nds\output\taskS\_seqbig.log';    done='=== SEQBIG DONE ===' },
   @{ task='nds_sweep';      log='F:\nds\output\taskS\_sweep.log';     done='=== SWEEP DONE ===' },
   @{ task='nds_seqwide';    log='F:\nds\output\taskS\_seqwide.log';   done='=== SEQWIDE DONE ===' },
-  @{ task='nds_seqhist';    log='F:\nds\output\taskS\_seqhist.log';   done='=== SEQHIST DONE ===' }
+  @{ task='nds_seqhist';    log='F:\nds\output\taskS\_seqhist.log';   done='=== SEQHIST DONE ===' },
+  @{ task='nds_knobab_hold'; log='F:\nds\output\taskS\_knobab_hold.log'; done='=== KNOBAB DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue
