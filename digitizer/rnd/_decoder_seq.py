@@ -87,6 +87,55 @@ class WindowSelector(nn.Module):
         return (s, self.head_off(h).squeeze(-1)) if want_off else s
 
 
+class WindowSelectorXL(nn.Module):
+    """★ §6.233: СЕЛЕКТОР БОЛЬШЕЙ ЁМКОСТИ БЕЗ УСРЕДНЕНИЯ ПО СТРОКАМ. §6.225–§6.226: ширина окна и история дают +2…3 — у
+    `WindowSelector` свёртки сворачиваются в «занятость колонки» (`mean(dim=2)`), направление хода линии сквозь окно теряется, а
+    ёмкость мала (~360 КБ). Здесь: 2D-карта признаков (остаточные блоки, строки прорежены вдвое), для каждого кандидата —
+    ПОЛОСА колонок ±ctx вокруг его колонки по ВСЕЙ высоте окна (путь линии сквозь окно сохраняется) + 10 признаков строки."""
+
+    def __init__(self, ch=48, ctx=3, hist=True, nblk=4):
+        super().__init__()
+        self.ctx, self.hist = ctx, hist
+        self.stem = nn.Sequential(nn.Conv2d(3 if hist else 2, ch, 3, padding=1), nn.ReLU(),
+                                  nn.Conv2d(ch, ch, 3, stride=(2, 1), padding=1), nn.ReLU())
+        self.blocks = nn.ModuleList([nn.Sequential(nn.Conv2d(ch, ch, 3, padding=1), nn.ReLU(),
+                                                   nn.Conv2d(ch, ch, 3, padding=1)) for _ in range(nblk)])
+        self.red = nn.Conv2d(ch, 16, 1)                   # сжатие каналов перед полосой кандидата
+        R = (NROW + 1) // 2
+        self.trunk = nn.Sequential(nn.Linear(16 * R * (2 * ctx + 1) + NF, 256), nn.ReLU(),
+                                   nn.Linear(256, 128), nn.ReLU())
+        self.head = nn.Linear(128, 1)
+        self.head_off = nn.Sequential(nn.Linear(128, 32), nn.ReLU(), nn.Linear(32, 1), nn.Tanh())
+
+    def forward(self, P, F, M, want_off=False, H=None):
+        B = P.shape[0]
+        if self.hist:
+            hc = torch.zeros(B, 1, P.shape[2], P.shape[3], device=P.device)
+            if H is not None:
+                ok = (H >= 0).float().unsqueeze(1).unsqueeze(-1)
+                hc.scatter_(3, H.clamp(min=0).long().unsqueeze(1).unsqueeze(-1), ok)
+            P = torch.cat([P, hc], dim=1)
+        z = self.stem(P)
+        for b in self.blocks:
+            z = torch.relu(z + b(z))
+        e = self.red(z)                                   # (B, 16, R, NCOL)
+        C_, R_, W_ = e.shape[1], e.shape[2], e.shape[3]
+        cidx = torch.round(F[:, :, 1] * 50.0 / COL_STEP).long() + (NCOL // 2)
+        off = torch.arange(-self.ctx, self.ctx + 1, device=P.device)
+        g = (cidx.unsqueeze(-1) + off).clamp(0, NCOL - 1).reshape(B, 1, -1)          # (B,1,MAXC·(2ctx+1))
+        flat = e.reshape(B, C_ * R_, W_)
+        got = torch.gather(flat, 2, g.expand(-1, C_ * R_, -1))                          # (B, C·R, MAXC·W)
+        got = got.reshape(B, C_ * R_, MAXC, -1).permute(0, 2, 1, 3).reshape(B, MAXC, -1)
+        h = self.trunk(torch.cat([got, F], dim=-1))
+        s = self.head(h).squeeze(-1).masked_fill(M == 0, -1e9)
+        return (s, self.head_off(h).squeeze(-1)) if want_off else s
+
+
+def make_net(arch="base", hist=False):
+    """Сеть по имени архитектуры (чекпойнт хранит `arch`; старые — «base»)."""
+    return WindowSelectorXL(hist=hist) if arch == "xl" else WindowSelector(hist=hist)
+
+
 def listwise_loss(score, L, M):
     """Мульти-позитивная CE: -log( Σ_pos exp(s) / Σ_all exp(s) ). Форма обучения = форме
     инференса (argmax внутри решения), в отличие от бинарной логистики §6.24."""
@@ -110,7 +159,7 @@ def offset_loss(off, D, L, F=None):
     return ((off - D).abs() * w).sum() / w.sum().clamp(min=1)
 
 
-def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat", hist=False):
+def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat", hist=False, arch="base"):
     d = np.load(OUT / data, allow_pickle=False)
     P, F, L, M = d["P"], d["F"], d["L"], d["M"]
     Hs = d["H"] if "H" in d.files else np.full((len(P), NROW), -1, np.int16)
@@ -127,7 +176,8 @@ def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat", hist=False):
     print(f"решений {len(P)}: train {int(tr.sum())} / val {int(va.sum())} "
           f"(валидационные скважины {sorted(val_w)})")
 
-    net = WindowSelector(hist=hist).to(dev)
+    net = make_net(arch, hist).to(dev)
+    print(f"сеть {arch}: параметров {sum(p.numel() for p in net.parameters())/1e6:.2f} М")
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
     ntr = int(tr.sum())
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=max(1, epochs * (ntr // bs)))
@@ -179,7 +229,7 @@ def train(data, epochs, bs, lr, dev, lam_off=1.0, off_w="flat", hist=False):
               + (f"  точка {oe:.2f}px" if has_off else "") + f"  [{time.time()-t0:.0f}с]")
     from _decoder_seq_data import R_ROWS as _RR, ROW_STEP as _RS
     torch.save({"sd": net.state_dict(), "geom": [NROW, NCOL, MAXC, COL_STEP],
-                "geom_full": [_RR, _RS, R_COLS, COL_STEP], "hist": bool(hist)}, CKPT)   # §6.225 / §6.226
+                "geom_full": [_RR, _RS, R_COLS, COL_STEP], "hist": bool(hist), "arch": arch}, CKPT)   # §6.225 / §6.226
     print(f"-> {CKPT}")
     return net
 
@@ -261,6 +311,7 @@ if __name__ == "__main__":
     ap.add_argument("--gate-only", action="store_true")
     ap.add_argument("--no-gate", action="store_true")
     ap.add_argument("--ckpt", default=None)
+    ap.add_argument("--arch", default="base", choices=["base", "xl"], help="§6.233: xl — селектор большей ёмкости")
     ap.add_argument("--hist", action="store_true", help="§6.226: канал истории своей трассы (нужна выборка с H)")
     ap.add_argument("--point", default="rule", choices=["rule", "center", "pred", "head"],
                     help="точка внутри рана: правило прода / центр / clamp(предсказание) / голова регрессии")
@@ -277,7 +328,7 @@ if __name__ == "__main__":
         net = WindowSelector().to(dev)
         net.load_state_dict(torch.load(CKPT, map_location=dev)["sd"]); net.eval()
     else:
-        net = train(a.data, a.epochs, a.bs, a.lr, dev, a.lam_off, a.off_w, a.hist); net.eval()
+        net = train(a.data, a.epochs, a.bs, a.lr, dev, a.lam_off, a.off_w, a.hist, a.arch); net.eval()
 
     if not a.no_gate:
         # §6.106: объём — ИЗ СЧЁТЧИКА. «24 кривые» стояли строкой; смени bench состав — и шапка

@@ -36,6 +36,7 @@ ap.add_argument("--pad", type=int, default=28)
 ap.add_argument("--shard", default="0/1")
 ap.add_argument("--tag", default="onpol")
 ap.add_argument("--threads", type=int, default=2)
+ap.add_argument("--device", default="cpu", help="§6.233: cuda — для крупной сети")
 ap.add_argument("--max-hours", type=float, default=0.0)
 ap.add_argument("--no-save", action="store_true", help="только счёт, без записи выборки")
 a = ap.parse_args()
@@ -57,8 +58,9 @@ NFEAT = 10
 
 ck = Path(a.drive) if Path(a.drive).parent != Path(".") else OUT / a.drive
 _ck = torch.load(ck, map_location="cpu")
-net = WindowSelector(hist=bool(_ck.get("hist", False)))     # §6.226: модель с каналом истории — по чекпойнту
-net.load_state_dict(_ck["sd"]); net.eval()
+from _decoder_seq import make_net
+net = make_net(_ck.get("arch", "base"), bool(_ck.get("hist", False)))     # §6.226: модель с каналом истории — по чекпойнту
+net.load_state_dict(_ck["sd"]); net.eval(); net.to(a.device)
 
 # ── листы (та же логика, что `_seq_data_big.py`) ──
 _CROSS = ("BKZ", "MK", "MGZ", "STK", ", ")
@@ -96,12 +98,12 @@ print(f"★ СБОР НА СВОИХ ТРАЕКТОРИЯХ: ведёт {ck.name
 
 def score(band, lo, y, pred, X, n, h=None):
     ink, val = patch(band, lo, y, pred)
-    p = torch.from_numpy(np.stack([ink, val]).astype(np.float32))[None]
+    p = torch.from_numpy(np.stack([ink, val]).astype(np.float32))[None].to(a.device)
     f = np.zeros((1, MAXC, NFEAT), np.float32); f[0, :n] = X
     m = np.zeros((1, MAXC), np.float32); m[0, :n] = 1
-    hh = None if h is None else torch.from_numpy(h.astype(np.int64))[None]
+    hh = None if h is None else torch.from_numpy(h.astype(np.int64))[None].to(a.device)
     with torch.no_grad():
-        return net(p, torch.from_numpy(f), torch.from_numpy(m), H=hh)[0].numpy()
+        return net(p, torch.from_numpy(f).to(a.device), torch.from_numpy(m).to(a.device), H=hh)[0].cpu().numpy()
 
 
 def sheet(n, rng):

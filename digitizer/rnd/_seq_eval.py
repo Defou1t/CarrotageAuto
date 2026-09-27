@@ -32,7 +32,8 @@ print(f"решений {len(P)} (с верным раном {int(good.sum())}), 
 res = {}
 for ck in a.ckpt:
     _ck = torch.load(ck, map_location=dev)
-    net = WindowSelector(hist=bool(_ck.get("hist", False))).to(dev)
+    from _decoder_seq import make_net
+    net = make_net(_ck.get("arch", "base"), bool(_ck.get("hist", False))).to(dev)
     net.load_state_dict(_ck["sd"]); net.eval()
     pick = np.zeros(len(P), np.int64)
     with torch.no_grad():
