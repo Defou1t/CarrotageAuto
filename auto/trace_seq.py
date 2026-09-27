@@ -110,13 +110,75 @@ def _patch(band, lo, y, pred):
     return ink & val, val
 
 
-def _build_net(torch, nn):
+def _hist_chan(torch, P, H):
+    """§6.226: канал истории своей трассы из номеров колонок H (B, NROW), −1 — нет. ИДЕНТИЧНО `_decoder_seq`."""
+    hc = torch.zeros(P.shape[0], 1, P.shape[2], P.shape[3], device=P.device)
+    ok = (H >= 0).float().unsqueeze(1).unsqueeze(-1)
+    hc.scatter_(3, H.clamp(min=0).long().unsqueeze(1).unsqueeze(-1), ok)
+    return torch.cat([P, hc], dim=1)
+
+
+def hist_cols(hist, y, pred):
+    """§6.226: история своей трассы в окне — колонка, где трасса была, для строк окна ВЫШЕ текущей (−1 — нет).
+    ИДЕНТИЧНО `_decoder_seq_data.hist_cols` (обучение)."""
+    h = np.full(NROW, -1, np.int64)
+    for i in range(NROW):
+        r = y - R_ROWS + i * ROW_STEP
+        if r >= y:
+            break
+        x = hist.get(r)
+        if x is not None:
+            c = int(round((x - pred) / COL_STEP)) + NCOL // 2
+            if 0 <= c < NCOL:
+                h[i] = c
+    return h
+
+
+def _build_net_xl(torch, nn):
+    """§6.233: СЕЛЕКТОР XL — ИДЕНТИЧНО `_decoder_seq.WindowSelectorXL` (сверка — `_seqxl_parity.py`)."""
+    class WindowSelectorXL(nn.Module):
+        def __init__(self, ch=48, ctx=3, hist=True, nblk=4):
+            super().__init__()
+            self.ctx, self.hist = ctx, hist
+            self.stem = nn.Sequential(nn.Conv2d(3 if hist else 2, ch, 3, padding=1), nn.ReLU(),
+                                      nn.Conv2d(ch, ch, 3, stride=(2, 1), padding=1), nn.ReLU())
+            self.blocks = nn.ModuleList([nn.Sequential(nn.Conv2d(ch, ch, 3, padding=1), nn.ReLU(),
+                                                       nn.Conv2d(ch, ch, 3, padding=1)) for _ in range(nblk)])
+            self.red = nn.Conv2d(ch, 16, 1)
+            R = (NROW + 1) // 2
+            self.trunk = nn.Sequential(nn.Linear(16 * R * (2 * ctx + 1) + NF, 256), nn.ReLU(),
+                                       nn.Linear(256, 128), nn.ReLU())
+            self.head = nn.Linear(128, 1)
+            self.head_off = nn.Sequential(nn.Linear(128, 32), nn.ReLU(), nn.Linear(32, 1), nn.Tanh())
+
+        def forward(self, P, F, M, H=None):
+            B = P.shape[0]
+            if self.hist:
+                P = _hist_chan(torch, P, H)
+            z = self.stem(P)
+            for b in self.blocks:
+                z = torch.relu(z + b(z))
+            e = self.red(z)
+            C_, R_, W_ = e.shape[1], e.shape[2], e.shape[3]
+            cidx = torch.round(F[:, :, 1] * 50.0 / COL_STEP).long() + (NCOL // 2)
+            off = torch.arange(-self.ctx, self.ctx + 1, device=P.device)
+            g = (cidx.unsqueeze(-1) + off).clamp(0, NCOL - 1).reshape(B, 1, -1)
+            flat = e.reshape(B, C_ * R_, W_)
+            got = torch.gather(flat, 2, g.expand(-1, C_ * R_, -1))
+            got = got.reshape(B, C_ * R_, MAXC, -1).permute(0, 2, 1, 3).reshape(B, MAXC, -1)
+            h = self.trunk(torch.cat([got, F], dim=-1))
+            return self.head(h).squeeze(-1).masked_fill(M == 0, -1e9)
+    return WindowSelectorXL
+
+
+def _build_net(torch, nn, hist=False):
     class WindowSelector(nn.Module):
         def __init__(self, ch=32, emb=48, ctx=3):
             super().__init__()
             self.ctx = ctx
+            self.hist = hist                                # §6.226: третий канал — история (только у весов с `hist`)
             self.cnn = nn.Sequential(
-                nn.Conv2d(2, 16, 3, padding=1), nn.ReLU(),
+                nn.Conv2d(3 if hist else 2, 16, 3, padding=1), nn.ReLU(),
                 nn.Conv2d(16, ch, 3, stride=(2, 1), padding=1), nn.ReLU(),
                 nn.Conv2d(ch, ch, 3, stride=(2, 1), padding=1), nn.ReLU(),
                 nn.Conv2d(ch, ch, 3, stride=(2, 1), padding=1), nn.ReLU(),
@@ -129,8 +191,10 @@ def _build_net(torch, nn):
             self.head_off = nn.Sequential(nn.Linear(64, 32), nn.ReLU(),
                                           nn.Linear(32, 1), nn.Tanh())
 
-        def forward(self, P, F, M):
+        def forward(self, P, F, M, H=None):
             B = P.shape[0]
+            if self.hist:
+                P = _hist_chan(torch, P, H)
             z = self.cnn(P).mean(dim=2)
             e = self.col(z)
             cidx = torch.round(F[:, :, 1] * 50.0 / COL_STEP).long() + (NCOL // 2)
@@ -165,7 +229,8 @@ def make_tracer(model_path, device=None):
         # чужой геометрией дала бы выдачу ХУЖЕ прода под видом улучшения. Молчаливый откат уместен
         # только когда модель не запрашивали (пустой seq_model) или нет torch — см. available().
         raise ValueError(f"{resolve(model_path)}: {bad}")
-    net = _build_net(torch, nn)().to(dev)
+    arch = ckpt.get("arch", "base"); use_hist = bool(ckpt.get("hist", False))     # §6.233: по полям чекпойнта
+    net = (_build_net_xl(torch, nn)(hist=use_hist) if arch == "xl" else _build_net(torch, nn, hist=use_hist)()).to(dev)
     net.load_state_dict(ckpt["sd"])
     net.eval()
 
@@ -183,27 +248,38 @@ def make_tracer(model_path, device=None):
         sM = dbuf[_nP + _nF:].view(1, MAXC)
         hbuf = torch.zeros(_nP + _nF + _nM, pin_memory=True)
         hnp = hbuf.numpy()
+        if use_hist:
+            sH = torch.full((1, NROW), -1, dtype=torch.long, device=dev)
+            hH = torch.full((NROW,), -1, dtype=torch.long).pin_memory()
         with torch.no_grad():
             st = torch.cuda.Stream(); st.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(st):
                 for _ in range(3):
-                    net(sP, sF, sM)
+                    net(sP, sF, sM, sH) if use_hist else net(sP, sF, sM)
             torch.cuda.current_stream().wait_stream(st)
             gr = torch.cuda.CUDAGraph()
             with torch.cuda.graph(gr):
-                sOut = net(sP, sF, sM)
+                sOut = net(sP, sF, sM, sH) if use_hist else net(sP, sF, sM)
         G.update(g=gr, P=sP, F=sF, M=sM, out=sOut, dbuf=dbuf, hbuf=hbuf, hnp=hnp, n=(_nP, _nF, _nM))
+        if use_hist:
+            G.update(sH=sH, hH=hH, hHn=hH.numpy())
 
-    def score(ink, val, X, n):
+    def score(ink, val, X, n, hrow=None):
         pt = np.stack([ink, val]).astype(np.float32)[None]
         f = np.zeros((1, MAXC, NF), np.float32); f[0, :n] = X
         mm = np.zeros((1, MAXC), np.float32); mm[0, :n] = 1
         if not G:
+            if use_hist:
+                return net(torch.from_numpy(pt).to(dev), torch.from_numpy(f).to(dev), torch.from_numpy(mm).to(dev),
+                           torch.from_numpy(hrow)[None].to(dev))
             return net(torch.from_numpy(pt).to(dev), torch.from_numpy(f).to(dev),
                        torch.from_numpy(mm).to(dev))
         _nP, _nF, _nM = G["n"]; h = G["hnp"]
         h[:_nP] = pt.reshape(-1); h[_nP:_nP + _nF] = f.reshape(-1); h[_nP + _nF:] = mm.reshape(-1)
         G["dbuf"].copy_(G["hbuf"], non_blocking=True)
+        if use_hist:
+            G["hHn"][:] = hrow
+            G["sH"][0].copy_(G["hH"], non_blocking=True)
         G["g"].replay()
         return G["out"]
 
@@ -215,13 +291,15 @@ def make_tracer(model_path, device=None):
               else min(W, int(line.x_hi) + band_pad + 1))
         base = line.x_center
         band = np.ascontiguousarray(fg[:, lo:hi] > 0)
-        x = None; v = 0.0; tr = {}
+        x = None; v = 0.0; tr = {}; hist = {}
         with torch.no_grad():
             for y in range(max(0, line.y0), min(H, line.y1 + 1)):
                 runs = im.row_runs(fg[y, lo:hi])
                 if not runs:
                     if x is not None:                       # коаст через короткий разрыв
                         x = x + float(np.clip(v, -slmax, slmax))
+                        if use_hist:
+                            hist[y] = x
                     continue
                 A = np.array([r[0] + lo for r in runs])
                 Bb = np.array([r[1] + lo for r in runs])
@@ -236,10 +314,12 @@ def make_tracer(model_path, device=None):
                     k = int(idx[0])
                 else:
                     ink, val = _patch(band, lo, y, pred)
-                    sc = score(ink, val, X, len(idx))
+                    sc = score(ink, val, X, len(idx), hist_cols(hist, y, pred) if use_hist else None)
                     k = int(idx[int(sc[0].argmax().item())])
                 nx = float(C[k])
                 v = 0.6 * v + 0.4 * (nx - x); x = nx; tr[y] = float(nx)
+                if use_hist:
+                    hist[y] = x
         T._extend_ends(tr, fg, lo, hi, slmax)
         return tr
 
