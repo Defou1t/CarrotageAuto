@@ -33,6 +33,7 @@ ap.add_argument("--wskip", type=float, nargs="+", default=[0.5])
 ap.add_argument("--gmax", type=int, default=30)
 ap.add_argument("--rounds", type=int, default=0, help="кругов перекладки путей (0 — без варианта)")
 ap.add_argument("--hjump", type=float, default=0.15, help="цена прыжка В ВАРИАНТАХ С УДЕРЖАНИЕМ (V0 — всегда прод 0.15)")
+ap.add_argument("--kplus", type=int, default=0, help="вариант «удержание W + K+N путей» (0 — без варианта)")
 ap.add_argument("--diag", action="store_true", help="по НЕвзятым вариантом кривым — медиана и покрытие лучшего пути")
 ap.add_argument("--near", type=float, default=3.0, help="радиус «своя кривая есть»: удержание, если пиков нет в near·dy + near px")
 ap.add_argument("--only", default="", help="считать только варианты, чьё имя содержит эту подстроку (V0 всегда)")
@@ -255,6 +256,8 @@ for w in a.wskip:
     VARS += [(f"удержание {w} (0.6)", 0.6, w, 0), (f"удержание {w} + порог 0.3", 0.3, w, 0)]
     if a.rounds:
         VARS += [(f"удержание {w} + перекладка {a.rounds}", 0.6, w, a.rounds)]
+    if a.kplus:
+        VARS += [(f"удержание {w} + K+{a.kplus}", 0.6, w, -a.kplus)]     # отрицательный rr = добавка к K
 C = Counter(); PAR = Counter(); REC = []; DIAG = []
 files = sorted(Path(a.cache).glob("*.pkl"))[a.offset::a.every]
 if a.parity_cache:
@@ -301,7 +304,7 @@ for fi, f in enumerate(files, 1):
         for name, pthr, ws, rr in VARS:
             if a.only and a.only not in name and not name.startswith("V0"):
                 res[name] = set(); continue
-            trs = [t for t in decode(prob, embs, K, x0, py0, pthr, ws, a.gmax, rr) if len(t) >= 30]
+            trs = [t for t in decode(prob, embs, K + max(0, -rr), x0, py0, pthr, ws, a.gmax, max(0, rr)) if len(t) >= 30]
             ok = {(g, i): hon(t, G[g]) for g in gs for i, t in enumerate(trs)}
             mt = match(gs, list(range(len(trs))), ok)
             res[name] = set(mt)
