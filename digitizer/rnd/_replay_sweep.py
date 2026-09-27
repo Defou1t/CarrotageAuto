@@ -27,6 +27,8 @@ ap.add_argument("--var", action="append", default=[], help="ИМЯ:ключ=зн
 ap.add_argument("--perm", type=int, default=200000)
 ap.add_argument("--skip-replay", action="store_true")
 ap.add_argument("--conf", default="", help="§6.240: сайдкар уверенности декодера, передаётся повтору")
+ap.add_argument("--use-existing", action="store_true",
+                help="повтор сделал вызывающий (напр. `_slot_cache_cv.py --compare`, по фолдам): не повторять и ничего не удалять")
 a = ap.parse_args()
 TS = Path(a.ts); PY = sys.executable; RND = Path(__file__).resolve().parent
 
@@ -45,11 +47,18 @@ for nm, spec in modes:
 # ⛔ 27.09 (разбор): `--skip-replay` — только если повтор ЗАВЕРШЁН с теми же режимами (маркер `_replay_done.json`);
 #   прерванный повтор оставлял каталоги, драйвер видел `B` и приговор считался на части листов
 _mk = Path(a.out) / "_replay_done.json"
-if a.skip_replay:
+if a.use_existing:
+    miss = [nm for nm, _ in modes if not (Path(a.out) / nm).is_dir()]
+    if miss:
+        sys.exit(f"⛔ --use-existing: нет каталогов повтора {miss} в {a.out}")
+    a.skip_replay = True
+elif a.skip_replay:
     try:
         _m = json.loads(_mk.read_text(encoding="utf-8"))
         if _m.get("modes") != {nm: spec for nm, spec in modes}:
             raise ValueError("режимы маркера другие")
+        if not _m.get("complete"):
+            raise ValueError("повтор не полный (пропуски/падения/нет уверенности)")
     except Exception as _e:
         print(f"⚠ --skip-replay отклонён ({type(_e).__name__}: {_e}) — повтор заново")
         a.skip_replay = False

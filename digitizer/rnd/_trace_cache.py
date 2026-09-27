@@ -55,20 +55,26 @@ if a.seq:                                  # ★ §6.220: кэш под ДРУГ
 for _kv in a.knob:                         # ★ §6.236: прочие ручки ведения — тип по умолчанию в Config
     # ⛔ 27.09 (разбор): прежде тип угадывался по тексту, и `False` оставался строкой — bool('False') включал ручку
     from auto.config import Config as _Cfg
+    # ⚠ ошибка ручки — КОД 64 (драйвер считает его фатальным: не перезапускать шард 40 раз и не считать пустой кэш)
+    def _knob_fail(msg):
+        print(msg, file=sys.stderr); sys.exit(64)
     _k, _, _v = _kv.partition("=")
     if not hasattr(_Cfg().cv, _k):
-        sys.exit(f"⛔ --knob {_k!r}: такой ручки в Config нет")
+        _knob_fail(f"⛔ --knob {_k!r}: такой ручки в Config нет")
     _d = getattr(_Cfg().cv, _k)
-    if isinstance(_d, bool):
-        if _v.lower() not in ("1", "0", "true", "false", "yes", "no"):
-            sys.exit(f"⛔ --knob {_k}={_v!r}: ждал 1/0/true/false")
-        TRACE_KNOBS[_k] = _v.lower() in ("1", "true", "yes")
-    elif isinstance(_d, int):
-        TRACE_KNOBS[_k] = int(_v)
-    elif isinstance(_d, float):
-        TRACE_KNOBS[_k] = float(_v)
-    else:
-        TRACE_KNOBS[_k] = _v
+    try:
+        if isinstance(_d, bool):
+            if _v.lower() not in ("1", "0", "true", "false", "yes", "no"):
+                raise ValueError("ждал 1/0/true/false")
+            TRACE_KNOBS[_k] = _v.lower() in ("1", "true", "yes")
+        elif isinstance(_d, int):
+            TRACE_KNOBS[_k] = int(_v)
+        elif isinstance(_d, float):
+            TRACE_KNOBS[_k] = float(_v)
+        else:
+            TRACE_KNOBS[_k] = _v
+    except ValueError as _e:
+        _knob_fail(f"⛔ --knob {_k}={_v!r}: {_e}")
 
 
 def sheet_dir(n):
@@ -195,6 +201,9 @@ def cmd_replay():
         modes.append((nm, kw))
     sheets = sheet_list()
     stat = {nm: [0, 0] for nm, _ in modes}
+    conf_missing = {nm: 0 for nm, _ in modes}
+    # ⛔ 27.09 (разбор, 2-й круг): прежний маркер снимается сразу — прерванный повтор не оставит «готово» от прошлого
+    (Path(a.out) / "_replay_done.json").unlink(missing_ok=True)
     CONF = {}
     for cf in ([a.conf] if a.conf else []):
         for part in (sorted(Path(cf).parent.glob(Path(cf).stem + "_*of*.pkl")) or [Path(cf)]):
@@ -239,6 +248,10 @@ def cmd_replay():
             else:
                 traces = T._WithAlt(prod); traces.alt = alt; traces.alt_gated = gated
                 traces.alt_conf = c.get("alt_conf") or CONF.get(src.name)
+                # ⛔ 27.09 (разбор, 2-й круг): вето/взятие без уверенности молча не работают — такие листы считаются
+                if (p.rowdec_conf_veto > 0 or p.rowdec_conf_take > 0) and (
+                        traces.alt_conf is None or len(traces.alt_conf) != len(alt)):
+                    conf_missing[nm] += 1
             out = Path(a.out) / nm / sheet_dir(n)
             out.mkdir(parents=True, exist_ok=True)
             for old in out.glob("*_auto.nlgx"):
@@ -256,8 +269,14 @@ def cmd_replay():
     import json as _json
     _mk = Path(a.out) / "_replay_done.json"
     _mk.parent.mkdir(parents=True, exist_ok=True)
+    complete = all(bad == 0 for _, bad in stat.values()) and not any(conf_missing.values())
     _mk.write_text(_json.dumps({"modes": {nm: spec for nm, spec in a.mode_specs}, "sheets": len(sheets),
-                                "stat": {nm: v for nm, v in stat.items()}, "conf": a.conf}, ensure_ascii=False), encoding="utf-8")
+                                "stat": {nm: v for nm, v in stat.items()}, "conf": a.conf,
+                                "conf_missing": conf_missing, "complete": complete}, ensure_ascii=False), encoding="utf-8")
+    if any(conf_missing.values()):
+        print(f"⛔ уверенности декодера нет для листов режимов с вето/взятием: {conf_missing} — вето там молча выключено; "
+              f"нужен сайдкар `--conf` (`_dec_conf.py`)", file=sys.stderr)
+        sys.exit(4)
 
 
 cmd_build() if a.cmd == "build" else cmd_replay()

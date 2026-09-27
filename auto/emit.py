@@ -420,7 +420,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         _win = {c["name"]: (int(c["top_y"]), int(c["n_rows"])) for c in model.get("curves", [])
                 if "top_y" in c and "n_rows" in c}
         _slots = []
-        _veto_nm, _take_nm = set(), set()
+        _veto_nm, _take_nm, _dd_nm = set(), set(), set()
 
         def _nn(nm, t):
             w = _win.get(nm)
@@ -455,15 +455,6 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                 if dc is not None and dc >= take:
                     merged[nm] = m_alt[nm]            # §6.241: уверенная версия декодера берёт слот
                     _take_nm.add(nm)
-        # ⛔ 27.09 (разбор): вето/взятие меняют источник ПОСЛЕ записи слота — `src` фиксирует итог (читать его, а не
-        #   восстанавливать из base/flip), `veto`/`take` — что сработало
-        for q in _slots:
-            nm_ = q["name"]
-            q["src"] = ("dec" if nm_ in m_alt and merged.get(nm_) is m_alt[nm_] else "prod" if nm_ in merged else "none")
-            if nm_ in _veto_nm:
-                q["veto"] = True
-            if nm_ in _take_nm:
-                q["take"] = True
         for ti in by_t:
             took["декодер" if use.get(ti) else "прод"] += 1
         print(f"  выбор пути по треку ({'модель ' + model_f if model_f else 'порог ' + str(pick)}"
@@ -478,16 +469,6 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         # Пока признаки не выгружены отсюда, «обучить и внедрить» неразрешимо в принципе:
         # обучающая выборка живёт в одном пространстве, а механизм — в другом.
         # ★ Пишется ВСЕГДА, когда выбор работает: файл крошечный, а прогон становится проверяемым.
-        try:
-            import json as _json
-            (out / f"{stem}_pick.json").write_text(_json.dumps(
-                {"pick": pick, "model": model_f, "gated": alt_gated, "slot_len": slot_len,
-                 "tracks": [{"track": int(ti), "dec": bool(use.get(ti)),
-                             "n_all": e["n_all"], **_pick_feats(e)} for ti, e in by_t.items()],
-                 **({"slots": _slots} if slot_len > 0 else {})},
-                ensure_ascii=False), encoding="utf-8")
-        except Exception as _e:                    # выгрузка не должна ронять выдачу
-            print(f"  ⚠ признаки выбора не выгружены: {_e}")
         # ★ §6.228: ДВЕ КРИВЫЕ ТРЕКА НА ОДНОЙ ЛИНИИ (`rowdec_dedup` — доля общих строк в 3 px, выше которой пара — дубль;
         #   0 = выкл, прод бит-в-бит). Замер 26.09 (`_dup_traces.py`): на поле 447 треков с дублями, в 476 парах одна кривая
         #   занимает место, а эталон трека не взят. Слот пары берёт версию ДРУГОГО пути, если она сама ни с кем в треке не
@@ -528,6 +509,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                                         best = (nn, (L, t))
                                 if best:
                                     merged[s] = best[1]; n_sw += 1; n_rf += 1; done_pair = True
+                                    _dd_nm.add(s)
                                     break
                             if done_pair:
                                 continue
@@ -538,8 +520,45 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                             if any(_close(alt_v[1], merged[o][1]) >= 0.2 for o in names if o != s):
                                 continue
                             merged[s] = alt_v; n_sw += 1
+                            _dd_nm.add(s)
                             break
             print(f"  дубли трека (≥ {dedup:.0%} строк в 3 px): заменено слотов {n_sw}, из них свободной линией {n_rf}")
+        # ⛔ 27.09 (разбор, 2-й круг): итог источника — ПОСЛЕ вето/взятия и блока дублей (§6.228 меняет слоты позже);
+        #   `src` — что реально записано, `veto`/`take`/`dedup` — что сработало; вето/взятие вне правила слота
+        #   (`slot_len == 0`, записей слотов нет) — в `override` {слот: источник}.
+        _alt_ids = {id(t) for _, t in (alt or [])}
+
+        def _src_of(nm_):
+            v = merged.get(nm_)
+            if v is None:
+                return "none"
+            if nm_ in m_alt and v is m_alt[nm_]:
+                return "dec"
+            if nm_ in mapping and v is mapping[nm_]:
+                return "prod"
+            return "dec" if id(v[1]) in _alt_ids else "prod"          # свободная линия добора (§6.229)
+        for q in _slots:
+            nm_ = q["name"]
+            q["src"] = _src_of(nm_)
+            if nm_ in _veto_nm:
+                q["veto"] = True
+            if nm_ in _take_nm:
+                q["take"] = True
+            if nm_ in _dd_nm:
+                q["dedup"] = True
+        _in_slots = {q["name"] for q in _slots}
+        _ovr = {nm_: _src_of(nm_) for nm_ in (_veto_nm | _take_nm | _dd_nm) if nm_ not in _in_slots}
+        try:
+            import json as _json
+            (out / f"{stem}_pick.json").write_text(_json.dumps(
+                {"pick": pick, "model": model_f, "gated": alt_gated, "slot_len": slot_len,
+                 "tracks": [{"track": int(ti), "dec": bool(use.get(ti)),
+                             "n_all": e["n_all"], **_pick_feats(e)} for ti, e in by_t.items()],
+                 **({"slots": _slots} if slot_len > 0 else {}),
+                 **({"override": _ovr} if _ovr else {})},
+                ensure_ascii=False), encoding="utf-8")
+        except Exception as _e:                    # выгрузка не должна ронять выдачу
+            print(f"  ⚠ признаки выбора не выгружены: {_e}")
         mapping = merged
     ifds = read_full(open(frame_nlgx, "rb").read())
 

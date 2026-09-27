@@ -148,6 +148,7 @@ for si, sh in enumerate(sheets, 1):
         for sl in pk.get("slots", []):
             base = sl["base"]
             SRCK[sl["name"]] = sl.get("src") or (("dec" if base == "prod" else "prod") if sl["flip"] else base)
+        SRCK.update(pk.get("override", {}))       # 27.09: вето/взятие/дубли вне правила слота
         for k in W:
             if k not in SRCK:
                 SRCK[k] = "dec" if tdec.get(tm.get(k)) else "prod"
