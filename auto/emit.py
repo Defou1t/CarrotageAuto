@@ -368,9 +368,12 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     #   честный путь не имел медианы < 0.8 (AUC 0.95 против 0.69 у длины, по которой решает правило слота). Слот, получивший
     #   версию декодера с уверенностью ниже порога, берёт прод-версию, если она есть.
     veto = float(getattr(cv, "rowdec_conf_veto", 0.0) or 0.0) if cv is not None else 0.0
+    # ★ §6.241: и обратное — УВЕРЕННАЯ версия декодера (медиана p ≥ `rowdec_conf_take`) берёт слот у прод-версии
+    #   независимо от длины (0 = выкл). Точность уверенных путей на стенде — 65% при 0.9, поэтому только повтором.
+    take = float(getattr(cv, "rowdec_conf_take", 0.0) or 0.0) if cv is not None else 0.0
     alt_conf = getattr(traces, "alt_conf", None)
     cmap = {}
-    if veto > 0 and alt is not None and alt_conf is not None and len(alt_conf) == len(alt):
+    if (veto > 0 or take > 0) and alt is not None and alt_conf is not None and len(alt_conf) == len(alt):
         cmap = {id(tr): (c[0] if c else None) for (L, tr), c in zip(alt, alt_conf)}
     if alt is not None and (pick > 0 or model_f or slot_len > 0):
         m_alt = _map(alt, "dec")                    # §6.231: путь — признак расширенной раскладки (вес на 14 его не видит)
@@ -441,10 +444,14 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                     merged[nm] = oth[nm]
                 _slots.append({"name": nm, "track": int(ti), "base": "dec" if use.get(ti) else "prod",
                                "nn_base": int(nb), "nn_alt": int(na), "flip": bool(flip)})
-            if cmap and nm in m_alt and nm in mapping and merged.get(nm) is m_alt[nm]:
+            if veto > 0 and cmap and nm in m_alt and nm in mapping and merged.get(nm) is m_alt[nm]:
                 dc = cmap.get(id(m_alt[nm][1]))
                 if dc is not None and dc < veto:
                     merged[nm] = mapping[nm]          # §6.240: неуверенная версия декодера уступает прод-версии
+            if take > 0 and cmap and nm in m_alt and merged.get(nm) is not m_alt[nm] and len(m_alt[nm][1]) >= 30:
+                dc = cmap.get(id(m_alt[nm][1]))
+                if dc is not None and dc >= take:
+                    merged[nm] = m_alt[nm]            # §6.241: уверенная версия декодера берёт слот
         for ti in by_t:
             took["декодер" if use.get(ti) else "прод"] += 1
         print(f"  выбор пути по треку ({'модель ' + model_f if model_f else 'порог ' + str(pick)}"
