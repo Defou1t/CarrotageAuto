@@ -77,6 +77,13 @@ if not a.skip_replay:
 R = {}
 for nm, _ in modes:
     pc = TS / f"percurve_{a.tag}_{nm}.pkl"
+    # ⚠ 27.09 (разбор, 3-й круг): счёт старше выдачи режима — от прошлого повтора (например, `_slot_cache_cv --replay`
+    #   перезаписал каталоги) — пересчитать
+    if pc.exists() and a.use_existing:
+        _newest = max((f.stat().st_mtime for f in (Path(a.out) / nm).glob("*/*_auto.nlgx")), default=0.0)
+        if _newest > pc.stat().st_mtime:
+            print(f"  счёт {nm} старше выдачи — пересчитываю")
+            pc.unlink()
     if not pc.exists():
         r = subprocess.run([PY, str(RND / "_name_cost_prod.py"), "--dir", a.out, "--mode", nm, "--dump", str(pc)],
                            cwd=str(RND), capture_output=True, text=True, encoding="utf-8", errors="replace")

@@ -482,8 +482,10 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                     return 0.0
                 return sum(1 for y in com if abs(t1[y] - t2[y]) <= 3) / max(1, min(len(t1), len(t2)))
             _bt = {}
-            for nm, (L, _t) in merged.items():
-                _bt.setdefault(L.track_index, []).append(nm)
+            # ⚠ 27.09 (разбор, 3-й круг): порядок — по имени, а не по `set` (он зависит от хэш-сида процесса, и пара
+            #   дублей решалась по-разному от прогона к прогону); прод не задет — блок выключен (`rowdec_dedup = 0`)
+            for nm in sorted(merged):
+                _bt.setdefault(merged[nm][0].track_index, []).append(nm)
             n_sw = n_rf = 0
             for ti, names in _bt.items():
                 for i in range(len(names)):

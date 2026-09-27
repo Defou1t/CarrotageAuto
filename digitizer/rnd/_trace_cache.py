@@ -206,7 +206,15 @@ def cmd_replay():
     (Path(a.out) / "_replay_done.json").unlink(missing_ok=True)
     CONF = {}
     for cf in ([a.conf] if a.conf else []):
-        for part in (sorted(Path(cf).parent.glob(Path(cf).stem + "_*of*.pkl")) or [Path(cf)]):
+        # ⚠ 27.09 (разбор, 3-й круг): сначала ТОЧНЫЙ файл; шарды — только свои (`<stem>_<i>of<N>.pkl`): прежний шаблон
+        #   `conf_tcache_*of*` ловил и `conf_tcache_hold_*`
+        import re as _re
+        _p = Path(cf)
+        parts = [_p] if _p.exists() else sorted(q for q in _p.parent.glob(_p.stem + "_*of*.pkl")
+                                                  if _re.fullmatch(_re.escape(_p.stem) + r"_\d+of\d+\.pkl", q.name))
+        if not parts:
+            sys.exit(f"⛔ --conf {cf}: сайдкара нет")
+        for part in parts:
             CONF.update(pickle.load(open(part, "rb")))
     if a.conf:
         print(f"★ уверенность декодера: {len(CONF)} листов из {a.conf}")
@@ -247,9 +255,10 @@ def cmd_replay():
                 traces = prod
             else:
                 traces = T._WithAlt(prod); traces.alt = alt; traces.alt_gated = gated
-                traces.alt_conf = c.get("alt_conf") or CONF.get(src.name)
+                _ac = c.get("alt_conf")              # ⚠ 3-й круг: пустой список у листа без трасс декодера — не «нет»
+                traces.alt_conf = _ac if _ac is not None else CONF.get(src.name)
                 # ⛔ 27.09 (разбор, 2-й круг): вето/взятие без уверенности молча не работают — такие листы считаются
-                if (p.rowdec_conf_veto > 0 or p.rowdec_conf_take > 0) and (
+                if alt and (p.rowdec_conf_veto > 0 or p.rowdec_conf_take > 0) and (
                         traces.alt_conf is None or len(traces.alt_conf) != len(alt)):
                     conf_missing[nm] += 1
             out = Path(a.out) / nm / sheet_dir(n)
