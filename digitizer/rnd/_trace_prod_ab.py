@@ -411,7 +411,9 @@ if SH_N > 1:
         sheets = sheets[lo:hi]      # блоком, а не через шаг: сканы скважины лежат рядом
         print(f"★ ШАРД {SH_I}/{SH_N}: {len(sheets)} листов × {len(MODES)} режима")
 
-res, FP = {}, {}
+res, FP, LK = {}, {}, {}
+# ★ A5 (27.09): отпечаток режима — ДО цикла, пока `kw` не опустошён `pop`-ами; дамп другой конфигурации не подхватывается
+_SPEC = {m[0]: repr(m) for m in MODES}
 import time as _time_mod
 _T_RUN = _time_mod.time()
 # ★★★ ПРОМЕЖУТОЧНЫЙ ДАМП: ОСТАНОВКА ДОЛЖНА СТОИТЬ ЛИСТОВ, А НЕ ЧАСОВ (§6.186).
@@ -426,21 +428,30 @@ if PART.is_file():
     try:
         _part = pickle.load(open(PART, "rb"))
         _prev = _part.get("res", {})
+        _spec = _part.get("spec")
+        if _spec is None:
+            print("⚠ промежуточный дамп без отпечатка режимов (до A5) — подхватываю без сверки конфигурации")
+        else:
+            for _nm in [k for k in _prev if _spec.get(k) != _SPEC.get(k)]:
+                print(f"⛔ режим {_nm!r}: в дампе другая конфигурация — его листы считаются заново")
+                _prev.pop(_nm)
         res.update(_prev)
-        FP.update(_part.get("fp", {}))            # ★ 19.09 (Д5 ревизии): отпечатки тоже подхватываем
+        FP.update({k: v for k, v in _part.get("fp", {}).items() if k in _prev})   # ★ 19.09 (Д5 ревизии): отпечатки тоже
+        LK.update({k: v for k, v in _part.get("lk", {}).items() if k in _prev})
         print(f"★ НАЙДЕН ПРОМЕЖУТОЧНЫЙ ДАМП: режимов {len(_prev)}, листов "
               f"{sum(len(v[1]) for v in _prev.values())} — они будут ПРОПУЩЕНЫ")
     except Exception as e:
         print(f"⚠ промежуточный дамп не читается ({type(e).__name__}) — считаю с нуля")
 
 
-def _flush(why):
+def _flush(why, force=False):
     """Атомарно: пишем во временный и переименовываем, иначе снятый в момент записи шард оставил
-    бы обрезанный файл, и следующий запуск считал бы мусор за прогресс."""
-    if not a.flush:
+    бы обрезанный файл, и следующий запуск считал бы мусор за прогресс.
+    `force` — выход партии/по памяти: пишем и при `--flush 0`, иначе перезапуск начинал бы с нуля бесконечно (A5)."""
+    if not a.flush and not force:
         return
     tmp = PART.with_suffix(".tmp")
-    pickle.dump({"res": res, "fp": FP, "modes": [tuple(m) for m in MODES]}, open(tmp, "wb"))
+    pickle.dump({"res": res, "fp": FP, "lk": LK, "spec": _SPEC, "modes": [tuple(m) for m in MODES]}, open(tmp, "wb"))
     tmp.replace(PART)
     print(f"  ★ промежуточный дамп сохранён ({why})")
 
@@ -477,6 +488,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
     tot, per = res.get(nm_mode, (dict(hon=0, curves=0, sheets=0, leak=0), {}))
     tot, per = dict(tot), dict(per)
     FP[nm_mode] = FP.get(nm_mode, {})
+    LK[nm_mode] = LK.get(nm_mode, {})
     SKIP = {}                    # §6.106: сверка списка — обязательная печать, а не отладка
     print(f"\n{'='*78}\n{nm_mode}: seq={seq or '— (жадный trace2d)'}, "
           f"slot={slot or '— (раскладка правилом)'}, order={order}, "
@@ -547,6 +559,12 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
             continue
         if n.name in per and not _have_out:
             _redo += 1                          # запись есть, файла нет — считаем заново
+            # ⛔ A5 (27.09): прежний счёт листа вычитается, иначе пересчёт удваивал его в `tot` (утечки прежних
+            #   дампов без `lk` не известны — считаются 0)
+            _ng = sum(1 for c in extract(str(n))["curves"]
+                      if M.mnem_root(c["name"]) != "DA" and sum(1 for x in c["xs"] if x != NULL) >= 50)
+            tot["hon"] -= per.pop(n.name); tot["curves"] -= _ng; tot["sheets"] -= 1
+            tot["leak"] -= LK[nm_mode].pop(n.name, 0)
         # ⚠ Чистим выдачу прошлого прогона: иначе при повторе с другой конфигурацией прочтётся старый
         # файл, и правка окажется «нейтральной», хотя она просто не доехала.
         if cfg.out.is_dir():
@@ -583,7 +601,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
             if leaked(W[k], raws[k]):
                 lk += 1; continue
             h += HON(*err(W[k], gd))
-        per[n.name] = h
+        per[n.name] = h; LK[nm_mode][n.name] = lk
         tot["hon"] += h; tot["curves"] += len(gts); tot["sheets"] += 1; tot["leak"] += lk
         print(f"  {n.stem[:42]:<44} кривых {len(gts):>2}  ЧЕСТНЫХ {h}")
         _since += 1
@@ -593,7 +611,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
             _since = 0
         if a.max_hours > 0 and (_time_mod.time() - _T_RUN) / 3600 > a.max_hours:
             res[nm_mode] = (tot, per)
-            _flush(f"партия окончена: {(_time_mod.time() - _T_RUN) / 3600:.1f} ч > {a.max_hours} ч")
+            _flush(f"партия окончена: {(_time_mod.time() - _T_RUN) / 3600:.1f} ч > {a.max_hours} ч", force=True)
             print(f"★ ПАРТИЯ ОКОНЧЕНА: {(_time_mod.time() - _T_RUN) / 3600:.1f} ч — выхожу кодом 75, драйвер запустит шард заново с дампа")
             sys.exit(75)
         if a.max_rss_gb > 0:
@@ -601,7 +619,7 @@ for nm_mode, seq, slot, order, depth0, gate, prob, softfg, rowdec, rddir, kw in 
             _rss = psutil.Process().memory_info().rss / 2**30
             if _rss > a.max_rss_gb:
                 res[nm_mode] = (tot, per)
-                _flush(f"перезапуск по памяти: RSS {_rss:.1f} ГБ > {a.max_rss_gb} ГБ")
+                _flush(f"перезапуск по памяти: RSS {_rss:.1f} ГБ > {a.max_rss_gb} ГБ", force=True)
                 print(f"★ ПЕРЕЗАПУСК ПО ПАМЯТИ: RSS {_rss:.1f} ГБ после {tot['sheets']} листов режима {nm_mode} — "
                       f"выхожу кодом 75, драйвер запустит шард заново с дампа")
                 sys.exit(75)

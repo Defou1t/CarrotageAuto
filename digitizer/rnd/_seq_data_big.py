@@ -98,7 +98,7 @@ print(f"★ ВЫБОРКА СЕЛЕКТОРА: исключено скважин
 p = DEFAULT.cv
 rng = np.random.default_rng(12345 + SH_I)
 PA, FA, LA, MA, DA, WA, HA = [], [], [], [], [], [], []
-ok = nn = done = 0; SKIP = {}
+ok = nn = done = 0; SKIP = {}; cut = False
 T0 = time.time()
 dst = OUT / f"{a.tag}_{SH_I}of{SH_N}.npz"
 for n in mine:
@@ -118,11 +118,15 @@ for n in mine:
     ok += k; nn += m; done += 1
     print(f"  {n.name[:44]:<46} {len(P):>6} решений, ближайший прав {100*k/max(1,m):.1f}%")
     if a.max_hours and (time.time() - T0) / 3600 > a.max_hours:
-        print(f"★ ПАРТИЯ ОКОНЧЕНА ({(time.time() - T0) / 3600:.1f} ч) — сохраняю собранное и выхожу")
+        print(f"★ ПАРТИЯ ОКОНЧЕНА ({(time.time() - T0) / 3600:.1f} ч) — сохраняю собранное как НЕПОЛНОЕ и выхожу")
+        cut = True
         break
 _sk = sum(SKIP.values())
 print(f"  СВЕРКА: обработано {done} + пропущено {_sk} из {len(mine)}; " + ", ".join(f"{k} {v}" for k, v in SKIP.items()))
 OUT.mkdir(parents=True, exist_ok=True)
+if cut:     # A4: обрезанный шард — не под итоговым именем, иначе `--merge` склеит неполную выборку молча
+    dst = dst.with_name(dst.stem + ".partial.npz")
 np.savez(dst, P=np.vstack(PA), F=np.vstack(FA), L=np.vstack(LA), M=np.vstack(MA), D=np.vstack(DA), H=np.vstack(HA),
          wells=np.array(WA), geom=np.array([R_ROWS, ROW_STEP, R_COLS, COL_STEP, NROW, NCOL, MAXC]))
 print(f"ИТОГО шард {SH_I}: {sum(len(x) for x in PA)} решений, скважин {len(set(WA))}; ближайший прав {100*ok/max(1,nn):.1f}% → {dst}")
+sys.exit(4 if cut else 0)

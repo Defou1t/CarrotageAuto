@@ -177,6 +177,8 @@ def cmd_replay():
         if not src.exists():
             for nm, _ in modes:
                 stat[nm][1] += 1
+                for old in (Path(a.out) / nm / sheet_dir(n)).glob("*_auto.nlgx"):   # A6: иначе счёт возьмёт выдачу прошлого повтора
+                    old.unlink()
             continue
         c = pickle.load(open(src, "rb"))
         prod = [(L, unpack(t)) for L, t in c["traces"]]
