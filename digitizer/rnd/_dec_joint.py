@@ -321,7 +321,7 @@ for fi, f in enumerate(files, 1):
                         if best is None or m_ < best[0]:
                             best = (m_, c_)
                     DIAG.append((name, cand_before[g], best))
-            if a.parity_cache and ws == a.wskip[0] and pthr == 0.6 and rr == 0:
+            if a.parity_cache and ws == a.wskip[0] and pthr == 0.6 and rr == (-a.kplus if a.kplus else 0):
                 pc = pickle.load(open(Path(a.parity_cache) / f.name, "rb"))
                 palt = [un(t) for L, t in pc["alt"] if L.track_index == ti]
                 PAR["трасс сверочного кэша"] += len(palt)

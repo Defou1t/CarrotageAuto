@@ -34,3 +34,18 @@ graphify-out/
 
 # Обрывки stderr сторонних прогонов (счётчики токенов и т.п.)
 *.err
+
+# client data listings (kept locally)
+digitizer/archive_report.txt
+
+# client data listings (kept locally)
+digitizer/manifest_all.csv
+
+# client data listings (kept locally)
+digitizer/manifest_semeguniv.csv
+
+# client data listings (kept locally)
+digitizer/rnd/HELDOUT_2026-08-10.txt
+
+# client data listings (kept locally)
+digitizer/rnd/_calib_result_542.json
