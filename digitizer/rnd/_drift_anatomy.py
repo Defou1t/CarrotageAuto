@@ -175,7 +175,7 @@ for si, sh in enumerate(sheets, 1):
         pk = json.loads(pj.read_text(encoding="utf-8"))
         tdec = {t["track"]: t["dec"] for t in pk.get("tracks", [])}
         for sl in pk.get("slots", []):
-            SRCK[sl["name"]] = ("dec" if sl["base"] == "prod" else "prod") if sl["flip"] else sl["base"]
+            SRCK[sl["name"]] = sl.get("src") or (("dec" if sl["base"] == "prod" else "prod") if sl["flip"] else sl["base"])
         for k in W:
             if k not in SRCK:
                 SRCK[k] = "dec" if tdec.get(tm.get(k)) else "prod"

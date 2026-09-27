@@ -420,6 +420,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         _win = {c["name"]: (int(c["top_y"]), int(c["n_rows"])) for c in model.get("curves", [])
                 if "top_y" in c and "n_rows" in c}
         _slots = []
+        _veto_nm, _take_nm = set(), set()
 
         def _nn(nm, t):
             w = _win.get(nm)
@@ -448,10 +449,21 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                 dc = cmap.get(id(m_alt[nm][1]))
                 if dc is not None and dc < veto:
                     merged[nm] = mapping[nm]          # §6.240: неуверенная версия декодера уступает прод-версии
+                    _veto_nm.add(nm)
             if take > 0 and cmap and nm in m_alt and merged.get(nm) is not m_alt[nm] and len(m_alt[nm][1]) >= 30:
                 dc = cmap.get(id(m_alt[nm][1]))
                 if dc is not None and dc >= take:
                     merged[nm] = m_alt[nm]            # §6.241: уверенная версия декодера берёт слот
+                    _take_nm.add(nm)
+        # ⛔ 27.09 (разбор): вето/взятие меняют источник ПОСЛЕ записи слота — `src` фиксирует итог (читать его, а не
+        #   восстанавливать из base/flip), `veto`/`take` — что сработало
+        for q in _slots:
+            nm_ = q["name"]
+            q["src"] = ("dec" if nm_ in m_alt and merged.get(nm_) is m_alt[nm_] else "prod" if nm_ in merged else "none")
+            if nm_ in _veto_nm:
+                q["veto"] = True
+            if nm_ in _take_nm:
+                q["take"] = True
         for ti in by_t:
             took["декодер" if use.get(ti) else "прод"] += 1
         print(f"  выбор пути по треку ({'модель ' + model_f if model_f else 'порог ' + str(pick)}"

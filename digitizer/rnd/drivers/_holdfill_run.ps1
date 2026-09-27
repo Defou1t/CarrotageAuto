@@ -1,4 +1,5 @@
 ﻿# _holdfill_run.ps1 — после A/B §6.237: заполнение разрывов трасс декодера на кэше С УДЕРЖАНИЕМ (§6.238, второй повтор).
+# ★ 27.09 (разбор §6.242): DONE — только при коде 0; `--skip-replay` проверяет маркер полного повтора сам (`_replay_sweep`).
 # Ждёт маркер конца `_knobab_hold.log`, затем `_replay_sweep` на `tcache_hold`: база — прод-режим, варианты gapfill 10 / 29.
 # ⚠ UTF-8 С BOM.
 $py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
@@ -18,4 +19,5 @@ if (Test-Path "$ts/rp_holdfill/B") { $ar += '--skip-replay'; Say "повтор �
 $p = Start-Process -FilePath $py -ArgumentList $ar -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$ts/holdfill_result.txt" -RedirectStandardError "$ts/holdfill_result.err" -PassThru
 $null = $p.Handle; $p.WaitForExit()
 Say "повтор окончен кодом $($p.ExitCode): holdfill_result.txt"
+if ($p.ExitCode -ne 0) { Say "⛔ повтор/счёт не закончен кодом $($p.ExitCode) (RUN FAIL)"; if (@(Select-String -Path $log -Pattern 'RUN FAIL' -SimpleMatch).Count -ge 2) { Say "=== HOLDFILL DONE ===" }; exit 2 }
 Say "=== HOLDFILL DONE ==="

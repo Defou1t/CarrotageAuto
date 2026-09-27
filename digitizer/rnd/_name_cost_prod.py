@@ -171,7 +171,11 @@ if a.dump:
     _d = {a.mode: perA}
     if a.mode2:
         _d[a.mode2] = count(a.mode2)[0]
-    _pk.dump(_d, open(a.dump, "wb"))
+    _tmp = a.dump + ".tmp"                  # ⛔ 27.09 (разбор): атомарно — снятый на записи процесс не оставит обрезок
+    with open(_tmp, "wb") as _fh:
+        _pk.dump(_d, _fh)
+    import os as _os
+    _os.replace(_tmp, a.dump)
     print("")
     print(f"★ полистные счёты выгружены: {a.dump}  "
           f"({', '.join(f'{k}: {len(v)} листов' for k, v in _d.items())})")

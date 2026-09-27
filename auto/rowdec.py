@@ -217,7 +217,7 @@ def ink_color(rgb, p, tr, step=8, halfw=3, min_rows=8):
     return _COLS[j - 1], vote[j] / n
 
 
-def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.0):
+def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.0, conf_out=None):
     """→ list[{row: x}] длиной k: траектории кривых трека в координатах ЛИСТА."""
     import torch
     net, dev = _load(ckpt)
@@ -325,16 +325,16 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             if s < 0:
                 break
         out.append(tr)
-    # ★ §6.240: уверенность траектории — медиана вероятности карты вдоль неё (для вето в `emit`); ключ — id словаря
-    for tr in out:
-        if tr:
-            ys = np.fromiter(tr.keys(), np.int64, len(tr)) - y0
-            xs = np.fromiter(tr.values(), np.float64, len(tr)).astype(np.int64) - x0
-            _CONF[id(tr)] = float(np.median(prob[ys, xs]))
+    # ★ §6.240: уверенность траектории — медиана вероятности карты вдоль неё (для вето в `emit`); ключ — id словаря.
+    #   ⛔ 27.09 (разбор): не модульный словарь — UI многопоточный, и параллельный прогон стирал чужие записи (вето молча
+    #   выключалось). Словарь даёт вызывающий (`trace_auto`), живёт один вызов.
+    if conf_out is not None:
+        for tr in out:
+            if tr:
+                ys = np.fromiter(tr.keys(), np.int64, len(tr)) - y0
+                xs = np.fromiter(tr.values(), np.float64, len(tr)).astype(np.int64) - x0
+                conf_out[id(tr)] = float(np.median(prob[ys, xs]))
     return out
-
-
-_CONF = {}      # §6.240: id(трасса) → медиана p; живёт в пределах одного `trace_auto`
 
 
 class _Trs(list):
@@ -446,7 +446,7 @@ def trace_auto(rgb, sheet, p):
             by_track[ti] = []
 
     out = []
-    _CONF.clear()
+    conf = {}                       # §6.240: id(трасса) → медиана p, только для этого вызова
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
         if lines:
@@ -459,7 +459,7 @@ def trace_auto(rgb, sheet, p):
         # ★ §6.239: K + `rowdec_k_plus` путей (0 = прод бит-в-бит). §6.237: из невзятых удержанием 71 из 196 ведутся по
         #   ДРУГОЙ нарисованной линии (> 50 px) — лишняя линия трека, которой нет в эталоне, забирает путь.
         K += int(getattr(p, "rowdec_k_plus", 0) or 0)
-        trs = trace_track(rgb, track, K, p, ck, y0, y1)
+        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf)
         # ── ПРИВЯЗКА ТРАЕКТОРИИ К ЛИНИИ: 1:1 ПО СТОИМОСТИ, А НЕ СОРТИРОВКОЙ ────────────────
         # ⚠⚠ ЗАЧЕМ. Подпись решает не декодер, а то, КАКОЙ ЛИНИИ досталась траектория: линия несёт
         # цвет, класс и полосу, по которым `emit._map_lines_to_slots` раскладывает по слотам.
@@ -526,8 +526,7 @@ def trace_auto(rgb, sheet, p):
                     if i not in used_i:
                         out.append((_synth_line(lines, ti, t, med[i], rgb, p), t))
     res = _Trs(out)
-    res.conf = [(_CONF.get(id(t)),) for _, t in out]
-    _CONF.clear()
+    res.conf = [(conf.get(id(t)),) for _, t in out]
     return res
 
 

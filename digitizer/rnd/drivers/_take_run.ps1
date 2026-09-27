@@ -1,4 +1,5 @@
 ﻿# _take_run.ps1 — уверенная версия декодера берёт слот, повтор с кэша (§6.241). Ждёт конца перебора §6.240
+# ★ 27.09 (разбор §6.242): DONE — только при коде 0; `--skip-replay` проверяет маркер полного повтора сам (`_replay_sweep`).
 # (`=== VETO DONE ===` в `_veto.log`), затем `_replay_sweep` с `--conf`. CPU, ~1.5 ч. ⚠ UTF-8 С BOM.
 $py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
 $rnd='F:/nds/Auto/digitizer/rnd'
@@ -17,4 +18,5 @@ if (Test-Path "$ts/rp_take/B") { $ar += '--skip-replay'; Say "повтор уж�
 $p = Start-Process -FilePath $py -ArgumentList $ar -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$ts/take_result.txt" -RedirectStandardError "$ts/take_result.err" -PassThru
 $null = $p.Handle; $p.WaitForExit()
 Say "повтор окончен кодом $($p.ExitCode): take_result.txt"
+if ($p.ExitCode -ne 0) { Say "⛔ повтор/счёт не закончен кодом $($p.ExitCode) (RUN FAIL)"; if (@(Select-String -Path $log -Pattern 'RUN FAIL' -SimpleMatch).Count -ge 2) { Say "=== TAKE DONE ===" }; exit 2 }
 Say "=== TAKE DONE ==="

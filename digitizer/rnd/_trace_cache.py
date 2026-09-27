@@ -52,9 +52,23 @@ WM = str(TS / "rowdec_wellmap.json").replace("\\", "/")
 TRACE_KNOBS = dict(row_decoder="auto5", rowdec_wellmap=WM, rowdec_slot_all=True, rowdec_slot_len=0.18)
 if a.seq:                                  # ★ §6.220: кэш под ДРУГИМ селектором (ключ ведения, пишется в кэш)
     TRACE_KNOBS["seq_model"] = a.seq
-for _kv in a.knob:                         # ★ §6.236: прочие ручки ведения (bool/int/float/str по виду значения)
+for _kv in a.knob:                         # ★ §6.236: прочие ручки ведения — тип по умолчанию в Config
+    # ⛔ 27.09 (разбор): прежде тип угадывался по тексту, и `False` оставался строкой — bool('False') включал ручку
+    from auto.config import Config as _Cfg
     _k, _, _v = _kv.partition("=")
-    TRACE_KNOBS[_k] = (_v == "1") if _v in ("0", "1") else (float(_v) if _v.replace(".", "", 1).isdigit() else _v)
+    if not hasattr(_Cfg().cv, _k):
+        sys.exit(f"⛔ --knob {_k!r}: такой ручки в Config нет")
+    _d = getattr(_Cfg().cv, _k)
+    if isinstance(_d, bool):
+        if _v.lower() not in ("1", "0", "true", "false", "yes", "no"):
+            sys.exit(f"⛔ --knob {_k}={_v!r}: ждал 1/0/true/false")
+        TRACE_KNOBS[_k] = _v.lower() in ("1", "true", "yes")
+    elif isinstance(_d, int):
+        TRACE_KNOBS[_k] = int(_v)
+    elif isinstance(_d, float):
+        TRACE_KNOBS[_k] = float(_v)
+    else:
+        TRACE_KNOBS[_k] = _v
 
 
 def sheet_dir(n):
@@ -169,6 +183,7 @@ def cmd_replay():
     from auto import emit as E, trace2d as T
     from auto.config import Config
     modes = []
+    a.mode_specs = [(s.partition(":")[0], s.partition(":")[2]) for s in a.mode]
     for spec in a.mode:
         nm, _, tail = spec.partition(":")
         kw = {}
@@ -237,6 +252,12 @@ def cmd_replay():
                 stat[nm][1] += 1; print(f"  {n.stem[:44]} {nm} ПАДЕНИЕ {type(e).__name__}: {e}")
     for nm, (ok, bad) in stat.items():
         print(f"★ ПОВТОР {nm}: выдано {ok}, пропущено/упало {bad} из {len(sheets)}")
+    # ⛔ 27.09 (разбор): маркер ПОЛНОГО повтора — драйверы и `_replay_sweep --skip-replay` верят ему, а не наличию каталога
+    import json as _json
+    _mk = Path(a.out) / "_replay_done.json"
+    _mk.parent.mkdir(parents=True, exist_ok=True)
+    _mk.write_text(_json.dumps({"modes": {nm: spec for nm, spec in a.mode_specs}, "sheets": len(sheets),
+                                "stat": {nm: v for nm, v in stat.items()}, "conf": a.conf}, ensure_ascii=False), encoding="utf-8")
 
 
 cmd_build() if a.cmd == "build" else cmd_replay()

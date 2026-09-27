@@ -147,7 +147,7 @@ for si, sh in enumerate(sheets, 1):
         tdec = {t["track"]: t["dec"] for t in pk.get("tracks", [])}
         for sl in pk.get("slots", []):
             base = sl["base"]
-            SRCK[sl["name"]] = ("dec" if base == "prod" else "prod") if sl["flip"] else base
+            SRCK[sl["name"]] = sl.get("src") or (("dec" if base == "prod" else "prod") if sl["flip"] else base)
         for k in W:
             if k not in SRCK:
                 SRCK[k] = "dec" if tdec.get(tm.get(k)) else "prod"

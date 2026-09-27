@@ -42,7 +42,20 @@ k = len(modes) - 1
 print(f"★ ПЕРЕБОР: база + {k} вариантов; порог отбора на поле p < {0.05 / max(1, k):.4f}")
 for nm, spec in modes:
     print(f"   {nm}: {spec}")
+# ⛔ 27.09 (разбор): `--skip-replay` — только если повтор ЗАВЕРШЁН с теми же режимами (маркер `_replay_done.json`);
+#   прерванный повтор оставлял каталоги, драйвер видел `B` и приговор считался на части листов
+_mk = Path(a.out) / "_replay_done.json"
+if a.skip_replay:
+    try:
+        _m = json.loads(_mk.read_text(encoding="utf-8"))
+        if _m.get("modes") != {nm: spec for nm, spec in modes}:
+            raise ValueError("режимы маркера другие")
+    except Exception as _e:
+        print(f"⚠ --skip-replay отклонён ({type(_e).__name__}: {_e}) — повтор заново")
+        a.skip_replay = False
 if not a.skip_replay:
+    for nm, _ in modes:                     # старые счета от прерванного/другого повтора — не использовать
+        (TS / f"percurve_{a.tag}_{nm}.pkl").unlink(missing_ok=True)
     cmd = [PY, str(RND / "_trace_cache.py"), "replay", "--sheets", a.sheets, "--cache", a.cache, "--out", a.out]
     if a.conf:
         cmd += ["--conf", a.conf]
@@ -86,6 +99,8 @@ for nm, spec in modes[1:]:
     V = R[nm]; res[nm] = {}
     for sn, sh in SETS.items():
         com = sorted(s for s in sh if s in B and s in V)
+        if len(com) < 0.995 * len(sh):      # ⛔ 27.09 (разбор): приговор на неполном наборе не выносится
+            sys.stderr.write(f"⛔ {nm}/{sn}: сравнимо {len(com)} листов из {len(sh)} — покрытие неполное\n"); sys.exit(3)
         du = np.array([V[s][1] - B[s][1] for s in com], float)
         dn = np.array([V[s][0] - B[s][0] for s in com], float)
         p = perm_p(du)
