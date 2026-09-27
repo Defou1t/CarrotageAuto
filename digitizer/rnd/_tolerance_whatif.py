@@ -27,11 +27,23 @@ ap.add_argument("--mode", default="NF")
 ap.add_argument("--map", default="slotmap.pkl")
 ap.add_argument("--k", type=float, default=0.35)
 ap.add_argument("--every", type=int, default=1)
+ap.add_argument("--sheets", default="wellmap_sheets.txt", help="список листов в --ts (поле; сорт A — holdoutA_sheets.txt)")
 a = ap.parse_args()
 TS = Path(a.ts)
 smap = pickle.load(open(TS / a.map, "rb"))
+# ★ карта слотов `slotmap.pkl` — только поле; для прочих листов трек берём из пуловых дампов, как `_name_cost_prod.py`
+POOLS = ["pools", "pools_gate", "pools_wide", "pools_more", "pools_div", "pools_heldout", "pools_all"]
+for root in POOLS:
+    for f in sorted((TS / root).glob("*.pkl")):
+        if f.stem in smap:
+            continue
+        try:
+            d = pickle.load(open(f, "rb"))
+        except Exception:
+            continue
+        smap.setdefault(d["name"], {s["name"]: s["track"] for s in d["slots"]})
 SRC = {q.name: q for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx")}
-field = [l.strip() for l in (TS / "wellmap_sheets.txt").read_text(encoding="utf-8").splitlines() if l.strip()][::a.every]
+field = [l.strip() for l in (TS / a.sheets).read_text(encoding="utf-8").splitlines() if l.strip()][::a.every]
 
 
 def st(tr, gt):
@@ -118,7 +130,7 @@ for si, sh in enumerate(field, 1):
     if si % 100 == 0:
         print(f"  … {si}/{len(field)}", file=sys.stderr)
 w = np.array([x for x in widths if x > 0])
-print(f"★ поле: кривых {C['кривых']}; честных при 3 px {C['честных при 3 px']}, при max(3, {a.k}·ширина) "
+print(f"★ {a.sheets}: кривых {C['кривых']}; честных при 3 px {C['честных при 3 px']}, при max(3, {a.k}·ширина) "
       f"{C['честных при мягком допуске']} (+{C['честных при мягком допуске'] - C['честных при 3 px']})")
 print(f"  ширина штриха эталона (px): p25 {np.percentile(w,25):.1f}, медиана {np.median(w):.1f}, p75 {np.percentile(w,75):.1f}, "
       f"p90 {np.percentile(w,90):.1f}; допуск > 3 px у кривых шире {3/a.k:.1f} px — {100*np.mean(w > 3/a.k):.0f}%")

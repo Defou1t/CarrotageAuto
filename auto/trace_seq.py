@@ -285,6 +285,8 @@ def make_tracer(model_path, device=None):
 
     def trace_line(fg, line, frame, p, band_pad=8, slmax=30.0, wide_run=14, x_range=None,
                    jump_limit=None):
+        # ⚠ A9: `wide_run` и `jump_limit` принимаются ради совместимости сигнатуры с `trace2d.trace_line` (их передаёт
+        #   `refine`), но селектор их НЕ использует — ран выбирает сеть, а не правило вершины/кламп скачка.
         H, W = fg.shape
         lo = max(0, int(x_range[0])) if x_range is not None else max(0, int(line.x_lo) - band_pad)
         hi = (min(W, int(x_range[1]) + 1) if x_range is not None
