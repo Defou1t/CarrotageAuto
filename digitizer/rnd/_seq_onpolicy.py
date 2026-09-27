@@ -39,6 +39,7 @@ ap.add_argument("--threads", type=int, default=2)
 ap.add_argument("--device", default="cpu", help="§6.233: cuda — для крупной сети")
 ap.add_argument("--max-hours", type=float, default=0.0)
 ap.add_argument("--no-save", action="store_true", help="только счёт, без записи выборки")
+ap.add_argument("--dark-dump", default="", help="§6.235: писать темноту кандидатов и своей кривой на развилках (pkl)")
 a = ap.parse_args()
 TS = Path(a.ts)
 import torch
@@ -116,6 +117,15 @@ def sheet(n, rng):
     p = DEFAULT.cv
     colors = ["black", "red", "orange", "green", "blue"]
     fgs = {c: T._color_fg(rgb, c, p) for c in colors}
+    if a.dark_dump:     # §6.235: «насколько темнее бумаги своей строки» — вход декодера (`rowdec._band`)
+        Vv = im.value_channel(rgb)
+        paper = np.percentile(Vv[:, ::4], 90, axis=1).astype(np.float32)
+        DK = np.clip(paper[:, None] - Vv.astype(np.float32), 0, 255).astype(np.uint8)
+        del Vv
+
+        def dval(a0, b0, yy):
+            w = DK[max(0, yy - 4):yy + 5, int(a0):int(b0) + 1]
+            return float(np.percentile(w, 90)) if w.size else 0.0
     P, F, L, M, D, HH = [], [], [], [], [], []
     st = dict(dec=0, ok=0, near_ok=0, hard=0, hard_ok=0, resets=0, rows=0, on=0, don=0, don_ok=0, doff=0, doff_ok=0,
               curves=0, hon=0, hon90=0)
@@ -133,6 +143,8 @@ def sheet(n, rng):
             if hit > best_hit:
                 best_hit, best_c = hit, c
         band = np.ascontiguousarray(fgs[best_c][:, lo:hi] > 0)
+        if a.dark_dump:     # собственная темнота кривой: медиана по точкам эталона (то, что мог бы помнить канал истории)
+            own = float(np.median([dval(xsr[k] - 2, xsr[k] + 2, int(rows[k])) for k in range(0, len(rows), 25)]))
         allr = np.arange(rows.min(), rows.max() + 1)
         allx = np.interp(allr, rows, xsr)
         x = float(allx[0]); v = 0.0; far = 0; cnt = 0; errs = []; hist = {}
@@ -157,6 +169,10 @@ def sheet(n, rng):
                     kk = int(np.argmax(sc[:len(idx)]))
                     if lab.sum():
                         cnt += 1
+                        if a.dark_dump:
+                            DREC.append((int(lab[kk]), bool(abs(x - gt_x) <= 3), own, kk,
+                                         [(dval(aa[i], bb[i], y), float(bb[i] - aa[i]), int(lab[i]), float(C[idx[i]] - pred))
+                                          for i in range(len(idx))]))
                         near = int(np.argmin(np.abs(C[idx] - pred)))
                         st["dec"] += 1; st["ok"] += int(lab[kk]); st["near_ok"] += int(lab[near])
                         if not lab[near]:
@@ -197,6 +213,7 @@ def sheet(n, rng):
 
 
 rng = np.random.default_rng(777 + SH_I)
+DREC = []
 PA, FA, LA, MA, DA, WA, HA = [], [], [], [], [], [], []
 TOT = dict(dec=0, ok=0, near_ok=0, hard=0, hard_ok=0, resets=0, rows=0, on=0, don=0, don_ok=0, doff=0, doff_ok=0,
            curves=0, hon=0, hon90=0)
@@ -236,3 +253,17 @@ print(f"★ УДЕРЖАНИЕ (трасса на своей линии, реш�
       f"{100-100*TOT['don_ok']/max(1,TOT['don']):.2f}% решений; ВОЗВРАТ (не на своей, свой ран среди кандидатов, решений {TOT['doff']}): "
       f"верно {100*TOT['doff_ok']/max(1,TOT['doff']):.2f}%")
 print(f"★ КРИВЫХ {TOT['curves']}: медиана |Δx| ≤ 3 px у {TOT['hon']}, ≥ 90% строк в 3 px у {TOT['hon90']}")
+if a.dark_dump:
+    import pickle
+    pickle.dump(DREC, open(a.dark_dump, "wb"))
+    err = [r for r in DREC if not r[0]]
+    d_ch = np.array([abs(r[4][r[3]][0] - r[4][next(i for i, c in enumerate(r[4]) if c[2])][0]) for r in err])
+    # «правило своей темноты»: из кандидатов — ближайший по темноте к своей кривой (оракул-признак, не реализуемый как есть)
+    def own_pick(r):
+        return int(np.argmin([abs(c[0] - r[2]) for c in r[4]]))
+    fix = sum(1 for r in err if r[4][own_pick(r)][2])
+    brk = sum(1 for r in DREC if r[0] and not r[4][own_pick(r)][2])
+    print(f"★ ТЕМНОТА НА РАЗВИЛКАХ (§6.235): решений {len(DREC)}, ошибок модели {len(err)}; |темнота выбранного − верного| — "
+          f"медиана {np.median(d_ch):.0f}, > 20 у {100*np.mean(d_ch > 20):.0f}%, > 40 у {100*np.mean(d_ch > 40):.0f}%")
+    print(f"   правило «ближе к своей темноте»: чинит {fix} ошибок из {len(err)} ({100*fix/max(1,len(err)):.0f}%), "
+          f"ломает {brk} верных из {len(DREC) - len(err)} ({100*brk/max(1,len(DREC) - len(err)):.1f}%)")

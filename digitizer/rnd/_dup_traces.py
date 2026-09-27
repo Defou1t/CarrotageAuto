@@ -22,6 +22,7 @@ ap.add_argument("--dir", default=r"F:/nds/output/taskS/rp_fill")
 ap.add_argument("--mode", default="NF")
 ap.add_argument("--map", default="slotmap.pkl")
 ap.add_argument("--min-rows", type=int, default=200)
+ap.add_argument("--list-out", default="", help="§6.236: записать листы с парой «место занято» (в --ts)")
 a = ap.parse_args()
 TS = Path(a.ts)
 smap = pickle.load(open(TS / a.map, "rb"))
@@ -54,7 +55,7 @@ def match(rows, cols, ok):
     return {r: c for c, r in pair.items()}
 
 
-C = Counter(); rows_dup = 0; ex = []
+C = Counter(); rows_dup = 0; ex = []; occ_sheets = []
 for sh in field:
     q = SRC.get(sh)
     if not q:
@@ -96,6 +97,8 @@ for sh in field:
             C["пара: взята одна, в треке есть НЕ взятый эталон — место занято"] += one and bool(lost)
             C["пара: взята одна, НЕ взятых эталонов нет"] += one and not lost
             C["пара: не взята ни одна"] += (k1 not in taken and k2 not in taken)
+            if one and lost and (not occ_sheets or occ_sheets[-1] != sh):
+                occ_sheets.append(sh)
             if one and lost and len(ex) < 12:
                 ex.append((sh[:44], t, k1, k2, n, lost[:2]))
 print(f"★ поле: {len(field)} листов")
@@ -105,3 +108,6 @@ print(f"   строк в дублях (сумма по парам): {rows_dup}")
 print("★ примеры «место занято»:")
 for e in ex:
     print("   ", e)
+if a.list_out:
+    (TS / a.list_out).write_text("\n".join(occ_sheets) + "\n", encoding="utf-8")
+    print(f"★ листов с «место занято»: {len(occ_sheets)} → {TS / a.list_out}")

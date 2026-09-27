@@ -40,6 +40,7 @@ ap.add_argument("--max-hours", type=float, default=0.0)
 ap.add_argument("--fast", action="store_true", help="сборка с ускоренным селектором `_seq_fast` (выдача побайтно та же, §6.218)")
 ap.add_argument("--seq", default="", help="чекпойнт селектора для сборки (пусто = прод `seq_model`); путь с каталогом — как есть (§6.220)")
 ap.add_argument("--wlg-roots", nargs="+", default=[r"F:\nds\projects\Archive"])
+ap.add_argument("--knob", action="append", default=[], help="§6.236: ручка ВЕДЕНИЯ для сборки, `имя=значение` (пишется в кэш)")
 a = ap.parse_args()
 TS = Path(a.ts)
 CACHE = Path(a.cache)
@@ -50,6 +51,9 @@ WM = str(TS / "rowdec_wellmap.json").replace("\\", "/")
 TRACE_KNOBS = dict(row_decoder="auto5", rowdec_wellmap=WM, rowdec_slot_all=True, rowdec_slot_len=0.18)
 if a.seq:                                  # ★ §6.220: кэш под ДРУГИМ селектором (ключ ведения, пишется в кэш)
     TRACE_KNOBS["seq_model"] = a.seq
+for _kv in a.knob:                         # ★ §6.236: прочие ручки ведения (bool/int/float/str по виду значения)
+    _k, _, _v = _kv.partition("=")
+    TRACE_KNOBS[_k] = (_v == "1") if _v in ("0", "1") else (float(_v) if _v.replace(".", "", 1).isdigit() else _v)
 
 
 def sheet_dir(n):

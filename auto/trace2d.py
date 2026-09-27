@@ -213,20 +213,38 @@ def trace_auto(rgb, sheet, p=None):
                 why = "torch не установлен"
             _announce(f"⚠ seq_model={p.seq_model!r} ЗАПРОШЕН, НО НЕ ВКЛЮЧЁН ({why}: "
                       f"{trace_seq.resolve(p.seq_model)}) — идёт ЖАДНЫЙ выбор, выдача хуже")
-    for L in sheet.lines:
+    # ★ §6.236 ИСКЛЮЧЕНИЕ ЗАНЯТЫХ РАНОВ (`cv.trace_exclusive`, умолчание False = прод бит-в-бит). §6.228: в 476 парах две
+    #   трассы трека идут по ОДНОЙ линии и занимают место невзятой кривой, а версия второго пути лежит там же. Здесь линии
+    #   ведутся по убыванию `row_cov` (сильная линия занимает первой), и трасса не может взять ран, который уже занят
+    #   трассой того же трека и цвета: такой ран стирается из маски этой линии. На пересечении это разрыв — селектор идёт
+    #   по инерции (коаст). Порядок ВЫДАЧИ прежний.
+    excl = bool(getattr(p, "trace_exclusive", False))
+    order = list(range(len(sheet.lines)))
+    if excl:
+        order.sort(key=lambda i: -float(getattr(sheet.lines[i], "row_cov", 0.0) or 0.0))
+    occ, got = {}, {}
+    for i in order:
+        L = sheet.lines[i]
         # p.trace_flagged=True — вести и FLAG-линии тоже (§6.54-§6.55, смена контракта выдачи).
         if L.confidence != "AUTO" and not getattr(p, "trace_flagged", False):
             continue
         if L.color not in fg_cache:
             fg_cache[L.color] = _color_fg(rgb, L.color, p)
         track = sheet.frame.tracks[L.track_index]
+        fg = fg_cache[L.color]
+        prev = occ.get((L.track_index, L.color)) if excl else None
+        if prev:
+            fg = _exclude_runs(fg, prev)
         # refine-петля: тесная→широкая трасса при недотяге до упора + деспайк (refine.refine_trace)
         # siblings — все линии листа: refine ограничивает расширение полосы границами Вороного
         # до соседей ТОГО ЖЕ ЦВЕТА на том же треке (см. refine._neighbor_bounds).
-        tr = refine.refine_trace(fg_cache[L.color], L, sheet.frame, p, tl, track,
+        tr = refine.refine_trace(fg, L, sheet.frame, p, tl, track,
                                  siblings=sheet.lines)
         if len(tr) >= 30:
-            out.append((L, tr))
+            got[i] = tr
+            if excl:
+                occ.setdefault((L.track_index, L.color), []).append(tr)
+    out = [(sheet.lines[i], got[i]) for i in sorted(got)]
     if want_both:
         # ⚠⚠ РЕШАЕТ НЕ ЗДЕСЬ, А `emit`. Первая редакция выбирала путь прямо тут, по числу линий,
         # которые декодер ПОВЁЛ, — и прогон на 137 листах намерил, что это не тот признак: выигрыш
@@ -236,6 +254,28 @@ def trace_auto(rgb, sheet, p=None):
         out = _WithAlt(out); out.alt = alt
         out.alt_gated = gated          # §6.213: выбор по треку — только за предгейтом
     return out
+
+
+def _exclude_runs(fg, traces):
+    """§6.236: копия маски без ранов, занятых трассами `traces` (ран строки, накрывающий точку трассы ±1 px)."""
+    fg = fg.copy()
+    H, W = fg.shape
+    for tr in traces:
+        for y, x in tr.items():
+            if not (0 <= y < H):
+                continue
+            row = fg[y]
+            xi = int(round(x))
+            c = next((c for c in (xi, xi - 1, xi + 1) if 0 <= c < W and row[c]), None)
+            if c is None:
+                continue
+            l = r = c
+            while l > 0 and row[l - 1]:
+                l -= 1
+            while r < W - 1 and row[r + 1]:
+                r += 1
+            row[l:r + 1] = False
+    return fg
 
 
 class _WithAlt(list):
