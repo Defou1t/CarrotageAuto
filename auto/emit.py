@@ -357,6 +357,12 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     slot_len = float(getattr(cv, "rowdec_slot_len", 0.0) or 0.0) if cv is not None else 0.0
     slot_fill = bool(getattr(cv, "rowdec_slot_fill", False)) if cv is not None else False
     alt_gated = bool(getattr(traces, "alt_gated", True))
+    # ★ §6.237: разрывы трасс ДЕКОДЕРА ≤ `rowdec_gapfill` строк заполняются линейно (0 = выкл = прежнее бит-в-бит). С
+    #   удержанием (`rowdec_hold`) строки на пересечениях в трассу не пишутся — трасса короче, и правило слота по длине
+    #   (ниже) отдаёт слот проду чаще, чем надо. Чистая функция трассы ⇒ проверяется повтором с кэша.
+    gapfill = int(getattr(cv, "rowdec_gapfill", 0) or 0) if cv is not None else 0
+    if alt is not None and gapfill > 0:
+        alt = [(L, _fill_gaps(tr, gapfill)) for L, tr in alt]
     if alt is not None and (pick > 0 or model_f or slot_len > 0):
         m_alt = _map(alt, "dec")                    # §6.231: путь — признак расширенной раскладки (вес на 14 его не видит)
         # ⚠⚠ ДВА СЧЁТА НАЗНАЧЕННЫХ СЛОТОВ, И ЭТО НЕ ИЗБЫТОЧНОСТЬ.
@@ -617,3 +623,20 @@ def emit(sheet, traces, out, stem, rgb=None, frame_nlgx=None, mnemonics_path=Non
         res.update(emit_into_frame(traces, frame_nlgx, sheet.frame, out, stem,
                                    mnemonics_path, image=image, las=las, cv=cv))
     return res
+
+
+def _fill_gaps(tr, gmax):
+    """§6.237: {row: x} с заполненными линейно разрывами ≤ gmax строк (края не продлеваются). Порядок ключей — по строкам."""
+    if len(tr) < 2:
+        return tr
+    ys = sorted(tr)
+    out = {}
+    for y0, y1 in zip(ys, ys[1:]):
+        out[y0] = tr[y0]
+        g = y1 - y0
+        if 1 < g <= gmax + 1:
+            x0, x1 = tr[y0], tr[y1]
+            for k in range(1, g):
+                out[y0 + k] = x0 + (x1 - x0) * k / g
+    out[ys[-1]] = tr[ys[-1]]
+    return out

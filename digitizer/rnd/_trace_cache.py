@@ -158,6 +158,7 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "dedup": ("rowdec_dedup", float),
                "refill": ("rowdec_refill", lambda v: bool(int(v))),
                "slotgeom": ("slot_template_geom", lambda v: bool(int(v))), "sib": ("slot_sib", float),
+               "gapfill": ("rowdec_gapfill", int),
                "gate": ("slot_gate", str), "slot": ("slot_model", str), "order": ("slot_order", str)}
 
 

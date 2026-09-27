@@ -32,6 +32,9 @@ ap.add_argument("--offset", type=int, default=0)
 ap.add_argument("--wskip", type=float, nargs="+", default=[0.5])
 ap.add_argument("--gmax", type=int, default=30)
 ap.add_argument("--rounds", type=int, default=0, help="кругов перекладки путей (0 — без варианта)")
+ap.add_argument("--hjump", type=float, default=0.15, help="цена прыжка В ВАРИАНТАХ С УДЕРЖАНИЕМ (V0 — всегда прод 0.15)")
+ap.add_argument("--diag", action="store_true", help="по НЕвзятым вариантом кривым — медиана и покрытие лучшего пути")
+ap.add_argument("--near", type=float, default=3.0, help="радиус «своя кривая есть»: удержание, если пиков нет в near·dy + near px")
 ap.add_argument("--only", default="", help="считать только варианты, чьё имя содержит эту подстроку (V0 всегда)")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/dec_joint.pkl")
 ap.add_argument("--parity-cache", default="", help="сверка: кэш, собранный с `--knob rowdec_hold=W` (W = первый --wskip) — трассы декодера обязаны совпасть с вариантом «удержание W (0.6)»")
@@ -60,6 +63,22 @@ def hon(tr, gt, bridge=30):
         if 0 < i < len(rs) and rs[i] - rs[i - 1] <= bridge:
             ok += 1
     return ok / len(gt) >= 0.9
+
+
+def mc(tr, gt, bridge=30):
+    """(медиана |Δ| по общим строкам, покрытие с мостом) — для разбора промахов."""
+    com = [y for y in gt if y in tr]
+    if len(com) < 30:
+        return None, 0.0
+    med = float(np.median([abs(tr[y] - gt[y]) for y in com]))
+    rs = np.array(sorted(tr)); ok = 0
+    for y in gt:
+        if y in tr:
+            ok += 1; continue
+        i = np.searchsorted(rs, y)
+        if 0 < i < len(rs) and rs[i] - rs[i - 1] <= bridge:
+            ok += 1
+    return med, ok / len(gt)
 
 
 def match(rows, cols, ok):
@@ -151,7 +170,7 @@ def decode(prob, embs, k, x0, y0, pthr, wskip=None, gmax=30, rounds=0):
     out = []
     taken = [set() for _ in range(prob.shape[0])]
     for j in range(k):
-        out.append(_one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax))
+        out.append(_one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax))  # noqa
     # ★ ПЕРЕКЛАДКА (координатный спуск): путь по очереди освобождает свои пики и прокладывается заново при занятых
     #   остальных — жадный порядок перестаёт быть окончательным
     for _ in range(rounds):
@@ -200,13 +219,13 @@ def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
         for t in range(1, len(rows)):
             dy = max(1, rows[t] - rows[t - 1])
             jump = np.abs(cands[t][:, None] - X[None, :]) / dy
-            tot = D[None, :] + WJUMP * jump
+            tot = D[None, :] + a.hjump * jump
             arg = tot.argmin(1)
             Dp = locs[t] + tot[np.arange(len(cands[t])), arg]
             # удержание — только если своей кривой в строке нет (ни одного доступного пика в 3·dy + 3 px от позиции):
             #   слабый, но живой пик своей кривой обязан быть взят (иначе путь «удерживается» на бледных участках)
             near = np.abs(cands[t][None, :] - X[:, None]).min(1) if len(cands[t]) else np.full(len(X), np.inf)
-            hold_ok = np.flatnonzero((G + dy <= gmax) & (near > 3 * dy + 3))
+            hold_ok = np.flatnonzero((G + dy <= gmax) & (near > a.near * dy + a.near))
             if len(hold_ok):
                 hc = D[hold_ok] + wskip * dy
                 keep = hold_ok[np.argsort(hc)[:Hmax]]
@@ -236,7 +255,7 @@ for w in a.wskip:
     VARS += [(f"удержание {w} (0.6)", 0.6, w, 0), (f"удержание {w} + порог 0.3", 0.3, w, 0)]
     if a.rounds:
         VARS += [(f"удержание {w} + перекладка {a.rounds}", 0.6, w, a.rounds)]
-C = Counter(); PAR = Counter(); REC = []
+C = Counter(); PAR = Counter(); REC = []; DIAG = []
 files = sorted(Path(a.cache).glob("*.pkl"))[a.offset::a.every]
 if a.parity_cache:
     files = [Path(a.cache) / f.name for f in sorted(Path(a.parity_cache).glob("*.pkl"))]
@@ -286,6 +305,19 @@ for fi, f in enumerate(files, 1):
             ok = {(g, i): hon(t, G[g]) for g in gs for i, t in enumerate(trs)}
             mt = match(gs, list(range(len(trs))), ok)
             res[name] = set(mt)
+            if a.diag and ws is not None:
+                for g in gs:
+                    if g in mt:
+                        continue
+                    best = None
+                    for t in trs:
+                        m_, c_ = mc(t, G[g])
+                        if m_ is None:
+                            continue
+                        # лучший — ближайший по медиане среди путей, державших ≥ 30 общих строк
+                        if best is None or m_ < best[0]:
+                            best = (m_, c_)
+                    DIAG.append((name, cand_before[g], best))
             if a.parity_cache and ws == a.wskip[0] and pthr == 0.6 and rr == 0:
                 pc = pickle.load(open(Path(a.parity_cache) / f.name, "rb"))
                 palt = [un(t) for L, t in pc["alt"] if L.track_index == ti]
@@ -314,3 +346,16 @@ for name, _, _, _ in VARS:
     if a.only and a.only not in name and not name.startswith("V0"):
         continue
     print(f"   {name:<32} честных 1:1 {C[(name, 'все')]:>5} ({C[(name, 'все')] - base:+d}); из кривых без кандидата — {C[(name, 'без кандидата')]}")
+if a.diag:
+    for name in sorted({d[0] for d in DIAG}):
+        D = [d for d in DIAG if d[0] == name]
+        nb = [d[2] for d in D if d[2] is not None]
+        med = np.array([b[0] for b in nb]); cov = np.array([b[1] for b in nb])
+        print(f"\n★ НЕ ВЗЯТЫ вариантом «{name}»: {len(D)} (без общего пути {len(D) - len(nb)})")
+        if len(nb):
+            print(f"   лучший путь: медиана ≤ 3 px, но покрытие < 0.9 — {int(np.sum((med <= 3) & (cov < 0.9)))}; "
+                  f"медиана 3–10 px — {int(np.sum((med > 3) & (med <= 10)))}; 10–50 — {int(np.sum((med > 10) & (med <= 50)))}; "
+                  f"> 50 — {int(np.sum(med > 50))}")
+            m3 = (med <= 3) & (cov < 0.9)
+            if m3.any():
+                print(f"   у «рядом, но коротко»: покрытие — медиана {np.median(cov[m3]):.2f}")
