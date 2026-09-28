@@ -33,6 +33,9 @@ ap.add_argument("--wskip", type=float, nargs="+", default=[0.5])
 ap.add_argument("--gmax", type=int, default=30)
 ap.add_argument("--rounds", type=int, default=0, help="кругов перекладки путей (0 — без варианта)")
 ap.add_argument("--hjump", type=float, default=0.15, help="цена прыжка В ВАРИАНТАХ С УДЕРЖАНИЕМ (V0 — всегда прод 0.15)")
+ap.add_argument("--occl", action="store_true", help="§6.244: варианты «удержание-заслон W» — удерживаться можно, только если рядом с позицией ЗАНЯТЫЙ пик прежнего пути")
+ap.add_argument("--strict", action="store_true", help="§6.244: печатать и строгий счёт — сырое покрытие ≥ 0.9 без моста (редкая трасса проигрывает в emit)")
+ap.add_argument("--refine", type=int, default=0, help="§6.244: варианты «удержание W + уточнение x» — центр тяжести карты / темноты в ±R px (0 — без)")
 ap.add_argument("--pathstats", action="store_true", help="признаки уверенности каждого пути (V0 и удержание) и честен ли он — AUC")
 ap.add_argument("--kplus", type=int, default=0, help="вариант «удержание W + K+N путей» (0 — без варианта)")
 ap.add_argument("--diag", action="store_true", help="по НЕвзятым вариантом кривым — медиана и покрытие лучшего пути")
@@ -133,7 +136,7 @@ def maps(rgb, track, ck, y0, y1):
             embs[:, v0 - y0:v1 - y0, wx0:wx1] = ee[:, v0 - gy:v1 - gy, wx0 - cx0:wx1 - cx0]
     if embs is None:
         return None
-    return prob, embs, x0, y0
+    return prob, embs, x0, y0, band
 
 
 def peaks_of(prob, k, pthr):
@@ -165,6 +168,23 @@ def protos(prob, embs, peaks, k):
     return mu
 
 
+def refine_x(trs, W, x0, y0, r):
+    """§6.244: x каждой строки трассы → центр тяжести весов W (карта или темнота) в ±r px от выбранного пика."""
+    out = []
+    H, Wd = W.shape
+    for t in trs:
+        u = {}
+        for y, x in t.items():
+            i = y - y0; c = int(round(x - x0))
+            lo, hi = max(0, c - r), min(Wd, c + r + 1)
+            w = W[i, lo:hi].astype(np.float64) if 0 <= i < H and hi > lo else None
+            if w is None or w.sum() <= 0:
+                u[y] = x; continue
+            u[y] = float(x0 + lo + (w * np.arange(hi - lo)).sum() / w.sum())
+        out.append(u)
+    return out
+
+
 def decode(prob, embs, k, x0, y0, pthr, wskip=None, gmax=30, rounds=0):
     """wskip=None — ТОЧНАЯ копия прод-Витерби; иначе — с состоянием удержания."""
     peaks = peaks_of(prob, k, pthr)
@@ -181,6 +201,9 @@ def decode(prob, embs, k, x0, y0, pthr, wskip=None, gmax=30, rounds=0):
                 taken[yy - y0].discard(int(round(xx - x0)))
             out[j] = _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax)
     return out
+
+
+HOLD_MODE = ["near"]
 
 
 def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
@@ -227,7 +250,15 @@ def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
             # удержание — только если своей кривой в строке нет (ни одного доступного пика в 3·dy + 3 px от позиции):
             #   слабый, но живой пик своей кривой обязан быть взят (иначе путь «удерживается» на бледных участках)
             near = np.abs(cands[t][None, :] - X[:, None]).min(1) if len(cands[t]) else np.full(len(X), np.inf)
-            hold_ok = np.flatnonzero((G + dy <= gmax) & (near > a.near * dy + a.near))
+            cond = (G + dy <= gmax) & (near > a.near * dy + a.near)
+            if HOLD_MODE[0] == "occl":
+                # ★ §6.244: удержание — только если своя кривая ЗАКРЫТА прежним путём: рядом с позицией есть ЗАНЯТЫЙ пик.
+                #   Прежняя редакция («рядом нет доступного пика») разрешала удержание на крутом участке своей кривой —
+                #   трасса становилась редкой (сырое покрытие 0.1–0.5) и проигрывала слот в emit (A/B −97).
+                tk = np.fromiter(taken[rows[t]], float) if taken[rows[t]] else None
+                occ = (np.abs(tk[None, :] - X[:, None]).min(1) <= a.near * dy + a.near) if tk is not None else np.zeros(len(X), bool)
+                cond &= occ
+            hold_ok = np.flatnonzero(cond)
             if len(hold_ok):
                 hc = D[hold_ok] + wskip * dy
                 keep = hold_ok[np.argsort(hc)[:Hmax]]
@@ -259,6 +290,10 @@ for w in a.wskip:
         VARS += [(f"удержание {w} + перекладка {a.rounds}", 0.6, w, a.rounds)]
     if a.kplus:
         VARS += [(f"удержание {w} + K+{a.kplus}", 0.6, w, -a.kplus)]     # отрицательный rr = добавка к K
+    if a.occl:
+        VARS += [(f"удержание-заслон {w} (0.6)", 0.6, w, 0)]
+    if a.refine:
+        VARS += [(f"удержание {w} + центроид карты ±{a.refine}", 0.6, w, 0), (f"удержание {w} + центроид темноты ±{a.refine}", 0.6, w, 0)]
 C = Counter(); PAR = Counter(); REC = []; DIAG = []; PST = []
 files = sorted(Path(a.cache).glob("*.pkl"))[a.offset::a.every]
 if a.parity_cache:
@@ -299,14 +334,22 @@ for fi, f in enumerate(files, 1):
         mp = maps(rgb, tracks[ti], ck, y0, y1)
         if mp is None:
             continue
-        prob, embs, x0, py0 = mp
+        prob, embs, x0, py0, band = mp
         cand_before = {g: any(hon(t, G[g]) for t in T) for g in gs}
         res = {}
         for name, pthr, ws, rr in VARS:
             if a.only and a.only not in name and not name.startswith("V0"):
                 res[name] = set(); continue
+            HOLD_MODE[0] = "occl" if "заслон" in name else "near"
             trs = [t for t in decode(prob, embs, K + max(0, -rr), x0, py0, pthr, ws, a.gmax, max(0, rr)) if len(t) >= 30]
+            if "центроид карты" in name:
+                trs = refine_x(trs, prob, x0, py0, a.refine)
+            elif "центроид темноты" in name:
+                trs = refine_x(trs, band[py0:py0 + prob.shape[0]], x0, py0, a.refine)     # `_band` — полная высота листа
             ok = {(g, i): hon(t, G[g]) for g in gs for i, t in enumerate(trs)}
+            if a.strict:
+                oks = {(g, i): hon(t, G[g], bridge=1) for g in gs for i, t in enumerate(trs)}
+                C[(name, "строго")] += len(match(gs, list(range(len(trs))), oks))
             mt = match(gs, list(range(len(trs))), ok)
             res[name] = set(mt)
             if a.pathstats:
@@ -358,6 +401,8 @@ base = C[(VARS[0][0], "все")]
 for name, _, _, _ in VARS:
     if a.only and a.only not in name and not name.startswith("V0"):
         continue
+    if a.strict:
+        print(f"   {name:<32} строго (без моста, сырое покрытие ≥ 0.9): {C[(name, 'строго')]}")
     print(f"   {name:<32} честных 1:1 {C[(name, 'все')]:>5} ({C[(name, 'все')] - base:+d}); из кривых без кандидата — {C[(name, 'без кандидата')]}")
 if a.diag:
     for name in sorted({d[0] for d in DIAG}):
