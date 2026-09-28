@@ -284,6 +284,8 @@ def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
 
 
 VARS = [("V0 прод (0.6, жадный)", 0.6, None, 0), ("порог 0.3", 0.3, None, 0)]
+if a.kplus:                                # §6.244: K+N и без удержания (прод-Витерби, лишний путь)
+    VARS += [(f"V0 + K+{a.kplus}", 0.6, None, -a.kplus)]
 for w in a.wskip:
     VARS += [(f"удержание {w} (0.6)", 0.6, w, 0), (f"удержание {w} + порог 0.3", 0.3, w, 0)]
     if a.rounds:
