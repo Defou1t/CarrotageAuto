@@ -29,7 +29,8 @@ import numpy as np
 from dataset_build import find_image
 
 ap = argparse.ArgumentParser()
-ap.add_argument("cmd", choices=["build", "replay"])
+ap.add_argument("cmd", choices=["build", "replay", "upgrade", "redec"])
+ap.add_argument("--src", default="", help="§6.247 upgrade/redec: исходный кэш (для upgrade — v1, для redec — v2)")
 ap.add_argument("--ts", default=r"F:/nds/output/taskS")
 ap.add_argument("--sheets", required=True, help="список листов (имена nlgx), относительно --ts или абсолютный")
 ap.add_argument("--cache", default=r"F:/nds/output/taskS/tcache")
@@ -119,7 +120,10 @@ def cmd_build():
             alt_gated=bool(getattr(traces, "alt_gated", True)),
             alt_conf=getattr(traces, "alt_conf", None),       # §6.240 (кэши до 27.09 — без него; тогда сайдкар `--conf`)
             frame=sheet.frame, stem=stem, image=str(image), frame_nlgx=str(frame_nlgx),
-            trace_knobs=dict(TRACE_KNOBS))
+            trace_knobs=dict(TRACE_KNOBS),
+            # ★ §6.247 (кэш v2): всё, что берёт `rowdec.trace_auto` из листа, — для пересчёта ОДНОГО декодера (`redec`)
+            lines=list(sheet.lines), k_slots=dict(getattr(sheet, "k_slots", None) or {}),
+            meta=getattr(sheet, "meta", None))
         return {}
     E.emit = fake_emit                       # pipeline зовёт emit_mod.emit — перехват без правки прод-кода
     if a.fast:
@@ -288,4 +292,109 @@ def cmd_replay():
         sys.exit(4)
 
 
-cmd_build() if a.cmd == "build" else cmd_replay()
+def cmd_upgrade():
+    """§6.247: кэш v1 → v2 без ведения. Конвейер идёт до понимания листа (U0/U1, K слотов), ведение подменяется пустым —
+    берутся `lines`, `k_slots`, `meta`; трассы, декодер и остальное — из исходного кэша как есть. Понимание детерминировано,
+    поэтому поля те же, что дала бы полная сборка (сверяется `redec` без правок против декодера исходного кэша)."""
+    from auto import pipeline as P, trace2d as T2
+    from auto.config import Config
+    SRCC = Path(a.src)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    grab = {}
+    orig = T2.trace_auto
+
+    def fake_trace(rgb, sheet, p=None):
+        grab["sheet"] = sheet
+        raise _Stop()
+
+    class _Stop(Exception):
+        pass
+    T2.trace_auto = fake_trace
+    P.trace2d.trace_auto = fake_trace
+    done = skip = fail = 0
+    for n in sheet_list():
+        dst = CACHE / (sheet_dir(n) + ".pkl"); src = SRCC / (sheet_dir(n) + ".pkl")
+        if dst.exists():
+            skip += 1; continue
+        if not src.exists():
+            fail += 1; print(f"  {n.stem[:44]} нет в исходном кэше"); continue
+        c = pickle.load(open(src, "rb"))
+        cfg = Config()
+        for k, v in c["trace_knobs"].items():
+            setattr(cfg.cv, k, v)
+        cfg.out = CACHE / "_scratch"
+        grab.clear()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                P.run(c["image"], frame_nlgx=c["frame_nlgx"], cfg=cfg, stages=False)
+        except _Stop:
+            pass
+        except Exception as e:
+            fail += 1; print(f"  {n.stem[:44]} ПАДЕНИЕ {type(e).__name__}: {e}"); continue
+        sh = grab.get("sheet")
+        if sh is None:
+            fail += 1; continue
+        c.update(lines=list(sh.lines), k_slots=dict(getattr(sh, "k_slots", None) or {}), meta=getattr(sh, "meta", None))
+        tmp = dst.with_suffix(".tmp"); pickle.dump(c, open(tmp, "wb"), protocol=4); tmp.replace(dst)
+        done += 1
+        if a.max_hours and (time.time() - T0) / 3600 > a.max_hours:
+            print("★ ПАРТИЯ ОКОНЧЕНА — выхожу кодом 75"); sys.exit(75)
+    T2.trace_auto = orig
+    print(f"★ UPGRADE: дополнено {done}, уже было {skip}, ошибок {fail}")
+    if fail:
+        sys.exit(3)
+
+
+def cmd_redec():
+    """§6.247: пересчитать ОДИН декодер по кэшу v2 прод-кодом (`rowdec.trace_auto`) с ручками `--knob`; прод-путь, рамка,
+    всё прочее — из исходного кэша. Решение «вести ли декодер» — как в `trace2d.trace_auto` (предгейт / slot_all)."""
+    from types import SimpleNamespace
+    from auto import rowdec as RD, trace2d as T2, imaging as im, frame as FR
+    from auto.config import Config
+    SRCC = Path(a.src)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    done = skip = fail = v1 = 0
+    for n in sheet_list():
+        dst = CACHE / (sheet_dir(n) + ".pkl"); src = SRCC / (sheet_dir(n) + ".pkl")
+        if dst.exists():
+            skip += 1; continue
+        if not src.exists():
+            fail += 1; print(f"  {n.stem[:44]} нет в исходном кэше"); continue
+        c = pickle.load(open(src, "rb"))
+        if "lines" not in c:
+            v1 += 1; fail += 1; print(f"  {n.stem[:44]} кэш v1 — сначала upgrade"); continue
+        knobs = dict(c["trace_knobs"]); knobs.update({k: v for k, v in TRACE_KNOBS.items() if k not in (
+            "row_decoder", "rowdec_wellmap", "rowdec_slot_all", "rowdec_slot_len") or k not in knobs})
+        cfg = Config()
+        for k, v in knobs.items():
+            setattr(cfg.cv, k, v)
+        p = cfg.cv
+        sheet = SimpleNamespace(lines=c["lines"], frame=c["frame"], meta=c["meta"], k_slots=c["k_slots"])
+        try:
+            rgb = im.load_rgb(c["image"])
+            if getattr(c["frame"], "row_shift", None) is not None:
+                rgb = FR.apply_row_shift(rgb, c["frame"].row_shift)
+            slot_len = float(getattr(p, "rowdec_slot_len", 0.0) or 0.0)
+            gated = T2._pregate_ok(sheet, p)
+            alt = None
+            if getattr(p, "row_decoder", "") and (gated or (slot_len > 0 and getattr(p, "rowdec_slot_all", False))):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    alt = RD.trace_auto(rgb, sheet, p)
+        except Exception as e:
+            fail += 1; print(f"  {n.stem[:44]} ПАДЕНИЕ {type(e).__name__}: {e}"); continue
+        new = dict(c)
+        new["alt"] = None if alt is None else [(L, pack(tr)) for L, tr in alt]
+        new["alt_conf"] = getattr(alt, "conf", None) if alt is not None else None
+        new["alt_gated"] = bool(gated)
+        new["trace_knobs"] = knobs
+        tmp = dst.with_suffix(".tmp"); pickle.dump(new, open(tmp, "wb"), protocol=4); tmp.replace(dst)
+        done += 1
+        del rgb
+        if a.max_hours and (time.time() - T0) / 3600 > a.max_hours:
+            print("★ ПАРТИЯ ОКОНЧЕНА — выхожу кодом 75"); sys.exit(75)
+    print(f"★ REDEC: пересчитано {done}, уже было {skip}, ошибок {fail} (кэш v1 без полей листа: {v1}); ручки {TRACE_KNOBS}")
+    if fail:
+        sys.exit(3)
+
+
+{"build": cmd_build, "replay": cmd_replay, "upgrade": cmd_upgrade, "redec": cmd_redec}[a.cmd]()

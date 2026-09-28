@@ -6,7 +6,10 @@
 #   режим — параметр `-Mode` (умолчание — нынешний прод с вето); сайдкар уверенности `conf_<кэш>.pkl` подаётся повтору, если
 #   есть; приговор принимается только с кодом 0 (принять) или 2 (отклонить).
 param([Parameter(Mandatory=$true)][string[]]$Knob, [Parameter(Mandatory=$true)][string]$Tag, [string]$Base = 'tcache',
-      [string]$Mode = 'N:rdpick=3,slotlen=0.18,slotall=1,slotgeom=1,slotfill=1,confveto=0.8')
+      [string]$Mode = 'N:rdpick=3,slotlen=0.18,slotall=1,slotgeom=1,slotfill=1,confveto=0.8',
+      [string]$Redec = '')
+# ★ §6.247: -Redec <кэш v2> — новый кэш строится пересчётом ОДНОГО декодера (`_trace_cache.py redec --src`), а не полной
+#   сборкой: только для ручек декодера (прод-путь берётся из кэша как есть). База v2 — `upgrade` от прод-кэша.
 $py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
 $rnd='F:/nds/Auto/digitizer/rnd'
 $ts='F:/nds/output/taskS'
@@ -25,7 +28,7 @@ function RunPy([string[]]$A, [string]$Out) {
   $null = $p.Handle; $p.WaitForExit(); return $p.ExitCode
 }
 New-Item -ItemType Directory -Force -Path $L | Out-Null
-Say "старт A/B ручек ведения $($Knob -join ' ') (метка $Tag, база $Base, режим $Mode)"
+Say "старт A/B ручек ведения $($Knob -join ' ') (метка $Tag, база $Base, режим $Mode$(if ($Redec) { ", пересчёт декодера от $Redec" }))"
 $cache = "$ts/tcache_$Tag"
 New-Item -ItemType Directory -Force -Path "$cache/logs" | Out-Null
 $kargs = @(); foreach ($k in $Knob) { $kargs += @('--knob', $k) }
@@ -41,13 +44,14 @@ while ($done.Count -lt $N) {
       elseif ($p.ExitCode -eq 64) { Say "⛔ кэш: неверная ручка (код 64) — см. $cache/logs/sh$i.r$($runs[$i]).err; A/B остановлен"; Say "=== KNOBAB DONE ==="; exit 2 }
       else { Say "кэш: шард $i вышел кодом $($p.ExitCode) — перезапуск" }
     } else {
-      $o = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like "*_trace_cache.py build*" -and $_.CommandLine -like "*--shard $i/$N*" -and $_.CommandLine -like "*tcache_$Tag *" })
+      $o = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { ($_.CommandLine -like "*_trace_cache.py build*" -or $_.CommandLine -like "*_trace_cache.py redec*") -and $_.CommandLine -like "*--shard $i/$N*" -and $_.CommandLine -like "*tcache_$Tag *" })
       if ($o.Count -gt 0) { $live[$i] = Get-Process -Id $o[0].ProcessId; $adopted[$i]=$true; continue }
     }
     if (-not $runs.ContainsKey($i)) { $runs[$i]=0 }
     if ($runs[$i] -ge 40) { $done[$i]=$true; Say "⛔ кэш: шард $i — 40 запусков исчерпаны"; continue }
     $runs[$i]++; $r=$runs[$i]
-    $ar=@('_trace_cache.py','build','--sheets','tcache_sheets.txt','--cache',$cache,'--shard',"$i/$N",'--max-hours','6','--fast') + $kargs
+    if ($Redec) { $ar=@('_trace_cache.py','redec','--src',"$ts/$Redec",'--sheets','tcache_sheets.txt','--cache',$cache,'--shard',"$i/$N",'--max-hours','6') + $kargs }
+    else { $ar=@('_trace_cache.py','build','--sheets','tcache_sheets.txt','--cache',$cache,'--shard',"$i/$N",'--max-hours','6','--fast') + $kargs }
     $live[$i]=Start-Process -FilePath $py -ArgumentList $ar -WorkingDirectory $rnd -WindowStyle Hidden `
       -RedirectStandardOutput "$cache/logs/sh$i.r$r.log" -RedirectStandardError "$cache/logs/sh$i.r$r.err" -PassThru
     $null = $live[$i].Handle
