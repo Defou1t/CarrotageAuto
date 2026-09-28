@@ -33,6 +33,7 @@ ap.add_argument("--wskip", type=float, nargs="+", default=[0.5])
 ap.add_argument("--gmax", type=int, default=30)
 ap.add_argument("--rounds", type=int, default=0, help="кругов перекладки путей (0 — без варианта)")
 ap.add_argument("--hjump", type=float, default=0.15, help="цена прыжка В ВАРИАНТАХ С УДЕРЖАНИЕМ (V0 — всегда прод 0.15)")
+ap.add_argument("--emb", action="store_true", help="§6.246: варианты эмбеддингов личности: K ≥ 2, вес 0.5 / 2, старт прототипов по x")
 ap.add_argument("--occl", action="store_true", help="§6.244: варианты «удержание-заслон W» — удерживаться можно, только если рядом с позицией ЗАНЯТЫЙ пик прежнего пути")
 ap.add_argument("--strict", action="store_true", help="§6.244: печатать и строгий счёт — сырое покрытие ≥ 0.9 без моста (редкая трасса проигрывает в emit)")
 ap.add_argument("--refine", type=int, default=0, help="§6.244: варианты «удержание W + уточнение x» — центр тяжести карты / темноты в ±R px (0 — без)")
@@ -50,6 +51,7 @@ SRC = {}
 for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx"):
     SRC.setdefault(q.stem, q)
 WJUMP, WEMB, EMB_MIN_K = 0.15, 1.0, 3
+EMB = {"min_k": EMB_MIN_K, "w": WEMB, "init": "rand"}      # §6.246: варианты эмбеддингов личности (V0 — прод-умолчания)
 
 
 def un(t):
@@ -152,14 +154,22 @@ def peaks_of(prob, k, pthr):
 
 
 def protos(prob, embs, peaks, k):
-    if k < EMB_MIN_K:
+    if k < EMB["min_k"]:
         return None
     pts = [(i, x) for i in range(0, prob.shape[0], 7) for x in peaks[i]]
     if len(pts) < k * 8:
         return None
     Mx = np.stack([embs[:, i, x] for i, x in pts])
-    rng = np.random.default_rng(0)
-    mu = Mx[rng.choice(len(Mx), k, replace=False)]
+    mu = None
+    if EMB["init"] == "x":
+        # §6.246: старт прототипов — пики опорной строки, где их ровно k (ближайшая к середине), по порядку x
+        cand = [i for i in range(prob.shape[0]) if len(peaks[i]) == k]
+        if cand:
+            i0 = min(cand, key=lambda i: abs(i - prob.shape[0] // 2))
+            mu = np.stack([embs[:, i0, x] for x in sorted(peaks[i0])]).astype(Mx.dtype)
+    if mu is None:
+        rng = np.random.default_rng(0)
+        mu = Mx[rng.choice(len(Mx), k, replace=False)]
     for _ in range(12):
         lab = ((Mx[:, None, :] - mu[None]) ** 2).sum(-1).argmin(1)
         for j in range(k):
@@ -216,7 +226,7 @@ def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
             loc = -np.log(np.clip(prob[i, idx], 1e-6, 1.0))
             if mu is not None:
                 E = np.stack([embs[:, i, x] for x in idx])
-                loc = loc + WEMB * np.sqrt(((E - mu[j]) ** 2).sum(-1))
+                loc = loc + EMB["w"] * np.sqrt(((E - mu[j]) ** 2).sum(-1))
             rows.append(i); cands.append(idx.astype(float)); locs.append(loc)
         if len(rows) < 30:
             return {}
@@ -284,6 +294,10 @@ def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
 
 
 VARS = [("V0 прод (0.6, жадный)", 0.6, None, 0), ("порог 0.3", 0.3, None, 0)]
+EMBV = {}
+if a.emb:                                  # §6.246
+    for nm_, cfg_ in (("эмб K≥2", {"min_k": 2}), ("эмб вес 0.5", {"w": 0.5}), ("эмб вес 2", {"w": 2.0}), ("эмб старт по x", {"init": "x"})):
+        VARS += [(nm_, 0.6, None, 0)]; EMBV[nm_] = cfg_
 if a.kplus:                                # §6.244: K+N и без удержания (прод-Витерби, лишний путь)
     VARS += [(f"V0 + K+{a.kplus}", 0.6, None, -a.kplus)]
 for w in a.wskip:
@@ -343,6 +357,7 @@ for fi, f in enumerate(files, 1):
             if a.only and a.only not in name and not name.startswith("V0"):
                 res[name] = set(); continue
             HOLD_MODE[0] = "occl" if "заслон" in name else "near"
+            EMB.update({"min_k": EMB_MIN_K, "w": WEMB, "init": "rand"}); EMB.update(EMBV.get(name, {}))
             trs = [t for t in decode(prob, embs, K + max(0, -rr), x0, py0, pthr, ws, a.gmax, max(0, rr)) if len(t) >= 30]
             if "центроид карты" in name:
                 trs = refine_x(trs, prob, x0, py0, a.refine)
