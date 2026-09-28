@@ -43,6 +43,7 @@ ap.add_argument("--diag", action="store_true", help="по НЕвзятым ва�
 ap.add_argument("--near", type=float, default=3.0, help="радиус «своя кривая есть»: удержание, если пиков нет в near·dy + near px")
 ap.add_argument("--only", default="", help="считать только варианты, чьё имя содержит эту подстроку (V0 всегда)")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/dec_joint.pkl")
+ap.add_argument("--parity-variant", default="", help="§6.246: сверять кэш `--parity-cache` с вариантом этого имени (иначе — удержание W)")
 ap.add_argument("--parity-cache", default="", help="сверка: кэш, собранный с `--knob rowdec_hold=W` (W = первый --wskip) — трассы декодера обязаны совпасть с вариантом «удержание W (0.6)»")
 a = ap.parse_args()
 TS = Path(a.ts); P = DEFAULT.cv
@@ -296,7 +297,8 @@ def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
 VARS = [("V0 прод (0.6, жадный)", 0.6, None, 0), ("порог 0.3", 0.3, None, 0)]
 EMBV = {}
 if a.emb:                                  # §6.246
-    for nm_, cfg_ in (("эмб K≥2", {"min_k": 2}), ("эмб вес 0.5", {"w": 0.5}), ("эмб вес 2", {"w": 2.0}), ("эмб старт по x", {"init": "x"})):
+    for nm_, cfg_ in (("эмб K≥2", {"min_k": 2}), ("эмб вес 0.5", {"w": 0.5}), ("эмб вес 2", {"w": 2.0}), ("эмб старт по x", {"init": "x"}),
+                      ("эмб старт по x + вес 0.5", {"init": "x", "w": 0.5}), ("эмб старт по x + вес 0.7", {"init": "x", "w": 0.7})):
         VARS += [(nm_, 0.6, None, 0)]; EMBV[nm_] = cfg_
 if a.kplus:                                # §6.244: K+N и без удержания (прод-Витерби, лишний путь)
     VARS += [(f"V0 + K+{a.kplus}", 0.6, None, -a.kplus)]
@@ -391,7 +393,8 @@ for fi, f in enumerate(files, 1):
                         if best is None or m_ < best[0]:
                             best = (m_, c_)
                     DIAG.append((name, cand_before[g], best))
-            if a.parity_cache and ws == a.wskip[0] and pthr == 0.6 and rr == (-a.kplus if a.kplus else 0):
+            if a.parity_cache and ((name == a.parity_variant) if a.parity_variant else
+                                   (ws == a.wskip[0] and pthr == 0.6 and rr == (-a.kplus if a.kplus else 0))):
                 pc = pickle.load(open(Path(a.parity_cache) / f.name, "rb"))
                 palt = [un(t) for L, t in pc["alt"] if L.track_index == ti]
                 PAR["трасс сверочного кэша"] += len(palt)

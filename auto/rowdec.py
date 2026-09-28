@@ -271,12 +271,21 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     # (§6.140: K=1 69.7 → 72.7, K=2 54.3 → 56.5 после выключения).
     use_emb = k >= emb_min_k
     mu = None
+    # ★ §6.246: старт прототипов личности (`cv.rowdec_emb_init`: "rand" = прежний случайный, прод бит-в-бит; "x" — пики
+    #   опорной строки, где их ровно k, ближайшей к середине окна, по порядку x) и вес эмбеддинга (`cv.rowdec_emb_w`)
+    wemb = float(getattr(p, "rowdec_emb_w", wemb) if getattr(p, "rowdec_emb_w", None) is not None else wemb)
     if use_emb:
         pts = [(i, x) for i in range(0, prob.shape[0], 7) for x in peaks[i]]
         if len(pts) >= k * 8:
             M = np.stack([embs[:, i, x] for i, x in pts])
-            rng = np.random.default_rng(0)
-            mu = M[rng.choice(len(M), k, replace=False)]
+            if (getattr(p, "rowdec_emb_init", "rand") or "rand") == "x":
+                cand = [i for i in range(prob.shape[0]) if len(peaks[i]) == k]
+                if cand:
+                    i0 = min(cand, key=lambda i: abs(i - prob.shape[0] // 2))
+                    mu = np.stack([embs[:, i0, x] for x in sorted(peaks[i0])]).astype(M.dtype)
+            if mu is None:
+                rng = np.random.default_rng(0)
+                mu = M[rng.choice(len(M), k, replace=False)]
             for _ in range(12):
                 lab = ((M[:, None, :] - mu[None]) ** 2).sum(-1).argmin(1)
                 for j in range(k):
