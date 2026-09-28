@@ -171,7 +171,7 @@ def protos(prob, embs, peaks, k):
     if mu is None:
         rng = np.random.default_rng(0)
         mu = Mx[rng.choice(len(Mx), k, replace=False)]
-    for _ in range(12):
+    for _ in range(EMB.get("iters", 12)):
         lab = ((Mx[:, None, :] - mu[None]) ** 2).sum(-1).argmin(1)
         for j in range(k):
             if (lab == j).any():
@@ -300,7 +300,9 @@ if a.emb:                                  # §6.246
     for nm_, cfg_ in (("эмб K≥2", {"min_k": 2}), ("эмб вес 0.5", {"w": 0.5}), ("эмб вес 2", {"w": 2.0}), ("эмб старт по x", {"init": "x"}),
                       ("эмб старт по x + вес 0.5", {"init": "x", "w": 0.5}), ("эмб старт по x + вес 0.7", {"init": "x", "w": 0.7}),
                       ("эмб2 старт по x + вес 0.6", {"init": "x", "w": 0.6}), ("эмб2 старт по x + вес 0.8", {"init": "x", "w": 0.8}),
-                      ("эмб2 K≥2 + старт по x + вес 0.7", {"init": "x", "w": 0.7, "min_k": 2})):
+                      ("эмб2 K≥2 + старт по x + вес 0.7", {"init": "x", "w": 0.7, "min_k": 2}),
+                      ("эмб3 старт по x + вес 0.7, 0 шагов", {"init": "x", "w": 0.7, "iters": 0}),
+                      ("эмб3 старт по x + вес 0.7, 3 шага", {"init": "x", "w": 0.7, "iters": 3})):
         VARS += [(nm_, 0.6, None, 0)]; EMBV[nm_] = cfg_
 if a.kplus:                                # §6.244: K+N и без удержания (прод-Витерби, лишний путь)
     VARS += [(f"V0 + K+{a.kplus}", 0.6, None, -a.kplus)]
@@ -361,7 +363,7 @@ for fi, f in enumerate(files, 1):
             if a.only and a.only not in name and not name.startswith("V0"):
                 res[name] = set(); continue
             HOLD_MODE[0] = "occl" if "заслон" in name else "near"
-            EMB.update({"min_k": EMB_MIN_K, "w": WEMB, "init": "rand"}); EMB.update(EMBV.get(name, {}))
+            EMB.update({"min_k": EMB_MIN_K, "w": WEMB, "init": "rand", "iters": 12}); EMB.update(EMBV.get(name, {}))
             trs = [t for t in decode(prob, embs, K + max(0, -rr), x0, py0, pthr, ws, a.gmax, max(0, rr)) if len(t) >= 30]
             if "центроид карты" in name:
                 trs = refine_x(trs, prob, x0, py0, a.refine)
