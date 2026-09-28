@@ -539,8 +539,13 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
             if nm_ in mapping and v is mapping[nm_]:
                 return "prod"
             return "dec" if id(v[1]) in _alt_ids else "prod"          # свободная линия добора (§6.229)
+        # §6.245: индексы ОБЕИХ версий слота (прод — в `traces`, декодер — в `alt`) — для разбора выбора версии по кэшу
+        _pidx = {id(t): i for i, (_, t) in enumerate(traces)}
+        _didx = {id(t): i for i, (_, t) in enumerate(alt or [])}
         for q in _slots:
             nm_ = q["name"]
+            q["pi"] = _pidx.get(id(mapping[nm_][1])) if nm_ in mapping else None
+            q["di"] = _didx.get(id(m_alt[nm_][1])) if nm_ in m_alt else None
             q["src"] = _src_of(nm_)
             if nm_ in _veto_nm:
                 q["veto"] = True
