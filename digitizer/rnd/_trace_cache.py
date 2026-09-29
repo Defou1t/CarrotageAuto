@@ -319,6 +319,9 @@ def cmd_upgrade():
         if not src.exists():
             fail += 1; print(f"  {n.stem[:44]} нет в исходном кэше"); continue
         c = pickle.load(open(src, "rb"))
+        if "lines" in c:                # уже v2 (собран кодом с 28.09) — копия как есть
+            tmp = dst.with_suffix(".tmp"); pickle.dump(c, open(tmp, "wb"), protocol=4); tmp.replace(dst)
+            done += 1; continue
         cfg = Config()
         for k, v in c["trace_knobs"].items():
             setattr(cfg.cv, k, v)

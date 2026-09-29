@@ -154,6 +154,9 @@ def peaks_of(prob, k, pthr):
     return out
 
 
+LINE_X = [None]      # §6.246: x-центры линий U1 трека (относительно x0), для старта «по линиям»
+
+
 def protos(prob, embs, peaks, k):
     if k < EMB["min_k"]:
         return None
@@ -162,7 +165,18 @@ def protos(prob, embs, peaks, k):
         return None
     Mx = np.stack([embs[:, i, x] for i, x in pts])
     mu = None
-    if EMB["init"] == "x":
+    if EMB["init"] == "lines" and LINE_X[0]:
+        # §6.246: прототип j — средний эмбеддинг пиков у x-центра линии U1 j (±8 px) по всей высоте; линий меньше k — добор
+        #   стартом по x ниже
+        lx = sorted(LINE_X[0])[:k]
+        got = []
+        for xc in lx:
+            E = [embs[:, i, x] for i in range(0, prob.shape[0], 7) for x in peaks[i] if abs(x - xc) <= 8]
+            if len(E) >= 8:
+                got.append(np.mean(np.stack(E), 0))
+        if len(got) == k:
+            mu = np.stack(got).astype(Mx.dtype)
+    if mu is None and EMB["init"] in ("x", "lines"):
         # §6.246: старт прототипов — пики опорной строки, где их ровно k (ближайшая к середине), по порядку x
         cand = [i for i in range(prob.shape[0]) if len(peaks[i]) == k]
         if cand:
@@ -302,7 +316,9 @@ if a.emb:                                  # §6.246
                       ("эмб2 старт по x + вес 0.6", {"init": "x", "w": 0.6}), ("эмб2 старт по x + вес 0.8", {"init": "x", "w": 0.8}),
                       ("эмб2 K≥2 + старт по x + вес 0.7", {"init": "x", "w": 0.7, "min_k": 2}),
                       ("эмб3 старт по x + вес 0.7, 0 шагов", {"init": "x", "w": 0.7, "iters": 0}),
-                      ("эмб3 старт по x + вес 0.7, 3 шага", {"init": "x", "w": 0.7, "iters": 3})):
+                      ("эмб3 старт по x + вес 0.7, 3 шага", {"init": "x", "w": 0.7, "iters": 3}),
+                      ("эмб4 старт по линиям + вес 0.7", {"init": "lines", "w": 0.7}),
+                      ("эмб4 старт по линиям + вес 0.7, 3 шага", {"init": "lines", "w": 0.7, "iters": 3})):
         VARS += [(nm_, 0.6, None, 0)]; EMBV[nm_] = cfg_
 if a.kplus:                                # §6.244: K+N и без удержания (прод-Витерби, лишний путь)
     VARS += [(f"V0 + K+{a.kplus}", 0.6, None, -a.kplus)]
@@ -357,6 +373,7 @@ for fi, f in enumerate(files, 1):
         if mp is None:
             continue
         prob, embs, x0, py0, band = mp
+        LINE_X[0] = [float(L.x_center) - x0 for L in lines]
         cand_before = {g: any(hon(t, G[g]) for t in T) for g in gs}
         res = {}
         for name, pthr, ws, rr in VARS:
