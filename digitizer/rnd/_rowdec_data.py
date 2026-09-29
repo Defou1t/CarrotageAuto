@@ -61,6 +61,7 @@ ap.add_argument("--cap-well", type=int, default=0, help="листов на ск�
 ap.add_argument("--pad", type=int, default=12, help="запас вокруг полосы трека, px")
 ap.add_argument("--row-step", type=int, default=1, help="прореживание строк таргета")
 ap.add_argument("--manifest", action="store_true")
+ap.add_argument("--check-struct", type=int, default=0, help="сверить struct_lean с im.structure_mask на N листах и выйти")
 # ★ §6.210: ПОЛОСА КАК НА ОТГРУЗКЕ. Кэш по осям эталона (`axes`) — вырезка вокруг экспертных слотов;
 #   прод режет весь трек U0 `[x_left, x_right]` (`rowdec.py:219`), и там чужой туши больше. Порог
 #   пиков 0.2 дал на кэше `axes` +68, на отгрузке −37 — стенд переоценивал расширение кандидатов.
@@ -120,6 +121,68 @@ def u0_tracks(nlgx, img=None, rgb=None):
     return [[int(t.x_left), int(t.x_right)] for t in fr.tracks]
 
 
+def struct_lean(rgb, p, strip=256, rows=4096):
+    """Бит-в-бит `im.structure_mask(rgb, p)` (сверка `--check-struct`), но по полосам. Прод держит около десятка
+    int32-копий листа: на листе 142k×2538 шард выборки дорос до 19.5 ГБ (29.09), лист 228k строк дал бы за 30.
+    Вертикальное открытие — по полосам СТОЛБЦОВ (кумсумма идёт вдоль столбца, столбцы независимы), горизонтальное —
+    по полосам СТРОК; расширение 3×3 — по всему листу в uint8, как в проде."""
+    import cv2
+    H, W = rgb.shape[:2]
+    Lh = int(p.struct_open_len)
+    Lv = max(Lh, int(p.struct_vert_frac * H))
+    v = im.value_channel(rgb)
+    paper = int(np.percentile(v[::4, ::4], 90))
+    v_hi = (min(int(p.grid_v_hi), max(int(p.dark_v) + 10, paper - 50))
+            if getattr(p, "grid_v_rel", True) else int(p.grid_v_hi))
+    d = (v < v_hi).astype(np.uint8)
+    s = np.empty((H, W), np.uint8)
+    for c0 in range(0, W, strip):
+        s[:, c0:c0 + strip] = im._open_1d(d[:, c0:c0 + strip], Lv, axis=0)
+    for y0 in range(0, H, rows):
+        s[y0:y0 + rows] |= im._open_1d(d[y0:y0 + rows], Lh, axis=1)
+    return cv2.dilate(s, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))) > 0
+
+
+def check_struct(n):
+    """Сверка `struct_lean` с продом: случайные бинарные поля (края полос, L больше полосы и листа) и n листов пулов
+    умеренного размера (≤ 60 Мпикс — прод-версия на них не раздувает память)."""
+    rng = np.random.default_rng(0)
+    for t in range(60):
+        h, w = int(rng.integers(1, 700)), int(rng.integers(1, 700))
+        d = (rng.random((h, w)) < rng.uniform(0.2, 0.95)).astype(np.uint8)
+        for L, ax in ((int(rng.integers(1, 2 * h + 2)), 0), (int(rng.integers(1, 2 * w + 2)), 1)):
+            ref = im._open_1d(d, L, axis=ax)
+            if ax == 0:
+                got = np.concatenate([im._open_1d(d[:, c:c + 37], L, axis=0) for c in range(0, w, 37)], 1)
+            else:
+                got = np.concatenate([im._open_1d(d[r:r + 41], L, axis=1) for r in range(0, h, 41)], 0)
+            assert np.array_equal(ref, got), (t, h, w, L, ax)
+    print("случайные поля: 120 из 120 совпали")
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    ok = 0
+    for f, q, well in sheet_index():
+        if ok >= n:
+            break
+        img = find_image(q)
+        if not img:
+            continue
+        with Image.open(img) as I:
+            w, h = I.size
+        if w * h > 60e6 or h < 5000:
+            continue
+        rgb = im.load_rgb(str(img))
+        a_ = im.structure_mask(rgb, DEFAULT.cv)
+        b_ = struct_lean(rgb, DEFAULT.cv)
+        eq = bool(np.array_equal(a_, b_))
+        print(f"  {q.name[:60]}  {w}×{h}: {'совпало' if eq else '⛔ РАСХОЖДЕНИЕ'} (структуры {a_.mean():.4f})")
+        if not eq:
+            sys.exit(2)
+        ok += 1
+        del rgb, a_, b_
+    print(f"листов: {ok} из {ok} совпали")
+
+
 def build_sheet(dump, nlgx, img):
     """→ list[dict] по ТРЕКАМ листа."""
     mo = extract(str(nlgx))
@@ -147,8 +210,12 @@ def build_sheet(dump, nlgx, img):
     # получены 86.4%, и сравнивать их было нельзя. Хуже: сетка и рамка попадали в обучение как тушь,
     # и голова вероятности выучила «где вообще тёмное» (замер: верный пик top-1 лишь у 23-32% строк,
     # p(верный) 0.61 против p(лучшего чужого) 0.68).
-    dark = np.clip((paper[:, None] - V.astype(np.float32)), 0, 255).astype(np.uint8)
-    dark[im.structure_mask(rgb, DEFAULT.cv)] = 0
+    # ★ 29.09: по полосам строк — поэлементно то же самое, но без трёх float32-копий листа.
+    dark = np.empty((H, V.shape[1]), np.uint8)
+    for y0 in range(0, H, 4096):
+        y1 = min(H, y0 + 4096)
+        dark[y0:y1] = np.clip((paper[y0:y1, None] - V[y0:y1].astype(np.float32)), 0, 255).astype(np.uint8)
+    dark[struct_lean(rgb, DEFAULT.cv)] = 0
 
     by_track = defaultdict(list)
     for nm in gts:
@@ -273,7 +340,9 @@ def manifest():
           f"({100*oof/max(1,rows+oof):.2f}%)")
 
 
-if a.manifest:
+if a.check_struct:
+    check_struct(a.check_struct)
+elif a.manifest:
     manifest()
 else:
     i, n = (int(v) for v in a.shard.split("/"))

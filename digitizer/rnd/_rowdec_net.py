@@ -66,6 +66,7 @@ ap.add_argument("--no-resume", action="store_true",
                      "долгое идёт этапами; снимок пишется КАЖДУЮ эпоху)")
 ap.add_argument("--force", action="store_true",
                 help="перезаписать существующий чекпойнт (по умолчанию ОТКАЗ, см. §6.141)")
+ap.add_argument("--check-cat", action="store_true", help="сверить склейку Cat с np.concatenate и выйти (обучения нет)")
 a = ap.parse_args()
 OUT = Path(a.out); OUT.mkdir(parents=True, exist_ok=True)
 DEV = "cuda" if torch.cuda.is_available() and torch.cuda.device_count() else "cpu"   # CUDA_VISIBLE_DEVICES="" → cpu
@@ -165,6 +166,75 @@ def emb_loss(emb, y, x=None, delta=1.5, n_bg=64):
     return (pull / max(1, n_pull)), (push / max(1, n_push)), (bg / max(1, n_bg))
 
 
+class Cat:
+    """Склейка memmap-частей БЕЗ копии в память (29.09, §6.248). `np.concatenate` держал все кропы в частной памяти
+    процесса: 104 тыс. кропов 256×512 — 13.6 ГБ, 116 тыс. — 15+ ГБ на всё обучение. Здесь X[b] собирает строки по
+    глобальным индексам из частей; кэш страниц ОС вытесняем (игра заберёт память, обучение лишь замедлится). Значения —
+    те же, что у склейки (сверка `--check-cat`)."""
+    def __init__(self, parts):
+        self.parts = parts
+        self.off = np.cumsum([0] + [int(p.shape[0]) for p in parts])
+        self.shape = (int(self.off[-1]),) + tuple(parts[0].shape[1:])
+        self.dtype = parts[0].dtype
+
+    def __len__(self):
+        return self.shape[0]
+
+    def _loc(self, i):
+        i = int(i)
+        if not 0 <= i < self.shape[0]:
+            raise IndexError(i)
+        k = int(np.searchsorted(self.off, i, side="right") - 1)
+        return k, i - int(self.off[k])
+
+    def __getitem__(self, b):
+        if isinstance(b, tuple):                    # Y[i, :, 0] — только с целым первым индексом
+            k, j = self._loc(b[0])
+            return np.asarray(self.parts[k][(j,) + b[1:]])
+        if isinstance(b, (int, np.integer)):
+            k, j = self._loc(b)
+            return np.asarray(self.parts[k][j])
+        b = np.asarray(b)
+        if b.dtype == bool or b.ndim != 1:
+            raise TypeError("Cat: только одномерный массив индексов")
+        if len(b) and (b.min() < 0 or b.max() >= self.shape[0]):
+            raise IndexError("Cat: индекс вне склейки")
+        k = np.searchsorted(self.off, b, side="right") - 1
+        out = np.empty((len(b),) + self.shape[1:], self.dtype)
+        for j in np.unique(k):
+            m = k == j
+            out[m] = self.parts[j][b[m] - self.off[j]]
+        return out
+
+
+def check_cat():
+    """Сверка Cat со склейкой: случайные части (включая пустые и из одной строки), случайные пачки через границы,
+    целые и кортежные индексы; плюс настоящие части `--crops` против прямого индекса части."""
+    rng = np.random.default_rng(0)
+    for t in range(200):
+        n = int(rng.integers(1, 6))
+        parts = [rng.random((int(rng.integers(0, 40)), 3, 2)).astype(np.float32) for _ in range(n)]
+        if sum(len(p) for p in parts) == 0:
+            continue
+        ref = np.concatenate(parts); c = Cat(parts)
+        assert c.shape == ref.shape
+        for _ in range(20):
+            b = rng.integers(0, len(ref), int(rng.integers(1, 30)))
+            assert np.array_equal(c[b], ref[b])
+        i = int(rng.integers(0, len(ref)))
+        assert np.array_equal(c[i], ref[i]) and np.array_equal(c[i, :, 0], ref[i, :, 0])
+    print("случайные склейки: 200 из 200 совпали")
+    xs = [np.load(f, mmap_mode="r") for f in sorted(Path(a.crops).glob("x_*of*.npy"))]
+    c = Cat(xs); off = c.off
+    for _ in range(50):
+        b = rng.integers(0, len(c), 24)
+        got = c[b]
+        for q, g in zip(b, got):
+            k = int(np.searchsorted(off, q, side="right") - 1)
+            assert np.array_equal(g, xs[k][q - off[k]])
+    print(f"настоящие части {a.crops}: {len(xs)} файлов, {len(c):,} кропов — 50 пачек по 24 совпали")
+
+
 def load(fold, folds):
     """Кропы + разбиение ПО СКВАЖИНАМ (§6.87: по листам модель учит бланк, а не правило)."""
     xs, ys, wells = [], [], []
@@ -177,7 +247,18 @@ def load(fold, folds):
             w += [t["well"]] * t["crops"]
         assert len(w) == X.shape[0], f"{tag}: манифест {len(w)} против кропов {X.shape[0]}"
         xs.append(X); ys.append(Y); wells += w
-    X = np.concatenate([np.asarray(v) for v in xs]); Y = np.concatenate([np.asarray(v) for v in ys])
+    X = Cat(xs); Y = Cat(ys)                        # ★ 29.09: без копии в память (см. Cat)
+    # прогрев кэша страниц ОС ПОСЛЕДОВАТЕЛЬНЫМ чтением: кропы на HDD (E:), а случайный доступ memmap по холодному файлу —
+    # десяток поисков головки на пачку. Частной памяти прогрев не берёт; вытесненное ОС дочитается случайно.
+    t0 = time.time(); nb = 0
+    for f in sorted(Path(a.crops).glob("[xy]_*of*.npy")):
+        with open(f, "rb") as fh:
+            while True:
+                buf = fh.read(64 << 20)
+                if not buf:
+                    break
+                nb += len(buf)
+    print(f"прогрев кэша: {nb / 2**30:.1f} ГБ за {time.time() - t0:.0f} с")
     wells = np.array(wells)
     uw = sorted(set(wells.tolist()))
     if a.folds_from:
@@ -308,4 +389,7 @@ if __name__ == "__main__":
     # тем самым КЛАЛ СЛУЧАЙНЫЕ ВЕСА ПОВЕРХ ОБУЧЕННЫХ, после чего сам же их и загружал. Все замеры
     # модели после первого прогона оценки мерили необученную сеть; видно это было только по mtime
     # чекпойнта (05:40 — время оценки, а не обучения) и по строке «★ чекпойнт →» в выводе оценки.
-    main()
+    if a.check_cat:
+        check_cat()
+    else:
+        main()
