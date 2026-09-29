@@ -36,6 +36,8 @@ import torch.nn.functional as F
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--crops", default=r"F:/nds/output/taskS/rowdec_crops")
+ap.add_argument("--folds-from", default="", help="§6.248: раздача фолдов по списку скважин манифестов кропов ЭТОГО каталога "
+                "(как `rowdec.fold_of_well` в проде), а не по своим кропам — иначе выпавшая скважина сдвинет нумерацию")
 ap.add_argument("--out", default=r"F:/nds/output/taskS/rowdec_model")
 ap.add_argument("--fold", type=int, default=0)
 ap.add_argument("--folds", type=int, default=5)
@@ -178,7 +180,17 @@ def load(fold, folds):
     X = np.concatenate([np.asarray(v) for v in xs]); Y = np.concatenate([np.asarray(v) for v in ys])
     wells = np.array(wells)
     uw = sorted(set(wells.tolist()))
-    hold = {w for i, w in enumerate(uw) if i % folds == fold}
+    if a.folds_from:
+        ref = set()
+        for f in sorted(Path(a.folds_from).glob("man_*of*.json")):
+            ref |= {t["well"] for t in json.loads(f.read_text(encoding="utf-8"))["tracks"]}
+        extra = sorted(set(uw) - ref)
+        if extra:
+            sys.exit(f"⛔ скважины не из опорного манифеста {a.folds_from}: {extra[:5]} — фолд для них не определён")
+        hold = {w for i, w in enumerate(sorted(ref)) if i % folds == fold}
+        print(f"★ раздача фолдов — по опорному манифесту {a.folds_from} ({len(ref)} скважин; в своих кропах {len(uw)})")
+    else:
+        hold = {w for i, w in enumerate(uw) if i % folds == fold}
     te = np.array([w in hold for w in wells])
     print(f"кропов {X.shape[0]:,}; скважин {len(uw)}, в держанном фолде {len(hold)}; "
           f"обучение {int((~te).sum()):,} / проверка {int(te.sum()):,}")
