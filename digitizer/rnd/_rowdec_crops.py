@@ -102,30 +102,44 @@ def main(i, n):
     rng = np.random.default_rng(a.seed + i)
     print(f"★ ШАРД {i}/{n}: треков {len(mine)}, кроп {R}×{C}, до {a.per_track} на трек")
 
-    Xs, Ys, rows_man, ev_tot = [], [], [], 0
-    for c, f in enumerate(mine, 1):
-        try:
-            r = crops_of(f, rng)
-        except Exception as e:
-            print(f"  ⚠ {f[:44]}: {type(e).__name__}: {str(e)[:50]}"); continue
-        if r is None:
-            continue
-        X, Y, cnt, nev = r
-        Xs.append(X); Ys.append(Y); ev_tot += nev
-        m = meta[f]
-        rows_man.append(dict(file=f, well=m["well"], sheet=m["sheet"], K=m["K"], crops=cnt))
-        if c % 20 == 0 or c == len(mine):
-            print(f"  {c}/{len(mine)}  кропов {sum(x.shape[0] for x in Xs):,}")
-    if not Xs:
+    # ★ 29.09 (§6.248): кропы пишутся потоком в сырые файлы шарда, а `.npy` собирается из них в конце через
+    #   open_memmap. Прежняя редакция держала список кропов И их склейку (`np.concatenate`) в памяти — вдвое больше
+    #   размера шарда (28 тыс. кропов 256×512 ≈ 7.4 ГБ пика на шард, 4 шарда разом ≈ 30 ГБ). Байты выхода те же
+    #   (заголовок open_memmap = заголовок np.save), сверено со старой редакцией на одних треках.
+    xraw, yraw = OUT / f"x_{i}of{n}.raw.tmp", OUT / f"y_{i}of{n}.raw.tmp"
+    rows_man, ev_tot, tot = [], 0, 0
+    with open(xraw, "wb") as fx, open(yraw, "wb") as fy:
+        for c, f in enumerate(mine, 1):
+            try:
+                r = crops_of(f, rng)
+            except Exception as e:
+                print(f"  ⚠ {f[:44]}: {type(e).__name__}: {str(e)[:50]}"); continue
+            if r is None:
+                continue
+            X, Y, cnt, nev = r
+            fx.write(np.ascontiguousarray(X).tobytes()); fy.write(np.ascontiguousarray(Y).tobytes())
+            tot += X.shape[0]; ev_tot += nev
+            m = meta[f]
+            rows_man.append(dict(file=f, well=m["well"], sheet=m["sheet"], K=m["K"], crops=cnt))
+            if c % 20 == 0 or c == len(mine):
+                print(f"  {c}/{len(mine)}  кропов {tot:,}")
+    if not tot:
         sys.exit("нет кропов")
-    X = np.concatenate(Xs); Y = np.concatenate(Ys)
-    np.save(OUT / f"x_{i}of{n}.npy", X)          # ⚠ БЕЗ сжатия: кэш читается случайным доступом
-    np.save(OUT / f"y_{i}of{n}.npy", Y)
+    for raw, name, dt, tail in ((xraw, f"x_{i}of{n}.npy", np.uint8, (R, C)), (yraw, f"y_{i}of{n}.npy", np.float32, (R, MK))):
+        # ⚠ БЕЗ сжатия: кэш читается случайным доступом
+        mm = np.lib.format.open_memmap(OUT / name, mode="w+", dtype=dt, shape=(tot,) + tail)
+        per = int(np.prod(tail)) * np.dtype(dt).itemsize
+        with open(raw, "rb") as fh:
+            for s in range(0, tot, 1024):
+                k = min(1024, tot - s)
+                mm[s:s + k] = np.frombuffer(fh.read(per * k), dt).reshape((k,) + tail)
+        mm.flush(); del mm
+        raw.unlink()
     (OUT / f"man_{i}of{n}.json").write_text(json.dumps(dict(
-        rows=R, cols=C, maxk=MK, crops=int(X.shape[0]), event_crops=int(ev_tot),
+        rows=R, cols=C, maxk=MK, crops=int(tot), event_crops=int(ev_tot),
         tracks=rows_man), ensure_ascii=False), encoding="utf-8")
-    print(f"★ готово: кропов {X.shape[0]:,} ({X.nbytes/2**30:.2f} ГБ), "
-          f"из них на событиях сближения {ev_tot:,} ({100*ev_tot/max(1,X.shape[0]):.0f}%)")
+    print(f"★ готово: кропов {tot:,} ({tot * R * C / 2**30:.2f} ГБ), "
+          f"из них на событиях сближения {ev_tot:,} ({100*ev_tot/max(1,tot):.0f}%)")
 
 
 i, n = (int(v) for v in a.shard.split("/"))

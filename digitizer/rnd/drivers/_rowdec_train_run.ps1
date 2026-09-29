@@ -24,7 +24,10 @@ while (-not (Test-Path $final)) {
     Start-Sleep -Seconds 120
   }
   $r++
-  $ar = @('_rowdec_net.py','--crops',"$ts/rowdec_crops_all",'--out',$out,'--fold',"$Fold",'--folds','5','--epochs','12','--folds-from',"$ts/rowdec_crops",'--max-hours','0.3')
+  # ★ 29.09: РЕЦЕПТ ЗАМОРОЖЕННОГО НАБОРА — ЯВНО (по чекпойнтам: ch 48, sigma 1.5, pos_weight 10, lam 1.0, emb 8, 8 эпох,
+  #   lr 3e-4, batch 24, seed 0, bg 0). Первая редакция драйвера шла на умолчаниях скрипта (ch 32, sigma 2.0,
+  #   pos_weight 50) и 12 эпохах — экран мерил бы данные и рецепт разом. Исправлено ДО начала обучения.
+  $ar = @('_rowdec_net.py','--crops',"$ts/rowdec_crops_all",'--out',$out,'--fold',"$Fold",'--folds','5','--epochs','8','--ch','48','--sigma','1.5','--pos-weight','10','--lam','1.0','--emb','8','--lr','0.0003','--batch','24','--seed','0','--bg','0','--folds-from',"$ts/rowdec_crops",'--max-hours','0.3')
   $p = Start-Process -FilePath $py -ArgumentList $ar -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$out/logs/f$Fold.r$r.log" -RedirectStandardError "$out/logs/f$Fold.r$r.err" -PassThru
   $null = $p.Handle; $p.WaitForExit()
   Say "партия $r — код $($p.ExitCode)"
