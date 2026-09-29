@@ -70,6 +70,8 @@ ap.add_argument("--band", default="axes", choices=["axes", "u0"],
 ap.add_argument("--u0-from", default=r"F:/nds/output/taskS/ab_pregate/G",
                 help="каталог замороженной выдачи с `_understanding.json` (frame.tracks) для --band u0")
 ap.add_argument("--like", default="", help="взять ТЕ ЖЕ листы, что в манифестах этого кэша (сопоставимость)")
+ap.add_argument("--wells-from", default="", help="§6.248: только скважины из манифестов кропов этого каталога (раздача фолдов "
+                "`_rowdec_net` — по отсортированному списку скважин; лишняя скважина сдвинула бы фолды и дала утечку)")
 a = ap.parse_args()
 OUT = Path(a.out)
 DELTA = 90.0            # §6.133: тот же относительный порог, что дал V3 (бумага строки − 90)
@@ -190,6 +192,13 @@ def collect(i, n):
             keep |= {m["sheet"] for m in json.loads(f.read_text(encoding="utf-8"))}
         sheets = [x for x in sheets if x[1].name in keep]
         print(f"★ ТЕ ЖЕ ЛИСТЫ, ЧТО В {a.like}: {len(sheets)} из {len(keep)} в манифестах")
+    if a.wells_from:
+        W = set()
+        for f in sorted(Path(a.wells_from).glob("man_*of*.json")):
+            W |= {t["well"] for t in json.loads(f.read_text(encoding="utf-8"))["tracks"]}
+        n0 = len(sheets)
+        sheets = [x for x in sheets if x[2] in W]
+        print(f"★ ТОЛЬКО СКВАЖИНЫ {a.wells_from} ({len(W)}): листов {len(sheets)} из {n0}")
     if a.cap_well:
         per, keep = defaultdict(int), []
         for f, q, well in sheets:
@@ -206,7 +215,17 @@ def collect(i, n):
     print(f"★ ШАРД {i}/{n}: ЛИСТОВ В ВЫБОРКЕ {len(mine)} (всего в пулах {len(sheets)})")
     OUT.mkdir(parents=True, exist_ok=True)
     man, rows_tot, oof_tot = [], 0, 0
+    # ★ §6.248: промежуточный манифест раз в 10 листов и подхват — снятый шард не теряет сделанное
+    part = OUT / f"manifest_{i}of{n}.part.json"
+    done_sheets = set()
+    if part.exists():
+        man = json.loads(part.read_text(encoding="utf-8"))
+        done_sheets = {m["sheet"] for m in man}
+        rows_tot = sum(m["rows"] for m in man); oof_tot = sum(m["oof"] for m in man)
+        print(f"★ ПОДХВАТ: листов уже {len(done_sheets)}, треков {len(man)}")
     for k, (f, q, well) in enumerate(mine, 1):
+        if q.name in done_sheets:
+            continue
         img = find_image(q)
         if not img:
             continue
@@ -226,8 +245,10 @@ def collect(i, n):
             rows_tot += len(tr["ys"]); oof_tot += tr["oof"]
         if k % 10 == 0 or k == len(mine):
             print(f"  {k}/{len(mine)}  треков {len(man)}, строк {rows_tot:,}")
+            tmp = part.with_suffix(".tmp"); tmp.write_text(json.dumps(man, ensure_ascii=False), encoding="utf-8"); tmp.replace(part)
     p = OUT / f"manifest_{i}of{n}.json"
     p.write_text(json.dumps(man, ensure_ascii=False), encoding="utf-8")
+    part.unlink(missing_ok=True)
     print(f"★ готово: треков {len(man)}, строк {rows_tot:,}, вне полосы {oof_tot:,} → {p}")
 
 

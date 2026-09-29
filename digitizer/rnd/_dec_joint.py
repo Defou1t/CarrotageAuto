@@ -157,6 +157,16 @@ def peaks_of(prob, k, pthr):
 LINE_X = [None]      # §6.246: x-центры линий U1 трека (относительно x0), для старта «по линиям»
 
 
+def _kmeans(Mx, mu, k):
+    """те же 12 шагов, что в проде, от заданного старта"""
+    for _ in range(EMB.get("iters", 12)):
+        lab = ((Mx[:, None, :] - mu[None]) ** 2).sum(-1).argmin(1)
+        for j in range(k):
+            if (lab == j).any():
+                mu[j] = Mx[lab == j].mean(0)
+    return mu
+
+
 def protos(prob, embs, peaks, k):
     if k < EMB["min_k"]:
         return None
@@ -182,6 +192,16 @@ def protos(prob, embs, peaks, k):
         if cand:
             i0 = min(cand, key=lambda i: abs(i - prob.shape[0] // 2))
             mu = np.stack([embs[:, i0, x] for x in sorted(peaks[i0])]).astype(Mx.dtype)
+    if EMB["init"] == "best":
+        # §6.246: «лучший из двух стартов» — k-means из случайного старта и из старта по x, берётся меньшая инерция
+        rng = np.random.default_rng(0)
+        cands_mu = [_kmeans(Mx, Mx[rng.choice(len(Mx), k, replace=False)].copy(), k)]
+        cand = [i for i in range(prob.shape[0]) if len(peaks[i]) == k]
+        if cand:
+            i0 = min(cand, key=lambda i: abs(i - prob.shape[0] // 2))
+            cands_mu.append(_kmeans(Mx, np.stack([embs[:, i0, x] for x in sorted(peaks[i0])]).astype(Mx.dtype), k))
+        inert = [float(((Mx[:, None, :] - m[None]) ** 2).sum(-1).min(1).sum()) for m in cands_mu]
+        return cands_mu[int(np.argmin(inert))]
     if mu is None:
         rng = np.random.default_rng(0)
         mu = Mx[rng.choice(len(Mx), k, replace=False)]
@@ -318,7 +338,9 @@ if a.emb:                                  # §6.246
                       ("эмб3 старт по x + вес 0.7, 0 шагов", {"init": "x", "w": 0.7, "iters": 0}),
                       ("эмб3 старт по x + вес 0.7, 3 шага", {"init": "x", "w": 0.7, "iters": 3}),
                       ("эмб4 старт по линиям + вес 0.7", {"init": "lines", "w": 0.7}),
-                      ("эмб4 старт по линиям + вес 0.7, 3 шага", {"init": "lines", "w": 0.7, "iters": 3})):
+                      ("эмб4 старт по линиям + вес 0.7, 3 шага", {"init": "lines", "w": 0.7, "iters": 3}),
+                      ("эмб5 лучший из двух стартов + вес 0.7", {"init": "best", "w": 0.7}),
+                      ("эмб5 лучший из двух стартов", {"init": "best"})):
         VARS += [(nm_, 0.6, None, 0)]; EMBV[nm_] = cfg_
 if a.kplus:                                # §6.244: K+N и без удержания (прод-Витерби, лишний путь)
     VARS += [(f"V0 + K+{a.kplus}", 0.6, None, -a.kplus)]

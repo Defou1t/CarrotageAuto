@@ -43,7 +43,8 @@ ap = argparse.ArgumentParser()
 #   селектора (`_seq_data_big`, `_seq_onpolicy`, `_decoder_seq`) и декодера (`_rowdec_net`) регулятор НЕ ВИДЕЛ («шардов нет —
 #   регулировать нечего» весь день при 8 живых процессах). Игры держал только пониженный приоритет.
 ap.add_argument("--match", default=r"_trace_prod_ab\.py|_name_cost_prod\.py|_trace_cache\.py|_seq_data_big\.py|"
-                                   r"_seq_onpolicy\.py|_decoder_seq\.py|_rowdec_net\.py",
+                                   r"_seq_onpolicy\.py|_decoder_seq\.py|_rowdec_net\.py|"
+                                   r"_rowdec_data\.py|_rowdec_crops\.py|_dec_joint\.py|_dec_conf\.py",   # ★ 29.09
                 help="регулярка по КОМАНДНОЙ СТРОКЕ: что считать нашим счётом")
 ap.add_argument("--base", type=int, default=4, help="активных, пока машиной пользуются")
 ap.add_argument("--max", type=int, default=99, help="потолок активных в простое")
@@ -88,7 +89,8 @@ def ps(cmd):
 #   ★ 26.09: короткие задачи с готовым ответом (повтор с кэша, счёт) — выше долгих сборок: иначе при двух активных
 #   20-минутный повтор стоял за многочасовой сборкой кэша.
 PRIO = [r"_trace_cache\.py replay", r"_name_cost_prod\.py", r"_trace_cache\.py", r"_trace_prod_ab\.py", r"_decoder_seq\.py",
-        r"_rowdec_net\.py", r"_seq_onpolicy\.py", r"_seq_data_big\.py"]
+        r"_rowdec_net\.py", r"_seq_onpolicy\.py", r"_seq_data_big\.py", r"_rowdec_data\.py", r"_rowdec_crops\.py",
+        r"_dec_conf\.py", r"_dec_joint\.py"]
 RANK = {}
 
 
