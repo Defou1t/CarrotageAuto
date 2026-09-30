@@ -22,12 +22,17 @@ VARIANTS = {
     "E3": [f"rowdec_ens={M1},{M2}"],                             # карты трёх моделей, эмбеддинги замороженной
     "E3k": [f"rowdec_ens={M1},{M2}", "rowdec_ens_emb=2"],        # то же, эмбеддинги allk (личность +2 п., §6.248)
     "TTA": ["rowdec_tta=1"],                                     # замороженная + отражённый проход
+    # ★ 30.09 13:20 (после E3 +16, p = 0.088): двухмодельные — если хватит одной новой модели, полному A/B нужно вдвое
+    #   меньше обучения (§6.252, критерий подтверждения на фолде 4)
+    "E2k": [f"rowdec_ens={M2}"],                                 # замороженная + allk
+    "E2a": [f"rowdec_ens={M1}"],                                 # замороженная + all_v1
 }
 ap = argparse.ArgumentParser()
 ap.add_argument("--only", default="")
 ap.add_argument("--shards", type=int, default=4)
+ap.add_argument("--log", default="_ens_screen.log", help="свой лог и маркер конца для второго прогона")
 a = ap.parse_args()
-LOG = TS / "_ens_screen.log"
+LOG = TS / a.log
 
 
 def say(m):
