@@ -35,11 +35,33 @@ ap.add_argument("--rows", type=int, default=128)
 ap.add_argument("--cols", type=int, default=512)
 ap.add_argument("--maxk", type=int, default=6, help="кривых на кроп; трек с большим K берётся частями")
 ap.add_argument("--per-track", type=int, default=200)
+# ★ 30.09 (§6.249): квота кропов ПО K трека, "1:26,2:35,3:58,4:32,5:57,6+:44" — состав как у замороженного набора. Разбор
+#   §6.248: при единой квоте 40 весь пуловый корпус сместил бюджет к K = 1 (кропов с ≥3 кривыми −39%), и личность
+#   выросла, а обнаружение на плотных кропах просело. Пусто = единая `--per-track` (прежнее поведение побайтно).
+ap.add_argument("--per-track-by-k", default="")
 ap.add_argument("--near", type=float, default=5.0)
 ap.add_argument("--seed", type=int, default=0)
 a = ap.parse_args()
 OUT = Path(a.out); OUT.mkdir(parents=True, exist_ok=True)
 R, C, MK = a.rows, a.cols, a.maxk
+
+
+_PTK = {}
+for _kv in filter(None, a.per_track_by_k.split(",")):
+    _k, _v = _kv.split(":")
+    _PTK[_k.strip()] = int(_v)
+
+
+def per_track_of(K):
+    """квота кропов трека с K кривыми: `--per-track-by-k` («6+» — K ≥ 6) или единая `--per-track`"""
+    if not _PTK:
+        return a.per_track
+    if str(K) in _PTK:
+        return _PTK[str(K)]
+    plus = [(int(k[:-1]), v) for k, v in _PTK.items() if k.endswith("+") and K >= int(k[:-1])]
+    if not plus:
+        sys.exit(f"--per-track-by-k: нет квоты для K = {K}")
+    return max(plus)[1]
 
 
 def crops_of(f, rng):
@@ -64,9 +86,10 @@ def crops_of(f, rng):
     if not len(all_idx):
         return None
 
-    want_ev = min(len(ev_idx), a.per_track // 4)
+    pt = per_track_of(K)
+    want_ev = min(len(ev_idx), pt // 4)
     picks = list(rng.choice(ev_idx, want_ev, replace=False)) if want_ev else []
-    rest = a.per_track - len(picks)
+    rest = pt - len(picks)
     picks += list(rng.choice(all_idx, min(rest, len(all_idx)), replace=False))
 
     X = np.zeros((len(picks), R, C), np.uint8)
@@ -100,7 +123,8 @@ def main(i, n):
     meta = {m["file"]: m for m in man}
     mine = files[len(files) * i // n:len(files) * (i + 1) // n]
     rng = np.random.default_rng(a.seed + i)
-    print(f"★ ШАРД {i}/{n}: треков {len(mine)}, кроп {R}×{C}, до {a.per_track} на трек")
+    print(f"★ ШАРД {i}/{n}: треков {len(mine)}, кроп {R}×{C}, до "
+          f"{a.per_track_by_k + ' по K' if a.per_track_by_k else a.per_track} на трек")
 
     # ★ 29.09 (§6.248): кропы пишутся потоком в сырые файлы шарда, а `.npy` собирается из них в конце через
     #   open_memmap. Прежняя редакция держала список кропов И их склейку (`np.concatenate`) в памяти — вдвое больше

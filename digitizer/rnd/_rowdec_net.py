@@ -67,6 +67,8 @@ ap.add_argument("--no-resume", action="store_true",
 ap.add_argument("--force", action="store_true",
                 help="перезаписать существующий чекпойнт (по умолчанию ОТКАЗ, см. §6.141)")
 ap.add_argument("--check-cat", action="store_true", help="сверить склейку Cat с np.concatenate и выйти (обучения нет)")
+ap.add_argument("--grad-ckpt", type=int, default=0, help="1 = перерасчёт активаций по блокам (та же математика, вдвое меньше видеопамяти)")
+ap.add_argument("--check-ckpt", action="store_true", help="сверить --grad-ckpt с обычным проходом и выйти")
 a = ap.parse_args()
 OUT = Path(a.out); OUT.mkdir(parents=True, exist_ok=True)
 DEV = "cuda" if torch.cuda.is_available() and torch.cuda.device_count() else "cpu"   # CUDA_VISIBLE_DEVICES="" → cpu
@@ -98,6 +100,51 @@ class Net(nn.Module):
         for b in self.blocks:
             h = h + b(h)
         return self.head_p(h), self.head_e(h)
+
+
+def fwd_train(net, x, ckpt):
+    """Прямой проход обучения. ★ 30.09: `ckpt` (`--grad-ckpt`) — перерасчёт активаций по блокам (`torch.utils.checkpoint`):
+    та же математика (сверка `--check-ckpt`: веса побайтно равны на CPU), пик памяти батча 24 — 5.7 ГБ вместо 9.9.
+    Ноутбук (8 ГБ) учит тот же рецепт, у ПК шаг не медленнее (0.434 против 0.443 с), а игре остаётся видеопамять.
+    ⚠ Повторяет `Net.forward` в точности; правка сети — здесь и там одновременно."""
+    if not ckpt:
+        return net(x)
+    from torch.utils.checkpoint import checkpoint
+    h = F.relu(net.stem(x))
+    for b in net.blocks:
+        h = h + checkpoint(b, h, use_reentrant=False)
+    return net.head_p(h), net.head_e(h)
+
+
+def check_ckpt():
+    """Сверка `--grad-ckpt`: две сети из одного сида, 3 шага AdamW на CPU (детерминированно) на синтетике с тремя кривыми —
+    с перерасчётом и без; веса обязаны совпасть побайтно. На CUDA (bf16) — лоссы шагов совпадают до 1e-5 отн."""
+    def run(ckpt, dev):
+        torch.manual_seed(0)
+        net = Net(8, 48).to(dev)
+        opt = torch.optim.AdamW(net.parameters(), lr=3e-4, weight_decay=1e-4)
+        g0 = torch.Generator().manual_seed(1)
+        x = torch.rand(4, 1, 96, 160, generator=g0).to(dev)
+        y = torch.full((4, 96, 6), -1.0)
+        for k in range(3):
+            y[:, :, k] = torch.linspace(20 + 45 * k, 35 + 45 * k, 96)
+        y = y.to(dev); pw = torch.tensor(10.0, device=dev); ls = []
+        for _ in range(3):
+            with torch.autocast(dev, dtype=torch.bfloat16, enabled=(dev == "cuda")):
+                p, e = fwd_train(net, x, ckpt)
+                lp = F.binary_cross_entropy_with_logits(p.float(), targets(y, x.shape[-1], 1.5).float(), pos_weight=pw)
+                pull, push, bgl = emb_loss(e.float(), y, None)
+                loss = lp + pull + push + bgl
+            opt.zero_grad(); loss.backward(); opt.step(); ls.append(float(loss.detach()))
+        return {k: v.detach().cpu() for k, v in net.state_dict().items()}, ls
+    a0, l0 = run(False, "cpu"); a1, l1 = run(True, "cpu")
+    same = all(torch.equal(a0[k], a1[k]) for k in a0)
+    print(f"CPU: веса {'побайтно равны' if same else '⛔ РАЗЛИЧАЮТСЯ'} ({len(a0)} тензоров), лоссы {l0} / {l1}")
+    if torch.cuda.is_available():
+        _, g0_ = run(False, "cuda"); _, g1_ = run(True, "cuda")
+        rel = max(abs(u - v) / max(1e-9, abs(u)) for u, v in zip(g0_, g1_))
+        print(f"CUDA bf16: лоссы {g0_} / {g1_}, наибольшее отн. расхождение {rel:.2e}")
+    sys.exit(0 if same else 2)
 
 
 def targets(y, C, sigma):
@@ -334,7 +381,7 @@ def main():
             xb = torch.from_numpy(X[b].astype(np.float32) / 255.0).unsqueeze(1).to(DEV)
             yb = torch.from_numpy(Y[b]).to(DEV)
             with torch.autocast(DEV, dtype=torch.bfloat16, enabled=(DEV == "cuda")):
-                p, e = net(xb)
+                p, e = fwd_train(net, xb, a.grad_ckpt)
                 g = targets(yb, xb.shape[-1], a.sigma)
                 lp = F.binary_cross_entropy_with_logits(p.float(), g.float(), pos_weight=pw)
                 pull, push, bgl = emb_loss(e.float(), yb, xb.float() if a.bg else None)
@@ -379,7 +426,8 @@ def main():
     torch.save(dict(sd=net.state_dict(), emb=a.emb, ch=a.ch, sigma=a.sigma, fold=a.fold,
                     folds=a.folds, seed=a.seed, pos_weight=a.pos_weight,
                     bg=int(a.bg), epochs=a.epochs, lam=a.lam, lr=a.lr, batch=a.batch,
-                    crops=str(a.crops), resumed_from=resumed), ck)
+                    crops=str(a.crops), resumed_from=resumed, grad_ckpt=int(a.grad_ckpt),
+                    host=__import__("platform").node()), ck)
     print(f"★ чекпойнт → {ck}   (bg={a.bg}, эпох {a.epochs})")
 
 
@@ -389,7 +437,9 @@ if __name__ == "__main__":
     # тем самым КЛАЛ СЛУЧАЙНЫЕ ВЕСА ПОВЕРХ ОБУЧЕННЫХ, после чего сам же их и загружал. Все замеры
     # модели после первого прогона оценки мерили необученную сеть; видно это было только по mtime
     # чекпойнта (05:40 — время оценки, а не обучения) и по строке «★ чекпойнт →» в выводе оценки.
-    if a.check_cat:
+    if a.check_ckpt:
+        check_ckpt()
+    elif a.check_cat:
         check_cat()
     else:
         main()

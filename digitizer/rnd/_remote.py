@@ -30,6 +30,9 @@ AVX2 (Ryzen 7 6800H); жадный Витерби хаотичен к после
             _remote.py status [--tag T]                  что с ноутбуком
             _remote.py sync-archive --sheets tcache_sheets.txt [--share 0.3]   докопировать растры скважин
   ноутбук:  _remote.py lp-sup --tag T                    супервизор шардов (задача планировщика nds_remote_T, SYSTEM)
+            _remote.py lp-train-sup --tag T              ★ 30.09: супервизор ОБУЧЕНИЯ (задача nds_rtrain_T, SYSTEM) — им
+                                                         управляет пул `_pool.py` (§6.250): эпоха за партию, игра/батарея —
+                                                         партия снимается; снимки эпох ПК забирает и при сбое учит дальше сам
 """
 import sys, os, io, json, time, argparse, hashlib, subprocess, shutil
 if sys.stdout:                                      # pythonw (задача планировщика) — без stdout
@@ -195,6 +198,106 @@ def lp_sup(a):
             p.kill()
     (j / "DONE").write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
     subprocess.run(["schtasks", "/delete", "/tn", f"nds_remote_{a.tag}", "/f"], capture_output=True)
+
+
+def lp_busy(check_gpu=True):
+    """★ 30.09 (правило заказчика «оставлять ресурсы на игры»): ноутбук занят для обучения, если он на батарее, если идёт
+    игра (процесс из `steamapps\\common` или ArcheAge) или — до старта партии — GPU загружен кем-то другим > 30%.
+    → причина или ''"""
+    import psutil
+    b = psutil.sensors_battery()
+    if b is not None and not b.power_plugged:
+        return "на батарее"
+    # не игры: живые обои Steam (30.09 — ложное «игра wallpaper32.exe»), клиент Steam, лаунчер ArcheAge без клиента
+    NOT_GAME = ("wallpaper32", "wallpaper64", "wallpaper_engine", "steamwebhelper", "steam.exe", "launcher", "crashhandler")
+    for p in psutil.process_iter(["exe", "name"]):
+        exe = (p.info.get("exe") or "").lower(); nm = (p.info.get("name") or "").lower()
+        if "\\wallpaper_engine\\" in exe or any(x in nm or x in exe.rsplit("\\", 1)[-1] for x in NOT_GAME):
+            continue
+        if "\\steamapps\\common\\" in exe or "archeage" in exe or "archeage" in nm:
+            return f"игра {p.info.get('name')}"
+    if check_gpu:
+        try:
+            r = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                               capture_output=True, text=True, timeout=30)
+            u = max(int(x) for x in r.stdout.split())
+            if u > 30:
+                return f"GPU занят ({u}%)"
+        except Exception:
+            pass
+    return ""
+
+
+def lp_train_sup(a):
+    """★ 30.09: супервизор ОБУЧЕНИЯ на ноутбуке (задача nds_rtrain_<метка>, SYSTEM). Задание `job.json`: args `_rowdec_net.py`
+    (пути как на ПК), каталог `out` и имя итогового чекпойнта `ck`. Партия = одна эпоха (`--max-hours 0.01`, код 75),
+    снимок эпохи — в `out`; ПК забирает снимки. Перед партией и каждые 30 с во время неё — `lp_busy`: занят — партия
+    снимается (теряется неоконченная эпоха), ждём. Итог есть — DONE; три падения подряд — FAIL. Замок — один экземпляр."""
+    import msvcrt
+    j = RJOBS / a.tag
+    job = json.loads((j / "job.json").read_text(encoding="utf-8"))
+    lk = open(j / "sup.lock", "a+")
+    try:
+        msvcrt.locking(lk.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        return
+    out = Path(job["out"]); out.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    st = {"batches": 0, "fails": 0, "state": "старт"}
+
+    def put(**kw):
+        st.update(kw); st["t"] = time.time()
+        st["epochs"] = sorted(int(q.stem.rsplit(".ep", 1)[1]) for q in out.glob(Path(job["ck"]).stem + ".ep*.pt"))
+        (j / "status.json").write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+
+    while not (j / "STOP").exists():
+        if (out / job["ck"]).exists():
+            put(state="готово"); (j / "DONE").write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8"); break
+        if (j / "YIELD").exists():                  # ПК забирает задание: эпоха доучена, снимок лежит — уступаем
+            put(state="уступил"); break
+        time.sleep(5)                               # GPU после своей партии — остыть до замера загрузки
+        why = lp_busy(True)
+        if why:
+            put(state=f"ждёт: {why}"); time.sleep(120); continue
+        st["batches"] += 1; n = st["batches"]
+        p = subprocess.Popen([LP_PY, "_rowdec_net.py"] + job["args"] + ["--max-hours", "0.01"], cwd=str(RND), env=env,
+                             stdout=open(j / f"b{n}.log", "wb"), stderr=open(j / f"b{n}.err", "wb"),
+                             creationflags=0x08000000 | 0x00004000)     # без окна, BELOW_NORMAL
+        put(state=f"партия {n}", pid=p.pid)
+        killed = ""
+        while p.poll() is None:
+            time.sleep(30)
+            if (j / "STOP").exists():
+                killed = "STOP"
+            else:
+                killed = lp_busy(False)
+            if killed:
+                p.kill(); p.wait(60); break
+            put(state=f"партия {n}")
+        if killed:
+            put(state=f"партия {n} снята: {killed}"); time.sleep(120 if killed != "STOP" else 0); continue
+        if p.returncode in (0, 75):
+            st["fails"] = 0; put(state=f"партия {n} — код {p.returncode}")
+        else:
+            st["fails"] += 1; put(state=f"партия {n} упала — код {p.returncode}")
+            if st["fails"] >= 3:
+                (j / "FAIL").write_text(f"три падения подряд, последний код {p.returncode}", encoding="utf-8"); break
+            time.sleep(60)
+    subprocess.run(["schtasks", "/delete", "/tn", f"nds_rtrain_{a.tag}", "/f"], capture_output=True)
+
+
+def lp_train_state(a):
+    """состояние задания обучения на ноутбуке + файлы каталога `out` (имя → размер) для забора на ПК"""
+    j = RJOBS / a.tag
+    st = json.loads((j / "status.json").read_text(encoding="utf-8")) if (j / "status.json").exists() else {}
+    for f in ("DONE", "FAIL", "STOP"):
+        st[f.lower()] = (j / f).exists()
+    if (j / "job.json").exists():
+        job = json.loads((j / "job.json").read_text(encoding="utf-8"))
+        out = Path(job["out"]); stem = Path(job["ck"]).stem
+        st["files"] = {q.name: q.stat().st_size for q in out.glob(stem + "*.pt")} if out.is_dir() else {}
+        st["busy"] = lp_busy(False)
+    print(json.dumps(st, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------- ПК
@@ -398,7 +501,8 @@ def cmd_sync_archive(a):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["begin", "wait", "stop", "status", "sync-archive",
-                                    "lp-fp", "lp-inv", "lp-mem", "lp-ls", "lp-state", "lp-sup"])
+                                    "lp-fp", "lp-inv", "lp-mem", "lp-ls", "lp-state", "lp-sup",
+                                    "lp-train-sup", "lp-train-state", "lp-busy"])
     ap.add_argument("--tag", default="")
     ap.add_argument("--cache", default="")
     ap.add_argument("--sheets", default="tcache_sheets.txt")
@@ -407,7 +511,14 @@ if __name__ == "__main__":
     ap.add_argument("--knob", action="append", default=[])
     ap.add_argument("--share", type=float, default=0.3)
     ap.add_argument("--allow-mixed", action="store_true", help="смешать листы двух машин в одном кэше (см. ⛔ в шапке)")
+    ap.add_argument("--no-gpu", action="store_true", help="lp-busy: не смотреть загрузку GPU")
     a = ap.parse_args()
+    if a.cmd == "lp-train-sup":
+        sys.exit(lp_train_sup(a) or 0)
+    if a.cmd == "lp-train-state":
+        sys.exit(lp_train_state(a) or 0)
+    if a.cmd == "lp-busy":                              # --no-gpu: GPU занят нашим же обучением — не повод
+        print(json.dumps({"busy": lp_busy(not a.no_gpu)}, ensure_ascii=False)); sys.exit(0)
     if a.cmd.startswith("lp-"):
         sys.exit(lp_sup(a) if a.cmd == "lp-sup" else lp_cmds(a))
     sys.exit({"begin": cmd_begin, "wait": cmd_wait, "stop": cmd_stop, "status": cmd_status,
