@@ -177,31 +177,43 @@ class Laptop:
         return json.loads(lines[-1])
 
     def push_dir(self, rel, names):
-        """ПК → ноутбук: файлы `names` каталога TS/rel потоком tar"""
+        """ПК → ноутбук: файлы `names` каталога TS/rel потоком tar. Таймаут — по объёму (≥ 1 МБ/с) + 10 мин: зависший поток
+        не держит пул вечно (30.09: канал до ноутбука ≈ 4–8 МБ/с)"""
         import _remote as R
         if not names:
             return
         R.ssh(f'mkdir "{TS / rel}" 2>nul', 30)
+        size = sum((TS / rel / n).stat().st_size for n in names)
         p1 = subprocess.Popen([R.TAR, "cf", "-", "-C", str(TS / rel)] + list(names), stdout=subprocess.PIPE)
-        r = subprocess.run([R.SSH, "-o", "BatchMode=yes", R.HOST, f'"{R.TAR}" xf - -C "{TS / rel}"'], stdin=p1.stdout,
-                           capture_output=True)
-        p1.wait()
+        try:
+            r = subprocess.run([R.SSH, "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", R.HOST,
+                                f'"{R.TAR}" xf - -C "{TS / rel}"'], stdin=p1.stdout, capture_output=True,
+                               timeout=size / 2**20 + 600)
+        except subprocess.TimeoutExpired:
+            p1.kill(); raise RuntimeError(f"передача {rel}: таймаут ({size / 2**30:.1f} ГБ)")
+        finally:
+            p1.stdout.close()
+        p1.wait(60)
         if r.returncode != 0:
             raise RuntimeError(f"передача {rel}: код {r.returncode}")
 
-    def pull_dir(self, rel, names):
+    def pull_dir(self, rel, names, timeout=900):
         """ноутбук → ПК: файлы `names` из TS/rel в `_incoming`, затем на место (размер сверяется вызывающим)"""
         import _remote as R
         inc = TS / rel / "_incoming"; inc.mkdir(parents=True, exist_ok=True)
-        p1 = subprocess.Popen([R.SSH, "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", R.HOST,
+        p1 = subprocess.Popen([R.SSH, "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=30", R.HOST,
                                f'"{R.TAR}" cf - -C "{TS / rel}" -T -'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         p2 = subprocess.Popen([R.TAR, "xf", "-", "-C", str(inc)], stdin=p1.stdout, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL)
         p1.stdin.write(("\n".join(names) + "\n").encode()); p1.stdin.close(); p1.stdout.close()
-        p2.wait(3600); p1.wait(60)
+        try:
+            p2.wait(timeout); p1.wait(60)
+        except subprocess.TimeoutExpired:
+            p1.kill(); p2.kill(); raise RuntimeError(f"забор {rel}: таймаут")
         return inc
 
-    def start(self, job, tag):
+    def prepare(self, job):
+        """МЕДЛЕННОЕ (в фоновом потоке пула): кропы и прежние снимки задания на ноутбук"""
         import _remote as R
         # кропы задания: докладываются недостающие/иные по размеру (десятки ГБ — один раз на пул)
         mine = {q.name: q.stat().st_size for q in (TS / job["crops"]).glob("*") if q.is_file()}
@@ -223,7 +235,10 @@ class Laptop:
         theirs = self.ls(job["out"])
         need = sorted(n for n, s in snaps.items() if theirs.get(n) != s)
         self.push_dir(job["out"], need)
-        # задание и задача планировщика
+
+    def launch(self, job, tag):
+        """БЫСТРОЕ: задание и задача планировщика на ноутбуке"""
+        import _remote as R
         j = f"{R.RJOBS}\\{tag}"
         tmp = pdir(self.pool) / f"{tag}.job.json"
         tmp.write_text(json.dumps({"args": job_args(job), "out": str(out_dir(job)), "ck": ck_name(job)}), encoding="utf-8")
@@ -284,22 +299,34 @@ def run(a):
     ab_f = d / "abandoned.json"
     abandoned = set(json.loads(ab_f.read_text(encoding="utf-8"))) if ab_f.exists() else set()
     note_t = 0.0
+    prep = None                 # фоновая подготовка ноутбука: {id, tag, k, t, err}
     say(pool, "пул запущен")
     while True:
         J = load_jobs(pool)
         jobs = J["jobs"]
-        # задание ПК без процесса (перезапуск пула): живая партия — подхватить, иначе снова в очередь
+        for job in jobs:
+            if job["state"] == "lp-prep" and (prep is None or prep["id"] != job["id"]):
+                job.update(state="pending", dirty=True)          # подготовка прервана перезапуском пула
+        # ★ ПОДХВАТ ЖИВОЙ ПАРТИИ ПК — ДО ЛЮБОЙ РАЗДАЧИ и в ЛЮБОМ состоянии задания. 30.09: пул завис на передаче, не успев
+        #   записать «pc», и новый пул, видя «pending», отдал то же задание ноутбуку (две машины на одном задании).
+        #   Процесс `_rowdec_net.py` с тем же `--out` и `--fold` — значит, задание у ПК, что бы ни было записано.
         if pc is None:
             runs = pc_trainings()
             for job in jobs:
-                if job["state"] == "pc" and not job.get("pc_between"):
-                    mark = f"--out {str(out_dir(job)).replace(chr(92), '/')} --fold {job['fold']} "
-                    hit = [pid for pid, c in runs if mark in c + " "]
-                    if hit:
-                        pc = (job["id"], Adopted(hit[0], job), job.get("pc_batches", 0))
-                        say(pool, f"ПК: подхвачена живая партия {job['id']} (PID {hit[0]})")
-                    else:
-                        job["state"] = "pending"; job["dirty"] = True
+                if job["state"] in ("done", "cancelled", "failed"):
+                    continue
+                mark = f"--out {str(out_dir(job)).replace(chr(92), '/')} --fold {job['fold']} "
+                hit = [pid for pid, c in runs if mark in c + " "]
+                if hit:
+                    if job["state"] in ("lp", "lp-yield") and job.get("lp_tag"):
+                        abandoned.add(job["lp_tag"])     # у ноутбука оно же — снять
+                    job.update(state="pc", where="pc", pc_between=False, dirty=True)
+                    pc = (job["id"], Adopted(hit[0], job), job.get("pc_batches", 0))
+                    say(pool, f"ПК: подхвачена живая партия {job['id']} (PID {hit[0]})")
+                    break
+            for job in jobs:
+                if job["state"] == "pc" and not job.get("pc_between") and (pc is None or pc[0] != job["id"]):
+                    job.update(state="pending", dirty=True)
         live = [j for j in jobs if j["state"] not in ("done", "cancelled", "failed")]
         if (d / "FINISH").exists() and not live and pc is None:
             say(pool, "=== POOL DONE ==="); return 0
@@ -326,7 +353,7 @@ def run(a):
 
         # ── 2. ноутбук: нужен ли он и можно ли
         pc_waiting = [j for j in jobs if j["state"] == "pc" and j.get("pc_between") and pc is None]
-        need_lp = any(j["state"] in ("lp", "lp-yield", "pending") for j in jobs) or bool(abandoned) or \
+        need_lp = any(j["state"] in ("lp", "lp-yield", "lp-prep", "pending") for j in jobs) or bool(abandoned) or \
             (bool(pc_waiting) and not idle)
         own = any(j["state"] in ("lp", "lp-yield") for j in jobs)   # GPU ноутбука занят нашим же заданием
         lp_reason = lap.ready(own) if need_lp else None
@@ -351,7 +378,7 @@ def run(a):
                     job.update(state="done", where="lp", dirty=True)
                     say(pool, f"★ {job['id']}: готово на ноутбуке, чекпойнт на ПК")
                 elif st.get("fail"):
-                    job.update(state="pending", prefer="pc", dirty=True)
+                    job.update(state="pending", prefer="pc", lp_failed=True, dirty=True)
                     say(pool, f"⚠ {job['id']}: ноутбук сдался (FAIL) — в очередь, ПК продолжит с эпохи {epochs_done(job)}")
                 elif st.get("state") == "уступил":
                     job.update(state="pending", prefer="pc", dirty=True)
@@ -373,6 +400,11 @@ def run(a):
             pend = sorted((j for j in jobs if j["state"] == "pending" and (j.get("prefer") != "lp" or lp_reason != "")),
                           key=lambda j: (j["prio"], j["id"]))
             job = mine[0] if mine else (pend[0] if pend else None)
+            if job is None:
+                pj = [j for j in jobs if j["state"] == "lp-prep"]
+                if pj:
+                    job = pj[0]; prep = None
+                    say(pool, f"{job['id']}: ПК свободен раньше, чем ноутбук готов, — задание забирает ПК")
             if job is not None and (out_dir(job) / ck_name(job)).exists():
                 job.update(state="done", where="pc", pc_between=False, dirty=True); job = None
             if job is not None:
@@ -403,23 +435,44 @@ def run(a):
                     say(pool, f"{job['id']}: ПК занят человеком — задание отдаётся ноутбуку")
                     break
 
-        # ── 6. ноутбук: первое подходящее из очереди
-        if lp_free:
-            pend = sorted((j for j in jobs if j["state"] == "pending" and (j.get("prefer") != "pc" or not idle)),
-                          key=lambda j: (j["prio"], j["id"]))
-            if pend:
-                job = pend[0]
-                if lap.sync():
-                    k = job.get("lp_runs", 0) + 1
-                    tag = f"{pool}_{job['id']}_{k}"
+        # ── 6. ноутбук: подготовка в фоне (кропы — десятки минут), затем запуск; сам цикл ведёт ПК дальше
+        if prep is not None and not prep["t"].is_alive():
+            job = next((j for j in jobs if j["id"] == prep["id"]), None)
+            if job is not None and job["state"] == "lp-prep":
+                if prep.get("err"):
+                    say(pool, f"⚠ ноутбук: {job['id']} не подготовлен — {prep['err'][:150]}; остаётся ПК")
+                    job.update(state="pending", prefer="pc", dirty=True)
+                else:
                     try:
-                        lap.start(job, tag)
-                        job.update(state="lp", where="lp", lp_tag=tag, lp_runs=k, t_lp=time.time(), prefer=None, dirty=True)
-                        lp_seen[tag] = (time.time(), epochs_done(job))
-                        say(pool, f"ноутбук: {job['id']} запущен (задача nds_rtrain_{tag}, эпох готово {epochs_done(job)})")
+                        lap.launch(job, prep["tag"])
+                        job.update(state="lp", where="lp", lp_tag=prep["tag"], lp_runs=prep["k"], t_lp=time.time(),
+                                   prefer=None, dirty=True)
+                        lp_seen[prep["tag"]] = (time.time(), epochs_done(job))
+                        say(pool, f"ноутбук: {job['id']} запущен (задача nds_rtrain_{prep['tag']}, эпох готово {epochs_done(job)})")
                     except Exception as e:
                         say(pool, f"⚠ ноутбук: {job['id']} не запущен — {str(e)[:150]}; остаётся ПК")
-                        job.update(prefer="pc", dirty=True)
+                        job.update(state="pending", prefer="pc", dirty=True)
+            prep = None
+        lp_free = lp_free and prep is None and not any(j["state"] == "lp-prep" for j in jobs)
+        if lp_free:
+            # «лучше на ПК» значит «ПК первым, если он свободен»; ПК занят другим заданием — берёт ноутбук. Задание, с которым
+            # ноутбук уже сдался (FAIL — стойкий сбой, не нехватка памяти), ноутбуку не отдаётся.
+            pend = sorted((j for j in jobs if j["state"] == "pending" and not j.get("lp_failed") and
+                           (j.get("prefer") != "pc" or not idle or pc is not None)),
+                          key=lambda j: (j["prio"], j["id"]))
+            if pend and lap.sync():
+                job = pend[0]
+                k = job.get("lp_runs", 0) + 1
+                prep = {"id": job["id"], "tag": f"{pool}_{job['id']}_{k}", "k": k}
+
+                def work(pr=prep, jb=dict(job)):
+                    try:
+                        lap.prepare(jb)
+                    except Exception as e:
+                        pr["err"] = str(e)
+                prep["t"] = __import__("threading").Thread(target=work, daemon=True); prep["t"].start()
+                job.update(state="lp-prep", where="lp", dirty=True)
+                say(pool, f"ноутбук: {job['id']} — подготовка (кропы, снимки) в фоне")
         elif lp_reason and any(j["state"] == "pending" for j in jobs) and time.time() - note_t > 1800:
             note_t = time.time(); say(pool, f"ноутбук для обучения недоступен: {lp_reason} — очередь ждёт ПК")
 

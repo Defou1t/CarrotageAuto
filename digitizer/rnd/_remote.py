@@ -257,6 +257,11 @@ def lp_train_sup(a):
             put(state="уступил"); break
         time.sleep(5)                               # GPU после своей партии — остыть до замера загрузки
         why = lp_busy(True)
+        # ★ 30.09: CUDA под WDDM коммитит системную память под выделения GPU — при занятой ОЗУ (15 ГБ) выделение падает
+        #   OutOfMemoryError при 6.6 ГБ свободной видеопамяти (так упали 3 партии фолда 4, пока шли 2 шарда сборки кэша)
+        import psutil
+        if not why and psutil.virtual_memory().available < 6 * 2**30:
+            why = f"мало памяти ({psutil.virtual_memory().available / 2**30:.1f} ГБ)"
         if why:
             put(state=f"ждёт: {why}"); time.sleep(120); continue
         st["batches"] += 1; n = st["batches"]
@@ -277,8 +282,15 @@ def lp_train_sup(a):
         if killed:
             put(state=f"партия {n} снята: {killed}"); time.sleep(120 if killed != "STOP" else 0); continue
         if p.returncode in (0, 75):
-            st["fails"] = 0; put(state=f"партия {n} — код {p.returncode}")
+            st["fails"] = 0; st["ooms"] = 0; put(state=f"партия {n} — код {p.returncode}")
         else:
+            err = (j / f"b{n}.err").read_text(encoding="utf-8", errors="replace")[-3000:] if (j / f"b{n}.err").exists() else ""
+            if "OutOfMemoryError" in err or "out of memory" in err:
+                # нехватка памяти — беда машины, а не задания: пауза и повтор; FAIL — только если так 6 раз подряд (≈ 1 ч)
+                st["ooms"] = st.get("ooms", 0) + 1; put(state=f"партия {n}: нехватка памяти (подряд {st['ooms']}) — пауза")
+                if st["ooms"] >= 6:
+                    (j / "FAIL").write_text("нехватка памяти 6 раз подряд", encoding="utf-8"); break
+                time.sleep(600); continue
             st["fails"] += 1; put(state=f"партия {n} упала — код {p.returncode}")
             if st["fails"] >= 3:
                 (j / "FAIL").write_text(f"три падения подряд, последний код {p.returncode}", encoding="utf-8"); break
