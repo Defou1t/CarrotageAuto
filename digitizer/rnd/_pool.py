@@ -453,7 +453,9 @@ def run(a):
                         say(pool, f"⚠ ноутбук: {job['id']} не запущен — {str(e)[:150]}; остаётся ПК")
                         job.update(state="pending", prefer="pc", dirty=True)
             prep = None
-        lp_free = lp_free and prep is None and not any(j["state"] == "lp-prep" for j in jobs)
+        # ⛔ 30.09: флаг считался ДО запуска выше — запустив одно задание, пул тут же готовил ноутбуку второе (два обучения
+        #   на 8 ГБ). Пересчёт по фактическим состояниям: у ноутбука одно задание за раз.
+        lp_free = lp_reason == "" and prep is None and not any(j["state"] in ("lp", "lp-yield", "lp-prep") for j in jobs)
         if lp_free:
             # «лучше на ПК» значит «ПК первым, если он свободен»; ПК занят другим заданием — берёт ноутбук. Задание, с которым
             # ноутбук уже сдался (FAIL — стойкий сбой, не нехватка памяти), ноутбуку не отдаётся.

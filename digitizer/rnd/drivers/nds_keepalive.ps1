@@ -26,7 +26,8 @@ $jobs = @(
   @{ task='nds_allk_crops'; log='F:\nds\output\taskS\_allk_crops.log'; done='=== ALLK CROPS DONE ===' },
   @{ task='nds_pool_allk'; log='F:\nds\output\taskS\pool\allk\pool.log'; done='=== POOL DONE ===' },
   @{ task='nds_allk_chain'; log='F:\nds\output\taskS\_allk_chain.log'; done='=== CHAIN DONE ===' },
-  @{ task='nds_ens_screen'; log='F:\nds\output\taskS\_ens_screen.log'; done='=== ENS SCREEN DONE ===' }
+  @{ task='nds_ens_screen'; log='F:\nds\output\taskS\_ens_screen.log'; done='=== ENS SCREEN DONE ===' },
+  @{ task='nds_pool_ensk'; log='F:\nds\output\taskS\pool\ensk\pool.log'; done='=== POOL DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue
