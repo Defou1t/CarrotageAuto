@@ -16,19 +16,43 @@ RND = Path(r"F:\nds\Auto\digitizer\rnd")
 TS = Path(r"F:\nds\output\taskS")
 PY = r"D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe"
 MODE = "N:rdpick=3,slotlen=0.18,slotall=1,slotgeom=1,slotfill=1,confveto=0.8"
-M1 = str(TS / "rowdec_model" / "var_all_f3").replace("\\", "/")
-M2 = str(TS / "rowdec_model" / "var_allk_f3").replace("\\", "/")
+ap = argparse.ArgumentParser()
+ap.add_argument("--only", default="")
+ap.add_argument("--fold", type=int, default=3, help="фолд экрана: листы screen_f<k>.txt, база percurve_scr_base[_f<k>]_N.pkl")
+_a0, _ = ap.parse_known_args()
+FOLD = _a0.fold
+SUF = "" if FOLD == 3 else f"_f{FOLD}"
+FROZEN = TS / "rowdec_model" / "frozen_nobg"
+
+
+def var_dir(name, src):
+    """каталог варианта для фолда: копии замороженных + новый чекпойнт фолда из `src` (нет его — отказ)"""
+    import shutil
+    d = TS / "rowdec_model" / f"{name}_f{FOLD}"
+    ck = f"rowdec_of5_f{FOLD}_s0.pt"
+    if not (TS / "rowdec_model" / src / ck).exists():
+        raise SystemExit(f"⛔ нет {src}/{ck} — модель фолда {FOLD} ещё не обучена")
+    d.mkdir(parents=True, exist_ok=True)
+    for k in range(5):
+        c = f"rowdec_of5_f{k}_s0.pt"
+        if not (d / c).exists():
+            shutil.copy2(TS / "rowdec_model" / src / c if k == FOLD else FROZEN / c, d / c)
+    return str(d).replace("\\", "/")
+
+
+_need = set(v for v in (_a0.only.split(",") if _a0.only else []))
+M1 = var_dir("var_all", "all_v1") if (not _need or _need & {"E3", "E3k", "E2a"}) else ""
+M2 = var_dir("var_allk", "allk_v1") if (not _need or _need & {"E3", "E3k", "E2k"}) else ""
 VARIANTS = {
-    "E3": [f"rowdec_ens={M1},{M2}"],                             # карты трёх моделей, эмбеддинги замороженной
-    "E3k": [f"rowdec_ens={M1},{M2}", "rowdec_ens_emb=2"],        # то же, эмбеддинги allk (личность +2 п., §6.248)
+    "E3": [f"rowdec_ens={M1};{M2}"],                             # карты трёх моделей, эмбеддинги замороженной
+    "E3k": [f"rowdec_ens={M1};{M2}", "rowdec_ens_emb=2"],        # то же, эмбеддинги allk (личность +2 п., §6.248)
     "TTA": ["rowdec_tta=1"],                                     # замороженная + отражённый проход
     # ★ 30.09 13:20 (после E3 +16, p = 0.088): двухмодельные — если хватит одной новой модели, полному A/B нужно вдвое
     #   меньше обучения (§6.252, критерий подтверждения на фолде 4)
     "E2k": [f"rowdec_ens={M2}"],                                 # замороженная + allk
     "E2a": [f"rowdec_ens={M1}"],                                 # замороженная + all_v1
 }
-ap = argparse.ArgumentParser()
-ap.add_argument("--only", default="")
+
 ap.add_argument("--shards", type=int, default=4)
 ap.add_argument("--log", default="_ens_screen.log", help="свой лог и маркер конца для второго прогона")
 a = ap.parse_args()
@@ -48,7 +72,7 @@ def run(args, out):
 
 
 def redec(tag, knobs):
-    cache = TS / f"tcache_ens_{tag}"
+    cache = TS / f"tcache_ens_{tag}{SUF}"
     (cache / "logs").mkdir(parents=True, exist_ok=True)
     kn = sum((["--knob", k] for k in knobs), [])
     n, live, runs, ok = a.shards, {}, {}, set()
@@ -68,7 +92,7 @@ def redec(tag, knobs):
             runs[i] = runs.get(i, 0) + 1
             if runs[i] > 20:
                 raise RuntimeError(f"шард {i}: 20 запусков исчерпаны")
-            live[i] = subprocess.Popen([PY, "_trace_cache.py", "redec", "--src", str(TS / "tcache_v2"), "--sheets", "screen_f3.txt",
+            live[i] = subprocess.Popen([PY, "_trace_cache.py", "redec", "--src", str(TS / "tcache_v2"), "--sheets", f"screen_f{FOLD}.txt",
                                         "--cache", str(cache), "--shard", f"{i}/{n}", "--max-hours", "6"] + kn, cwd=str(RND),
                                        creationflags=0x08000000, stdout=open(cache / "logs" / f"rd{i}.r{runs[i]}.log", "wb"),
                                        stderr=open(cache / "logs" / f"rd{i}.r{runs[i]}.err", "wb"))
@@ -82,7 +106,7 @@ if LOG.exists() and "=== ENS SCREEN DONE ===" in LOG.read_text(encoding="utf-8",
 say(f"разведка ансамбля: варианты {want}")
 L = TS / "ens_screen_logs"; L.mkdir(exist_ok=True)
 for tag in want:
-    vf = TS / f"ens_screen_{tag}_verdict.txt"
+    vf = TS / f"ens_screen_{tag}{SUF}_verdict.txt"
     if vf.exists() and "ЭКРАН" in vf.read_text(encoding="utf-8", errors="replace"):
         continue
     t0 = time.time()
@@ -90,14 +114,14 @@ for tag in want:
         cache = redec(tag, VARIANTS[tag])
     except RuntimeError as e:
         say(f"⛔ {tag}: {e}"); continue
-    rp = TS / f"rp_ens_{tag}"
-    if run([PY, "_trace_cache.py", "replay", "--sheets", "screen_f3.txt", "--cache", str(cache), "--out", str(rp), "--mode", MODE],
-           L / f"replay_{tag}.log"):
+    rp = TS / f"rp_ens_{tag}{SUF}"
+    if run([PY, "_trace_cache.py", "replay", "--sheets", f"screen_f{FOLD}.txt", "--cache", str(cache), "--out", str(rp), "--mode", MODE],
+           L / f"replay_{tag}{SUF}.log"):
         say(f"⛔ {tag}: повтор упал"); continue
-    pc = TS / f"percurve_ens_{tag}_N.pkl"
-    if run([PY, "_name_cost_prod.py", "--dir", str(rp), "--mode", "N", "--dump", str(pc)], L / f"score_{tag}.log"):
+    pc = TS / f"percurve_ens_{tag}{SUF}_N.pkl"
+    if run([PY, "_name_cost_prod.py", "--dir", str(rp), "--mode", "N", "--dump", str(pc)], L / f"score_{tag}{SUF}.log"):
         say(f"⛔ {tag}: счёт упал"); continue
-    vc = run([PY, "_screen_verdict.py", "--old", "percurve_scr_base_N.pkl", "--new", pc.name, "--sheets", "screen_f3.txt"], vf)
+    vc = run([PY, "_screen_verdict.py", "--old", f"percurve_scr_base{SUF}_N.pkl", "--new", pc.name, "--sheets", f"screen_f{FOLD}.txt"], vf)
     first = vf.read_text(encoding="utf-8", errors="replace").strip().splitlines()[0][:200]
     say(f"{tag} ({(time.time() - t0) / 60:.0f} мин): {first} (код {vc})")
 say("=== ENS SCREEN DONE ===")

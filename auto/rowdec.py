@@ -232,7 +232,7 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     #   ещё проход по отражённой по x полосе (карта отражается обратно; эмбеддинги не трогаются). Оба выкл = прежний путь
     #   бит-в-бит (ветка `len(views) == 1` — прежний код без изменений).
     views = [(net, False)]
-    for d_ in [s.strip() for s in str(getattr(p, "rowdec_ens", "") or "").split(",") if s.strip()]:
+    for d_ in [s.strip() for s in str(getattr(p, "rowdec_ens", "") or "").replace(";", ",").split(",") if s.strip()]:
         from pathlib import Path as _P
         q_ = _P(d_) / ckpt
         if not q_.is_file():
