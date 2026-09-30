@@ -102,7 +102,12 @@ def _load(ckpt):
     # ⛔ 26.09 (аудит): кэш сетей был по ГОЛОМУ имени файла, а `resolve` зависит от `_DIR` (rowdec_dir) — второй вариант
     #   каталога в том же процессе молча получил бы веса первого (ровно смешение, от которого защищает `resolve`). Ключ —
     #   полный разрешённый путь. В проде каталог один — выдача та же.
-    key = str(resolve(ckpt))
+    return _load_path(resolve(ckpt))
+
+
+def _load_path(path):
+    """сеть по ЯВНОМУ пути чекпойнта (кэш по полному пути) — для `_load` и для ансамбля `rowdec_ens`"""
+    key = str(path)
     if key in _NET:
         return _NET[key]
     import torch
@@ -130,7 +135,7 @@ def _load(ckpt):
                 h = h + b(h)
             return self.head_p(h), self.head_e(h)
 
-    ck = torch.load(str(resolve(ckpt)), map_location="cpu")
+    ck = torch.load(key, map_location="cpu")
     net = Net(ck["emb"], ck.get("ch", 32))
     net.load_state_dict(ck["sd"]); net.eval()
     dev = "cuda" if torch.cuda.is_available() and torch.cuda.device_count() else "cpu"
@@ -221,6 +226,23 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     """→ list[{row: x}] длиной k: траектории кривых трека в координатах ЛИСТА."""
     import torch
     net, dev = _load(ckpt)
+    # ★ 30.09 (§6.252): АНСАМБЛЬ КАРТ. `cv.rowdec_ens` — доп. каталоги моделей (тот же чекпойнт фолда в каждом, через
+    #   запятую): карты вероятностей усредняются; эмбеддинги личности — одной модели, `cv.rowdec_ens_emb` (0 = основная,
+    #   1.. — по порядку `rowdec_ens`): склейка эмбеддингов не влезает в память на длинных треках. `cv.rowdec_tta` = 1 —
+    #   ещё проход по отражённой по x полосе (карта отражается обратно; эмбеддинги не трогаются). Оба выкл = прежний путь
+    #   бит-в-бит (ветка `len(views) == 1` — прежний код без изменений).
+    views = [(net, False)]
+    for d_ in [s.strip() for s in str(getattr(p, "rowdec_ens", "") or "").split(",") if s.strip()]:
+        from pathlib import Path as _P
+        q_ = _P(d_) / ckpt
+        if not q_.is_file():
+            raise FileNotFoundError(f"rowdec_ens: {q_} нет — ансамбль без модели фолда был бы другим замером")
+        views.append((_load_path(q_)[0], False))
+    if int(getattr(p, "rowdec_tta", 0) or 0):
+        views += [(nt, True) for nt, _ in list(views)]
+    emb_i = int(getattr(p, "rowdec_ens_emb", 0) or 0)
+    if not 0 <= emb_i < len(views) or views[emb_i][1]:
+        raise ValueError(f"rowdec_ens_emb={emb_i}: моделей {sum(1 for _, f in views if not f)}")
     x0, x1 = int(track.x_left), int(track.x_right) + 1
     band = _band(rgb, p, x0, x1)
     H, Wb = band.shape
@@ -239,9 +261,22 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                 continue
             sub = band[gy:gy2, cx0:cx1].astype(np.float32) / 255.0
             with torch.no_grad():
-                pp, ee = net(torch.from_numpy(sub)[None, None].to(dev))
-                pp = torch.sigmoid(pp)[0, 0].float().cpu().numpy()
-                ee = ee[0].float().cpu().numpy()
+                if len(views) == 1:
+                    pp, ee = net(torch.from_numpy(sub)[None, None].to(dev))
+                    pp = torch.sigmoid(pp)[0, 0].float().cpu().numpy()
+                    ee = ee[0].float().cpu().numpy()
+                else:
+                    xt = torch.from_numpy(sub)[None, None].to(dev)
+                    acc, ee = None, None
+                    for vi, (nt, flip) in enumerate(views):
+                        pv, ev = nt(torch.flip(xt, dims=[3]) if flip else xt)
+                        pv = torch.sigmoid(pv)[0, 0].float()
+                        if flip:
+                            pv = torch.flip(pv, dims=[1])
+                        acc = pv if acc is None else acc + pv
+                        if vi == emb_i:
+                            ee = ev[0].float().cpu().numpy()
+                    pp = (acc / len(views)).cpu().numpy()
             if embs is None:
                 embs = np.zeros((ee.shape[0], y1 - y0, Wb), np.float32)
             v0 = gy + (OV if gy > y0 else 0); v1 = gy2 - (OV if gy2 < y1 else 0)
