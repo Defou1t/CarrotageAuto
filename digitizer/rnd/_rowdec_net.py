@@ -69,8 +69,10 @@ ap.add_argument("--force", action="store_true",
 ap.add_argument("--check-cat", action="store_true", help="сверить склейку Cat с np.concatenate и выйти (обучения нет)")
 ap.add_argument("--grad-ckpt", type=int, default=0, help="1 = перерасчёт активаций по блокам (та же математика, вдвое меньше видеопамяти)")
 ap.add_argument("--check-ckpt", action="store_true", help="сверить --grad-ckpt с обычным проходом и выйти")
+ap.add_argument("--dil", default="1,2,4,8,16,32", help="★ 02.10 (§6.256): расширения свёрток блоков; «64x1» — только по строкам. Поле зрения по оси = ±(1 + сумма расширений): прод ±64")
 a = ap.parse_args()
 OUT = Path(a.out); OUT.mkdir(parents=True, exist_ok=True)
+DIL = tuple(int(x) if "x" not in x else tuple(int(v) for v in x.split("x")) for x in a.dil.split(","))
 DEV = "cuda" if torch.cuda.is_available() and torch.cuda.device_count() else "cpu"   # CUDA_VISIBLE_DEVICES="" → cpu
 
 
@@ -79,7 +81,7 @@ class Net(nn.Module):
     расстоянии: сеть обязана решать ЛОКАЛЬНО, иначе она выучит расположение кривых конкретных
     бланков (та же ловушка, что §6.87 — разбиение по листам вместо скважин)."""
 
-    def __init__(self, emb=8, ch=32):
+    def __init__(self, emb=8, ch=32, dil=(1, 2, 4, 8, 16, 32)):
         super().__init__()
         self.stem = nn.Conv2d(1, ch, 3, padding=1)
         blocks = []
@@ -87,9 +89,10 @@ class Net(nn.Module):
         # и поле по КОЛОНКАМ выходило ±7px — соседняя кривая в 20px лежала ВНЕ поля зрения, то есть
         # эмбеддинг личности физически не мог отличить её от своей. Замер разбора: ±64 строки, но
         # ±7 колонок при обещанных в докстринге «±63».
-        for d in (1, 2, 4, 8, 16, 32):
+        for d in dil:                         # ★ 02.10 (§6.256): набор расширений — параметр (прежний по умолчанию)
+            dr, dc = (int(d), int(d)) if isinstance(d, (int, np.integer)) else (int(d[0]), int(d[1]))   # пара = (строки, колонки)
             blocks.append(nn.Sequential(
-                nn.Conv2d(ch, ch, 3, padding=(d, d), dilation=(d, d)),
+                nn.Conv2d(ch, ch, 3, padding=(dr, dc), dilation=(dr, dc)),
                 nn.GroupNorm(4, ch), nn.ReLU(inplace=True)))
         self.blocks = nn.ModuleList(blocks)
         self.head_p = nn.Conv2d(ch, 1, 1)
@@ -348,7 +351,7 @@ def main():
         idx = cand[:a.overfit]
         tr = np.zeros(len(tr), bool); tr[idx] = True; te = tr.copy()
         print(f"⚠ СМОУК ПРОВОДКИ: переобучение на {a.overfit} кропах (G1)")
-    net = Net(a.emb, a.ch).to(DEV)
+    net = Net(a.emb, a.ch, DIL).to(DEV)
     print(f"параметров {sum(p.numel() for p in net.parameters()):,}, устройство {DEV}; "
           f"★ ВАРИАНТ ЛОССА: bg={a.bg} ({'с фоновым членом' if a.bg else 'БЕЗ фонового члена — '
           'как замороженный набор frozen_nobg'}), эпох {a.epochs}, каталог {OUT}")
@@ -423,7 +426,7 @@ def main():
     # в логе обучения (`ts += float(push)` против `push + bgl`), а логи переписывались одним
     # именем. То есть «этот чекпойнт обучен тем же кодом» было НЕПРОВЕРЯЕМЫМ утверждением —
     # ровно §6.71, только про веса, а не про кэши.
-    torch.save(dict(sd=net.state_dict(), emb=a.emb, ch=a.ch, sigma=a.sigma, fold=a.fold,
+    torch.save(dict(sd=net.state_dict(), emb=a.emb, ch=a.ch, dil=[list(d) if isinstance(d, tuple) else d for d in DIL], sigma=a.sigma, fold=a.fold,
                     folds=a.folds, seed=a.seed, pos_weight=a.pos_weight,
                     bg=int(a.bg), epochs=a.epochs, lam=a.lam, lr=a.lr, batch=a.batch,
                     crops=str(a.crops), resumed_from=resumed, grad_ckpt=int(a.grad_ckpt),

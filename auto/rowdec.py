@@ -120,12 +120,14 @@ def _load_path(path):
         float64-обход деревьев расходился с float32 sklearn). Поэтому: любая правка сети — здесь
         и там одновременно, а проверка — сверкой выходов на одном кропе."""
 
-        def __init__(self, emb=8, ch=32):
+        def __init__(self, emb=8, ch=32, dil=(1, 2, 4, 8, 16, 32)):
             super().__init__()
             self.stem = nn.Conv2d(1, ch, 3, padding=1)
+            # ★ 02.10 (§6.256): расширение — целое (обе оси) или пара (строки, колонки)
+            dd = [(int(d), int(d)) if isinstance(d, int) else (int(d[0]), int(d[1])) for d in dil]
             self.blocks = nn.ModuleList([nn.Sequential(
-                nn.Conv2d(ch, ch, 3, padding=(d, d), dilation=(d, d)),
-                nn.GroupNorm(4, ch), nn.ReLU(inplace=True)) for d in (1, 2, 4, 8, 16, 32)])
+                nn.Conv2d(ch, ch, 3, padding=d, dilation=d),
+                nn.GroupNorm(4, ch), nn.ReLU(inplace=True)) for d in dd])
             self.head_p = nn.Conv2d(ch, 1, 1)
             self.head_e = nn.Conv2d(ch, emb, 1)
 
@@ -136,7 +138,7 @@ def _load_path(path):
             return self.head_p(h), self.head_e(h)
 
     ck = torch.load(key, map_location="cpu")
-    net = Net(ck["emb"], ck.get("ch", 32))
+    net = Net(ck["emb"], ck.get("ch", 32), tuple(ck.get("dil", (1, 2, 4, 8, 16, 32))))     # ★ 02.10: расширения — из чекпойнта
     net.load_state_dict(ck["sd"]); net.eval()
     dev = "cuda" if torch.cuda.is_available() and torch.cuda.device_count() else "cpu"
     _NET[key] = (net.to(dev), dev)

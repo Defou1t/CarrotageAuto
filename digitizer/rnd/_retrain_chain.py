@@ -32,6 +32,7 @@ ap.add_argument("--models", required=True)
 ap.add_argument("--screen-fold", type=int, default=3)
 ap.add_argument("--order", default="4,2,0,1", help="фолды после экрана; первый учится наперёд вместе с фолдом экрана")
 ap.add_argument("--pool", default="", help="★ 02.10: общий пул нескольких цепочек (по умолчанию — метка)")
+ap.add_argument("--screen-knob", action="append", default=[], help="★ 02.10 (§6.256): доп. ручки инференса в redec экранов и в полный A/B (например rowdec_tile_rows=1024)")
 ap.add_argument("--extra", default="", help="★ 02.10: доп. аргументы обучения в задания пула (\"--ch 64\")")
 ap.add_argument("--confirm-fold", type=int, default=-1, help="★ 02.10: подтверждение на этом фолде ДО остальных фолдов "
                 "(тот же критерий, база percurve_scr_base_f<k>_N.pkl); не прошло — линия закрыта")
@@ -154,7 +155,7 @@ if not vfile.exists() or "ЭКРАН" not in vfile.read_text(encoding="utf-8", e
     cache = TS / f"tcache_rd{TAG}f{SF}"
     shards("redec", lambda i, n: ["_trace_cache.py", "redec", "--src", str(TS / "tcache_v2"), "--sheets", f"screen_f{SF}.txt",
                                   "--cache", str(cache), "--shard", f"{i}/{n}", "--max-hours", "6",
-                                  "--knob", f"rowdec_dir={str(var).replace(chr(92), '/')}"], cache)
+                                  "--knob", f"rowdec_dir={str(var).replace(chr(92), '/')}"] + sum((["--knob", k] for k in a.screen_knob), []), cache)
     L = TS / f"{TAG}_chain_logs"; L.mkdir(exist_ok=True)
     base_pc = TS / f"percurve_scr_base_N.pkl"
     mk = TS / "rp_scr_base" / "_replay_done.json"
@@ -209,7 +210,7 @@ if a.confirm_fold >= 0:
         cachec = TS / f"tcache_rd{TAG}f{CF}"
         shards("redecC", lambda i, n: ["_trace_cache.py", "redec", "--src", str(TS / "tcache_v2"), "--sheets", f"screen_f{CF}.txt",
                                        "--cache", str(cachec), "--shard", f"{i}/{n}", "--max-hours", "6",
-                                       "--knob", f"rowdec_dir={str(varc).replace(chr(92), '/')}"], cachec)
+                                       "--knob", f"rowdec_dir={str(varc).replace(chr(92), '/')}"] + sum((["--knob", k] for k in a.screen_knob), []), cachec)
         Lc = TS / f"{TAG}_chain_logs"; Lc.mkdir(exist_ok=True)
         rpc = TS / f"rp_scr_{TAG}f{CF}"
         if run([PY, "_trace_cache.py", "replay", "--sheets", f"screen_f{CF}.txt", "--cache", str(cachec), "--out", str(rpc),
@@ -243,9 +244,13 @@ for f in range(5):
 say(f"все пять фолдов готовы: {full} — полный A/B rd{TAG}")
 klog = TS / f"_knobab_rd{TAG}.log"
 while "=== KNOBAB DONE ===" not in (klog.read_text(encoding="utf-8-sig", errors="replace") if klog.exists() else ""):
-    c = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(TS / "_knobab_run.ps1"),
-                        "-Knob", f"rowdec_dir={str(full).replace(chr(92), '/')}", "-Tag", f"rd{TAG}", "-Base", "tcache",
-                        "-Redec", "tcache_v2"], cwd=str(TS), creationflags=0x08000000).returncode
+    knobs = [f"rowdec_dir={str(full).replace(chr(92), '/')}"] + list(a.screen_knob)
+    wrap = TS / f"_knobab_rd{TAG}.ps1"
+    arr = ",".join("'" + k.replace("'", "''") + "'" for k in knobs)
+    wrap.write_bytes(b"\xef\xbb\xbf" + (f"# обёртка A/B rd{TAG} (`_retrain_chain.py`)\r\n& 'F:\\nds\\output\\taskS\\_knobab_run.ps1' "
+                                         f"-Knob {arr} -Tag 'rd{TAG}' -Base 'tcache' -Redec 'tcache_v2'\r\n").encode("utf-8"))
+    c = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(wrap)], cwd=str(TS),
+                       creationflags=0x08000000).returncode
     if "=== KNOBAB DONE ===" not in (klog.read_text(encoding="utf-8-sig", errors="replace") if klog.exists() else ""):
         say(f"A/B rd{TAG}: драйвер вышел кодом {c} без маркера — жду 5 мин и повторяю"); time.sleep(300)
 say(f"полный A/B: knobab_rd{TAG}_verdict.txt")
