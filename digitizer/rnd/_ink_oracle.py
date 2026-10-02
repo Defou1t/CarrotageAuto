@@ -84,6 +84,7 @@ for sn, names in SETS.items():
         for g, gt in G.items():
             cand = any(hon(t, gt) for t in T)
             orc, tol = {}, {}
+            orf, tolf, perp = {}, {}, {}        # ★ ПОЛНЫЙ ран (без подсказки окна эталона) и перпендикулярный допуск
             ys = sorted(gt)
             steep = 0
             for y in ys:
@@ -105,12 +106,31 @@ for sn, names in SETS.items():
                 tol[y] = max(3.0, 0.35 * (en[i] - st[i]))
                 sl = abs(gt.get(y + 1, xt) - gt.get(y - 1, xt)) / 2.0
                 steep += sl > 2.0
+                row = dark[y] >= a.thr
+                p0 = int(st[i] + lo) if dist[i] > 0 and abs(st[i] + lo - xt) <= abs(en[i] - 1 + lo - xt) else \
+                    (int(en[i] - 1 + lo) if dist[i] > 0 else c if row[c] else int(st[i] + lo))
+                l_ = p0
+                while l_ > 0 and row[l_ - 1]:
+                    l_ -= 1
+                r_ = p0
+                while r_ < W - 1 and row[r_ + 1]:
+                    r_ += 1
+                orf[y] = (l_ + r_) / 2.0
+                tolf[y] = max(3.0, 0.35 * (r_ - l_ + 1))
+                perp[y] = 3.0 * float(np.sqrt(1.0 + sl * sl))     # 3 px ПО НОРМАЛИ к кривой = 3·√(1+s²) по строке
             ho = hon(orc, gt); ht = hon(orc, gt, tol) if orc else False
+            hf = hon(orf, gt) if orf else False
+            hft = hon(orf, gt, tolf) if orf else False
+            hfp = hon(orf, gt, perp) if orf else False
             cls = "с кандидатом" if cand else "без кандидата"
             C[sn][(cls, "кривых")] += 1
             C[sn][(cls, "оракул честен")] += ho
             C[sn][(cls, "оракул честен с допуском толщины")] += ht
-            ROWS.append(dict(set=sn, sheet=sh, name=g, cand=cand, ho=ho, ht=ht, steep=steep / max(1, len(ys)),
+            C[sn][(cls, "полный ран")] += hf
+            C[sn][(cls, "полный ран, допуск толщины")] += hft
+            C[sn][(cls, "полный ран, 3 px по нормали")] += hfp
+            ROWS.append(dict(set=sn, sheet=sh, name=g, cand=cand, ho=ho, ht=ht, hf=hf, hft=hft, hfp=hfp,
+                             steep=steep / max(1, len(ys)),
                              cov=cover(orc, gt) if orc else 0.0))
         del rgb, dark
     print(f"  {sn}: готово", file=sys.stderr)
@@ -125,6 +145,9 @@ for sn in SETS:
             print(f"   {cls}: кривых {n}; оракул по туши честен {c[(cls, 'оракул честен')]} ({100 * c[(cls, 'оракул честен')] / n:.0f}%), "
                   f"с допуском толщины {c[(cls, 'оракул честен с допуском толщины')]} "
                   f"({100 * c[(cls, 'оракул честен с допуском толщины')] / n:.0f}%)")
+            print(f"      ПОЛНЫЙ ран (центр штриха без подсказки окна): 3 px — {100 * c[(cls, 'полный ран')] / n:.0f}%, "
+                  f"допуск толщины — {100 * c[(cls, 'полный ран, допуск толщины')] / n:.0f}%, "
+                  f"3 px по нормали — {100 * c[(cls, 'полный ран, 3 px по нормали')] / n:.0f}%")
     R = [r for r in ROWS if r["set"] == sn and not r["cand"]]
     if R:
         for lo_, hi_ in ((0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 1.01)):
@@ -132,4 +155,6 @@ for sn in SETS:
             if rr:
                 print(f"   без кандидата, крутых строк {lo_:.1f}–{min(hi_, 1):.1f}: {len(rr)}; оракул честен "
                       f"{np.mean([r['ho'] for r in rr]):.0%}, с допуском {np.mean([r['ht'] for r in rr]):.0%}; "
+                      f"полный ран {np.mean([r['hf'] for r in rr]):.0%} / допуск толщины {np.mean([r['hft'] for r in rr]):.0%} "
+                      f"/ по нормали {np.mean([r['hfp'] for r in rr]):.0%}; "
                       f"покрытие оракула — медиана {np.median([r['cov'] for r in rr]):.2f}")
