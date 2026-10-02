@@ -82,6 +82,18 @@ def dense_pts(tr, gap=30):
     return np.concatenate(out)
 
 
+def held(tr, gt, tree=None):
+    """★ 02.10: доли строк эталона (из общих с трассой), где |Δx| ≤ 3 px и где расстояние до ломаной трассы ≤ 3 px"""
+    from scipy.spatial import cKDTree
+    com = [y for y in tr if y in gt]
+    if len(com) < 30:
+        return 0.0, 0.0
+    tree = tree or cKDTree(dense_pts(tr))
+    d, _ = tree.query(np.array([[y, gt[y]] for y in com], float))
+    h1 = float(np.mean([abs(tr[y] - gt[y]) <= 3.0 for y in com]))
+    return h1, float(np.mean(d <= 3.0))
+
+
 def st_d2(tr, gt, tree=None):
     """★ 02.10: медиана расстояния от точки эталона (строка, где есть трасса) до ломаной трассы на плоскости; покрытие — как `st`"""
     from scipy.spatial import cKDTree
@@ -110,7 +122,7 @@ def match(rows, cols, ok):
     return {r: c for c, r in pair.items()}
 
 
-C = Counter(); gained = Counter(); gainedN = Counter(); gainedD = Counter(); widths = []; GAINED = []; GAINED_D = []
+C = Counter(); gained = Counter(); gainedN = Counter(); gainedD = Counter(); widths = []; GAINED = []; GAINED_D = []; HELD = []
 for si, sh in enumerate(field, 1):
     q = SRC.get(sh)
     if not q:
@@ -179,6 +191,12 @@ for si, sh in enumerate(field, 1):
         if a.d2:
             md_ = match(gs, ws, okd)
             C["честных на плоскости"] += len(md_)
+            for g, k_ in m3.items():
+                if k_ in trees:
+                    HELD.append(("честна при 3 px",) + held(W[k_], G[g], trees[k_]))
+            for g, k_ in md_.items():
+                if g not in m3 and k_ in trees:
+                    HELD.append(("прибавка на плоскости",) + held(W[k_], G[g], trees[k_]))
             for g in gs:
                 if g in md_ and g not in m3:
                     gainedD[M.mnem_root(g)] += 1
@@ -210,6 +228,13 @@ print(f"  ширина штриха эталона (px): p25 {np.percentile(w,25
 print("  прибавка по семействам: " + ", ".join(f"{k} {v}" for k, v in gained.most_common(12)))
 if a.dump_gained:
     pickle.dump(GAINED_D if a.d2 else GAINED, open(a.dump_gained, "wb"))
+if a.d2 and HELD:
+    for grp in ("честна при 3 px", "прибавка на плоскости"):
+        H = np.array([h[1:] for h in HELD if h[0] == grp])
+        if len(H):
+            print(f"  {grp}: {len(H)}; доля строк |Δx| ≤ 3 px — медиана {np.median(H[:, 0]):.2f}; на плоскости ≤ 3 px — "
+                  f"медиана {np.median(H[:, 1]):.2f}, квартили {np.percentile(H[:, 1], 25):.2f}–{np.percentile(H[:, 1], 75):.2f}, "
+                  f"< 0.7 у {np.mean(H[:, 1] < 0.7):.0%}")
 if a.d2:
     print(f"★ на плоскости (расстояние от точки эталона до ломаной трассы, медиана ≤ 3 px): честных {C['честных на плоскости']} "
           f"({C['честных на плоскости'] - C['честных при 3 px']:+d} к 3 px; потеряно из честных при 3 px {C['потеряно на плоскости']}); "
