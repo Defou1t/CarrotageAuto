@@ -32,6 +32,7 @@ ap.add_argument("--offset", type=int, default=0)
 ap.add_argument("--wskip", type=float, nargs="+", default=[0.5])
 ap.add_argument("--gmax", type=int, default=30)
 ap.add_argument("--rounds", type=int, default=0, help="кругов перекладки путей (0 — без варианта)")
+ap.add_argument("--v0rounds", type=int, nargs="*", default=[], help="★ 02.10: прод-Витерби + перекладка N кругов (без удержания) — B5 в дешёвом виде")
 ap.add_argument("--hjump", type=float, default=0.15, help="цена прыжка В ВАРИАНТАХ С УДЕРЖАНИЕМ (V0 — всегда прод 0.15)")
 ap.add_argument("--emb", action="store_true", help="§6.246: варианты эмбеддингов личности: K ≥ 2, вес 0.5 / 2, старт прототипов по x")
 ap.add_argument("--occl", action="store_true", help="§6.244: варианты «удержание-заслон W» — удерживаться можно, только если рядом с позицией ЗАНЯТЫЙ пик прежнего пути")
@@ -342,6 +343,8 @@ if a.emb:                                  # §6.246
                       ("эмб5 лучший из двух стартов + вес 0.7", {"init": "best", "w": 0.7}),
                       ("эмб5 лучший из двух стартов", {"init": "best"})):
         VARS += [(nm_, 0.6, None, 0)]; EMBV[nm_] = cfg_
+for r_ in a.v0rounds:                      # ★ 02.10: координатный спуск поверх прод-Витерби
+    VARS += [(f"V0 + перекладка {r_}", 0.6, None, r_)]
 if a.kplus:                                # §6.244: K+N и без удержания (прод-Витерби, лишний путь)
     VARS += [(f"V0 + K+{a.kplus}", 0.6, None, -a.kplus)]
 for w in a.wskip:
