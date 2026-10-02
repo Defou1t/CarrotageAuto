@@ -486,6 +486,8 @@ def run(a):
             for j in jobs:
                 if j["id"] in by and by[j["id"]]["state"] == "cancelled" and j["state"] != "done":
                     j["state"] = "cancelled"
+                if j["id"] in by:
+                    j["prio"] = by[j["id"]]["prio"]     # приоритет меняет только цепочка (`prio`) — берём из файла
                 by[j["id"]] = j
             save_jobs(pool, {"jobs": sorted(by.values(), key=lambda j: (j["prio"], j["id"]))})
 
@@ -524,6 +526,15 @@ def cancel(a):
     save_jobs(a.pool, J); say(a.pool, f"снято задание {a.id}")
 
 
+def setprio(a):
+    """★ 02.10: сменить приоритет задания (цепочка поднимает фолд подтверждения, когда разведка прошла)"""
+    J = load_jobs(a.pool)
+    for j in J["jobs"]:
+        if j["id"] == a.id:
+            j["prio"] = a.prio
+    save_jobs(a.pool, J); say(a.pool, f"приоритет {a.id} → {a.prio}")
+
+
 def show(a):
     J = load_jobs(a.pool)
     for j in J["jobs"]:
@@ -532,7 +543,7 @@ def show(a):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["run", "add", "cancel", "finish", "show"])
+    ap.add_argument("cmd", choices=["run", "add", "cancel", "finish", "show", "prio"])
     ap.add_argument("--pool", required=True)
     ap.add_argument("--id", default="")
     ap.add_argument("--prio", type=int, default=5)
@@ -543,4 +554,4 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.cmd == "finish":
         (pdir(a.pool) / "FINISH").write_text(time.strftime("%Y-%m-%d %H:%M"), encoding="utf-8"); sys.exit(0)
-    sys.exit({"run": run, "add": add, "cancel": cancel, "show": show}[a.cmd](a) or 0)
+    sys.exit({"run": run, "add": add, "cancel": cancel, "show": show, "prio": setprio}[a.cmd](a) or 0)

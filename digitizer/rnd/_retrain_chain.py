@@ -197,6 +197,7 @@ if vc != 0:
 # 3b. ★ 02.10: подтверждение на втором фолде ДО обучения остальных (критерий тот же, лист другой — независимая выборка)
 if a.confirm_fold >= 0:
     CF = a.confirm_fold
+    pool("prio", id=f"{TAG}_f{CF}", prio=0)       # ★ 02.10: разведка прошла — фолд подтверждения вперёд очереди
     cvf = TS / f"rowdec_screen_{TAG}_f{CF}_verdict.txt"
     pcf = TS / f"percurve_scr_{TAG}f{CF}_N.pkl"
     if not cvf.exists() or "ЭКРАН" not in cvf.read_text(encoding="utf-8", errors="replace"):
