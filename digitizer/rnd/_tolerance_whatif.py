@@ -30,6 +30,8 @@ ap.add_argument("--every", type=int, default=1)
 ap.add_argument("--sheets", default="wellmap_sheets.txt", help="список листов в --ts (поле; сорт A — holdoutA_sheets.txt)")
 ap.add_argument("--d2", action="store_true", help="★ 02.10 (§6.257): мера «до линии трассы на плоскости» — ошибка строки эталона = "
                 "расстояние от точки эталона до ломаной трассы (уплотнённой по x), а не |Δx| по строке; честно — медиана ≤ 3 px")
+ap.add_argument("--held-min", type=float, default=0.7, help="★ 02.10: строгий вариант обеих мер — доля общих строк в 3 px ≥ этого "
+                "(вместо медианы, то есть ≥ 0.5)")
 ap.add_argument("--dump-gained", default="", help="★ 02.10: pickle прибавки по нормали — (лист, кривая эталона, кривая выдачи, "
                 "медиана |Δ| px, медиана |Δ|/допуск) для просмотра")
 ap.add_argument("--normal", type=float, default=0.0, help="★ 02.10 (§6.257): ещё и допуск ПО НОРМАЛИ — N px от линии эталона, "
@@ -167,7 +169,7 @@ for si, sh in enumerate(field, 1):
     tm = smap.get(sh, {})
     for t in {tm.get(g) for g in G if tm.get(g) is not None}:
         gs = [g for g in G if tm.get(g) == t]; ws = [k for k in W if tm.get(k) == t and W[k]]
-        ok3, okw, okn, okd = {}, {}, {}, {}
+        ok3, okw, okn, okd, ok3s, okds = {}, {}, {}, {}, {}, {}
         if a.d2:
             from scipy.spatial import cKDTree
             trees = {k: cKDTree(dense_pts(W[k])) for k in ws if len(W[k]) >= 2}
@@ -186,11 +188,16 @@ for si, sh in enumerate(field, 1):
                 if a.d2 and k in trees:
                     md, cd = st_d2(W[k], G[g], trees[k])
                     okd[(g, k)] = md is not None and md <= 3.0 and cd >= 0.9
+                    h1, h2 = held(W[k], G[g], trees[k])
+                    ok3s[(g, k)] = h1 >= a.held_min and c >= 0.9
+                    okds[(g, k)] = h2 >= a.held_min and cd >= 0.9
         m3 = match(gs, ws, ok3); mw = match(gs, ws, okw)
         C["кривых"] += len(gs); C["честных при 3 px"] += len(m3); C["честных при мягком допуске"] += len(mw)
         if a.d2:
             md_ = match(gs, ws, okd)
             C["честных на плоскости"] += len(md_)
+            C["строго по строке"] += len(match(gs, ws, ok3s))
+            C["строго на плоскости"] += len(match(gs, ws, okds))
             for g, k_ in m3.items():
                 if k_ in trees:
                     HELD.append(("честна при 3 px",) + held(W[k_], G[g], trees[k_]))
@@ -236,6 +243,8 @@ if a.d2 and HELD:
                   f"медиана {np.median(H[:, 1]):.2f}, квартили {np.percentile(H[:, 1], 25):.2f}–{np.percentile(H[:, 1], 75):.2f}, "
                   f"< 0.7 у {np.mean(H[:, 1] < 0.7):.0%}")
 if a.d2:
+    print(f"★ строгие варианты (доля строк в 3 px ≥ {a.held_min:g} вместо медианы): по строке {C['строго по строке']}, "
+          f"на плоскости {C['строго на плоскости']}")
     print(f"★ на плоскости (расстояние от точки эталона до ломаной трассы, медиана ≤ 3 px): честных {C['честных на плоскости']} "
           f"({C['честных на плоскости'] - C['честных при 3 px']:+d} к 3 px; потеряно из честных при 3 px {C['потеряно на плоскости']}); "
           "прибавка: " + ", ".join(f"{k} {v}" for k, v in gainedD.most_common(12)))
