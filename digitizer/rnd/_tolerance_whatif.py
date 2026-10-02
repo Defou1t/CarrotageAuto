@@ -28,6 +28,12 @@ ap.add_argument("--map", default="slotmap.pkl")
 ap.add_argument("--k", type=float, default=0.35)
 ap.add_argument("--every", type=int, default=1)
 ap.add_argument("--sheets", default="wellmap_sheets.txt", help="список листов в --ts (поле; сорт A — holdoutA_sheets.txt)")
+ap.add_argument("--d2", action="store_true", help="★ 02.10 (§6.257): мера «до линии трассы на плоскости» — ошибка строки эталона = "
+                "расстояние от точки эталона до ломаной трассы (уплотнённой по x), а не |Δx| по строке; честно — медиана ≤ 3 px")
+ap.add_argument("--dump-gained", default="", help="★ 02.10: pickle прибавки по нормали — (лист, кривая эталона, кривая выдачи, "
+                "медиана |Δ| px, медиана |Δ|/допуск) для просмотра")
+ap.add_argument("--normal", type=float, default=0.0, help="★ 02.10 (§6.257): ещё и допуск ПО НОРМАЛИ — N px от линии эталона, "
+                "то есть N·√(1+s²) по строке при наклоне s (0 — не считать)")
 a = ap.parse_args()
 TS = Path(a.ts)
 smap = pickle.load(open(TS / a.map, "rb"))
@@ -53,6 +59,40 @@ def st(tr, gt):
     return float(np.median([abs(tr[y] - gt[y]) for y in com])), len(com) / max(1, len(gt))
 
 
+def st_norm(tr, gt, tol):
+    """★ 02.10: медиана |Δ| / допуск строки (≤ 1 — честно по нормали) и покрытие"""
+    com = [y for y in tr if y in gt]
+    if len(com) < 30:
+        return None, 0.0
+    return float(np.median([abs(tr[y] - gt[y]) / tol[y] for y in com])), len(com) / max(1, len(gt))
+
+
+def dense_pts(tr, gap=30):
+    """★ 02.10: точки ломаной трассы с шагом ≤ 1 px по обеим осям (крутой отрезок строки — много точек по x)"""
+    ys = np.array(sorted(tr), float)
+    if len(ys) < 2:
+        return np.array([[ys[0], tr[ys[0]]]]) if len(ys) else np.zeros((0, 2))
+    xs = np.array([tr[int(y)] for y in ys], float)
+    out = [np.stack([ys, xs], 1)]
+    dy = np.diff(ys); dx = np.diff(xs)
+    for i in np.flatnonzero((dy <= gap) & (np.abs(dx) > 1)):
+        n = int(np.ceil(abs(dx[i])))
+        t = np.arange(1, n) / n
+        out.append(np.stack([ys[i] + dy[i] * t, xs[i] + dx[i] * t], 1))
+    return np.concatenate(out)
+
+
+def st_d2(tr, gt, tree=None):
+    """★ 02.10: медиана расстояния от точки эталона (строка, где есть трасса) до ломаной трассы на плоскости; покрытие — как `st`"""
+    from scipy.spatial import cKDTree
+    com = [y for y in tr if y in gt]
+    if len(com) < 30:
+        return None, 0.0
+    tree = tree or cKDTree(dense_pts(tr))
+    d, _ = tree.query(np.array([[y, gt[y]] for y in com], float))
+    return float(np.median(d)), len(com) / max(1, len(gt))
+
+
 def match(rows, cols, ok):
     pair = {}
 
@@ -70,7 +110,7 @@ def match(rows, cols, ok):
     return {r: c for c, r in pair.items()}
 
 
-C = Counter(); gained = Counter(); widths = []
+C = Counter(); gained = Counter(); gainedN = Counter(); gainedD = Counter(); widths = []; GAINED = []; GAINED_D = []
 for si, sh in enumerate(field, 1):
     q = SRC.get(sh)
     if not q:
@@ -115,15 +155,48 @@ for si, sh in enumerate(field, 1):
     tm = smap.get(sh, {})
     for t in {tm.get(g) for g in G if tm.get(g) is not None}:
         gs = [g for g in G if tm.get(g) == t]; ws = [k for k in W if tm.get(k) == t and W[k]]
-        ok3, okw = {}, {}
+        ok3, okw, okn, okd = {}, {}, {}, {}
+        if a.d2:
+            from scipy.spatial import cKDTree
+            trees = {k: cKDTree(dense_pts(W[k])) for k in ws if len(W[k]) >= 2}
         for g in gs:
             tol = max(3.0, a.k * wid[g])
+            if a.normal:
+                gg = G[g]
+                tn = {y: a.normal * math.sqrt(1.0 + ((gg.get(y + 1, x) - gg.get(y - 1, x)) / 2.0) ** 2) for y, x in gg.items()}
             for k in ws:
                 m, c = st(W[k], G[g])
                 ok3[(g, k)] = m is not None and m <= 3.0 and c >= 0.9
                 okw[(g, k)] = m is not None and m <= tol and c >= 0.9
+                if a.normal:
+                    mn, cn = st_norm(W[k], G[g], tn)
+                    okn[(g, k)] = mn is not None and mn <= 1.0 and cn >= 0.9
+                if a.d2 and k in trees:
+                    md, cd = st_d2(W[k], G[g], trees[k])
+                    okd[(g, k)] = md is not None and md <= 3.0 and cd >= 0.9
         m3 = match(gs, ws, ok3); mw = match(gs, ws, okw)
         C["кривых"] += len(gs); C["честных при 3 px"] += len(m3); C["честных при мягком допуске"] += len(mw)
+        if a.d2:
+            md_ = match(gs, ws, okd)
+            C["честных на плоскости"] += len(md_)
+            for g in gs:
+                if g in md_ and g not in m3:
+                    gainedD[M.mnem_root(g)] += 1
+                    k_ = md_[g]
+                    GAINED_D.append((sh, g, k_, st(W[k_], G[g])[0], st_d2(W[k_], G[g], trees[k_])[0]))
+                if g in m3 and g not in md_:
+                    C["потеряно на плоскости"] += 1
+        if a.normal:
+            mn_ = match(gs, ws, okn)
+            C["честных по нормали"] += len(mn_)
+            for g in gs:
+                if g in mn_ and g not in m3:
+                    gainedN[M.mnem_root(g)] += 1
+                    k_ = mn_[g]
+                    gt_ = G[g]
+                    tn_ = {y: a.normal * math.sqrt(1.0 + ((gt_.get(y + 1, x) - gt_.get(y - 1, x)) / 2.0) ** 2)
+                           for y, x in gt_.items()}
+                    GAINED.append((sh, g, k_, st(W[k_], gt_)[0], st_norm(W[k_], gt_, tn_)[0]))
         for g in gs:
             if g in mw and g not in m3:
                 gained[M.mnem_root(g)] += 1
@@ -135,3 +208,13 @@ print(f"★ {a.sheets}: кривых {C['кривых']}; честных при 
 print(f"  ширина штриха эталона (px): p25 {np.percentile(w,25):.1f}, медиана {np.median(w):.1f}, p75 {np.percentile(w,75):.1f}, "
       f"p90 {np.percentile(w,90):.1f}; допуск > 3 px у кривых шире {3/a.k:.1f} px — {100*np.mean(w > 3/a.k):.0f}%")
 print("  прибавка по семействам: " + ", ".join(f"{k} {v}" for k, v in gained.most_common(12)))
+if a.dump_gained:
+    pickle.dump(GAINED_D if a.d2 else GAINED, open(a.dump_gained, "wb"))
+if a.d2:
+    print(f"★ на плоскости (расстояние от точки эталона до ломаной трассы, медиана ≤ 3 px): честных {C['честных на плоскости']} "
+          f"({C['честных на плоскости'] - C['честных при 3 px']:+d} к 3 px; потеряно из честных при 3 px {C['потеряно на плоскости']}); "
+          "прибавка: " + ", ".join(f"{k} {v}" for k, v in gainedD.most_common(12)))
+if a.normal:
+    print(f"★ по нормали {a.normal:g} px (N·√(1+s²) по строке): честных {C['честных по нормали']} "
+          f"({C['честных по нормали'] - C['честных при 3 px']:+d} к 3 px); прибавка: " +
+          ", ".join(f"{k} {v}" for k, v in gainedN.most_common(12)))
