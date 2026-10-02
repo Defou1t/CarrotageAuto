@@ -252,8 +252,14 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
 
     prob = np.zeros((y1 - y0, Wb), np.float32)
     embs = None
-    STEP, OV, WIN = 512, 64, 512
-    xcuts = [(c, min(Wb, c + WIN)) for c in range(0, max(1, Wb - 1), WIN - 64)]
+    # ★ 02.10 (§6.255): поля плиток — ручки `cv.rowdec_tile_ov` (строки, 64 = прод) и `cv.rowdec_tile_xov` (столбцы, 32 = прод).
+    #   Поле зрения сети ≈ ±127 px, а у шва плитки контекст обрезан полем 64/32 — проверка, не теряет ли декодер на швах.
+    STEP, WIN = 512, 512
+    OV = int(getattr(p, "rowdec_tile_ov", 64) or 64)
+    XOV = int(getattr(p, "rowdec_tile_xov", 32) or 32)
+    if not (0 < OV < STEP // 2 and 0 < XOV < WIN // 2):
+        raise ValueError(f"rowdec_tile_ov={OV}, rowdec_tile_xov={XOV}: поля должны быть меньше половины плитки")
+    xcuts = [(c, min(Wb, c + WIN)) for c in range(0, max(1, Wb - 1), WIN - 2 * XOV)]
     for (cx0, cx1) in xcuts:
         for gy in range(y0, y1, STEP - 2 * OV):
             gy2 = min(y1, gy + STEP)
@@ -280,7 +286,7 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             if embs is None:
                 embs = np.zeros((ee.shape[0], y1 - y0, Wb), np.float32)
             v0 = gy + (OV if gy > y0 else 0); v1 = gy2 - (OV if gy2 < y1 else 0)
-            wx0 = cx0 + (32 if cx0 > 0 else 0); wx1 = cx1 - (32 if cx1 < Wb else 0)
+            wx0 = cx0 + (XOV if cx0 > 0 else 0); wx1 = cx1 - (XOV if cx1 < Wb else 0)
             if wx1 <= wx0:
                 wx0, wx1 = cx0, cx1
             prob[v0 - y0:v1 - y0, wx0:wx1] = pp[v0 - gy:v1 - gy, wx0 - cx0:wx1 - cx0]

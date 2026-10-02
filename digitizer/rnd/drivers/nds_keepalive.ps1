@@ -32,7 +32,8 @@ $jobs = @(
   @{ task='nds_ens_chain'; log='F:\nds\output\taskS\_ens_chain.log'; done='=== ENS CHAIN DONE ===' },
   @{ task='nds_pool_cap'; log='F:\nds\output\taskS\pool\cap\pool.log'; done='=== POOL DONE ===' },
   @{ task='nds_cap64_chain'; log='F:\nds\output\taskS\_cap64_chain.log'; done='=== CHAIN DONE ===' },
-  @{ task='nds_cap96_chain'; log='F:\nds\output\taskS\_cap96_chain.log'; done='=== CHAIN DONE ===' }
+  @{ task='nds_cap96_chain'; log='F:\nds\output\taskS\_cap96_chain.log'; done='=== CHAIN DONE ===' },
+  @{ task='nds_tile_chain'; log='F:\nds\output\taskS\_tile_chain.log'; done='=== CHAIN DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue
