@@ -75,8 +75,9 @@ def epochs_done(job):
 
 
 def job_args(job):
+    """★ 02.10: `extra` — аргументы поверх рецепта (argparse берёт последнее значение: «--ch 64» после «--ch 48»)"""
     return ["--crops", str(TS / job["crops"]).replace("\\", "/"), "--out", str(out_dir(job)).replace("\\", "/"),
-            "--fold", str(job["fold"])] + RECIPE
+            "--fold", str(job["fold"])] + RECIPE + list(job.get("extra") or [])
 
 
 def pc_idle():
@@ -511,7 +512,7 @@ def add(a):
     if any(j["id"] == a.id for j in J["jobs"]):
         print(f"задание {a.id} уже есть"); return 0
     J["jobs"].append(dict(id=a.id, prio=a.prio, crops=a.crops, out=a.out, fold=a.fold, state="pending", where=None,
-                          t_add=time.strftime("%Y-%m-%d %H:%M")))
+                          extra=a.extra.split() if a.extra else [], t_add=time.strftime("%Y-%m-%d %H:%M")))
     save_jobs(a.pool, J); say(a.pool, f"добавлено задание {a.id} (фолд {a.fold}, приоритет {a.prio}, кропы {a.crops})")
 
 
@@ -538,6 +539,7 @@ if __name__ == "__main__":
     ap.add_argument("--crops", default="")
     ap.add_argument("--out", default="")
     ap.add_argument("--fold", type=int, default=0)
+    ap.add_argument("--extra", default="", help="доп. аргументы `_rowdec_net.py` поверх рецепта, строкой: \"--ch 64\"")
     a = ap.parse_args()
     if a.cmd == "finish":
         (pdir(a.pool) / "FINISH").write_text(time.strftime("%Y-%m-%d %H:%M"), encoding="utf-8"); sys.exit(0)

@@ -31,8 +31,13 @@ ap.add_argument("--crops-log", required=True)
 ap.add_argument("--models", required=True)
 ap.add_argument("--screen-fold", type=int, default=3)
 ap.add_argument("--order", default="4,2,0,1", help="фолды после экрана; первый учится наперёд вместе с фолдом экрана")
+ap.add_argument("--pool", default="", help="★ 02.10: общий пул нескольких цепочек (по умолчанию — метка)")
+ap.add_argument("--extra", default="", help="★ 02.10: доп. аргументы обучения в задания пула (\"--ch 64\")")
+ap.add_argument("--confirm-fold", type=int, default=-1, help="★ 02.10: подтверждение на этом фолде ДО остальных фолдов "
+                "(тот же критерий, база percurve_scr_base_f<k>_N.pkl); не прошло — линия закрыта")
 a = ap.parse_args()
 TAG = a.tag
+POOLN = a.pool or a.tag
 LOG = TS / f"_{TAG}_chain.log"
 SF = a.screen_fold
 REST = [int(x) for x in a.order.split(",")]
@@ -59,14 +64,18 @@ def run(args, out, cwd=RND):
 
 
 def pool(cmd, **kw):
-    args = [PY, "_pool.py", cmd, "--pool", TAG]
+    if cmd == "finish" and a.pool:
+        return 0                                    # общий пул закрывают вручную: другая цепочка ещё добавит задания
+    args = [PY, "_pool.py", cmd, "--pool", POOLN]
     for k, v in kw.items():
+        if k == "extra" and not v:
+            continue
         args += [f"--{k}", str(v)]
     return subprocess.run(args, cwd=str(RND), capture_output=True, creationflags=0x08000000).returncode
 
 
 def jobs():
-    p = TS / "pool" / TAG / "jobs.json"
+    p = TS / "pool" / POOLN / "jobs.json"
     return {j["id"]: j for j in json.loads(p.read_text(encoding="utf-8"))["jobs"]} if p.exists() else {}
 
 
@@ -130,7 +139,7 @@ say(f"кропы готовы: {a.crops}")
 
 # 2. задания пулу: фолд экрана и первый из остальных — наперёд
 for f, pr in ((SF, 1), (REST[0], 2)):
-    pool("add", id=f"{TAG}_f{f}", prio=pr, crops=a.crops, out=a.models, fold=f)
+    pool("add", id=f"{TAG}_f{f}", prio=pr, crops=a.crops, out=a.models, fold=f, extra=a.extra)
 say(f"пул {TAG}: фолды {SF} и {REST[0]} в очереди (ПК + ноутбук)")
 
 # 3. экран
@@ -185,10 +194,45 @@ if vc == 2:
 if vc != 0:
     fail(f"приговор экрана не вынесен (код {vc})")
 
+# 3b. ★ 02.10: подтверждение на втором фолде ДО обучения остальных (критерий тот же, лист другой — независимая выборка)
+if a.confirm_fold >= 0:
+    CF = a.confirm_fold
+    cvf = TS / f"rowdec_screen_{TAG}_f{CF}_verdict.txt"
+    pcf = TS / f"percurve_scr_{TAG}f{CF}_N.pkl"
+    if not cvf.exists() or "ЭКРАН" not in cvf.read_text(encoding="utf-8", errors="replace"):
+        wait_folds([CF])
+        varc = TS / "rowdec_model" / f"var_{TAG}_f{CF}"
+        varc.mkdir(parents=True, exist_ok=True)
+        for f in range(5):
+            shutil.copy2(ck(f) if f == CF else FROZEN / f"rowdec_of5_f{f}_s0.pt", varc / f"rowdec_of5_f{f}_s0.pt")
+        cachec = TS / f"tcache_rd{TAG}f{CF}"
+        shards("redecC", lambda i, n: ["_trace_cache.py", "redec", "--src", str(TS / "tcache_v2"), "--sheets", f"screen_f{CF}.txt",
+                                       "--cache", str(cachec), "--shard", f"{i}/{n}", "--max-hours", "6",
+                                       "--knob", f"rowdec_dir={str(varc).replace(chr(92), '/')}"], cachec)
+        Lc = TS / f"{TAG}_chain_logs"; Lc.mkdir(exist_ok=True)
+        rpc = TS / f"rp_scr_{TAG}f{CF}"
+        if run([PY, "_trace_cache.py", "replay", "--sheets", f"screen_f{CF}.txt", "--cache", str(cachec), "--out", str(rpc),
+                "--mode", MODE], Lc / "replay_confirm.log"):
+            fail("повтор подтверждения")
+        if run([PY, "_name_cost_prod.py", "--dir", str(rpc), "--mode", "N", "--dump", str(pcf)], Lc / "score_confirm.log"):
+            fail("счёт подтверждения")
+        run([PY, "_screen_verdict.py", "--old", f"percurve_scr_base_f{CF}_N.pkl", "--new", pcf.name, "--sheets",
+             f"screen_f{CF}.txt"], cvf)
+    vcc = run([PY, "_screen_verdict.py", "--old", f"percurve_scr_base_f{CF}_N.pkl", "--new", pcf.name, "--sheets",
+               f"screen_f{CF}.txt"], TS / f"{TAG}_chain_logs" / "verdict_confirm_recheck.txt")
+    say(f"подтверждение на фолде {CF}: " + cvf.read_text(encoding="utf-8", errors="replace").strip().splitlines()[0][:220]
+        + f" (код {vcc})")
+    if vcc != 0:
+        for f in REST:
+            pool("cancel", id=f"{TAG}_f{f}")
+        pool("finish")
+        say(f"не подтверждено на фолде {CF} — линия закрыта, задания пула сняты")
+        done_marker()
+
 # 4. остальные фолды и полный A/B
 say(f"★ экран пройден — в пул фолды {REST[1:]}")
 for k, f in enumerate(REST[1:]):
-    pool("add", id=f"{TAG}_f{f}", prio=3 + k, crops=a.crops, out=a.models, fold=f)
+    pool("add", id=f"{TAG}_f{f}", prio=3 + k, crops=a.crops, out=a.models, fold=f, extra=a.extra)
 wait_folds([SF] + REST)
 pool("finish")
 full = TS / "rowdec_model" / f"{TAG}_full"
