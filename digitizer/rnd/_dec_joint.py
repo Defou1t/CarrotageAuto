@@ -43,6 +43,8 @@ ap.add_argument("--kplus", type=int, default=0, help="вариант «удер�
 ap.add_argument("--diag", action="store_true", help="по НЕвзятым вариантом кривым — медиана и покрытие лучшего пути")
 ap.add_argument("--near", type=float, default=3.0, help="радиус «своя кривая есть»: удержание, если пиков нет в near·dy + near px")
 ap.add_argument("--only", default="", help="считать только варианты, чьё имя содержит эту подстроку (V0 всегда)")
+ap.add_argument("--slope", nargs="*", default=[], help="★ 02.10: Витерби 2-го порядка, пары «w1:w2» — цена w1·|dx/dy| + "
+                "w2·|смена dx/dy|; «0.15:0» = прод (сверка)")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/dec_joint.pkl")
 ap.add_argument("--parity-variant", default="", help="§6.246: сверять кэш `--parity-cache` с вариантом этого имени (иначе — удержание W)")
 ap.add_argument("--parity-cache", default="", help="сверка: кэш, собранный с `--knob rowdec_hold=W` (W = первый --wskip) — трассы декодера обязаны совпасть с вариантом «удержание W (0.6)»")
@@ -250,6 +252,36 @@ def decode(prob, embs, k, x0, y0, pthr, wskip=None, gmax=30, rounds=0):
 
 
 HOLD_MODE = ["near"]
+SLOPE = [None]          # ★ 02.10: (w1, w2) — Витерби 2-го порядка для варианта «наклон»
+
+
+def _path_slope(rows, cands, locs, w1, w2):
+    """★ 02.10: Витерби 2-го порядка. Состояние — (пик строки t, пик строки t−1); переход — w1·|v| + w2·|v − v_prev|, где
+    v = dx/dy. Разбор `_cand_fail.py`: у кривых без честного кандидата крутых строк (> 2 px/строку) 39% против 16% у
+    остальных, а прод-цена w·|dx/dy| штрафует крутизну саму по себе: на склоне 10 px/строку она 1.5 за строку, тогда как
+    слабый пик на месте (−log 0.6 = 0.51) дешевле. Здесь склон постоянной крутизны почти бесплатен, дорога смена наклона.
+    При w2 = 0 — ровно прод (D_t[i,j] = L_t[i] + w1·|v| + min_k D_{t−1}[j,k] = dp прода). → индекс кандидата по строкам."""
+    n = len(rows)
+    if n < 2:
+        return [int(np.argmin(locs[0]))]
+    dy = max(1, rows[1] - rows[0])
+    V = (cands[1][:, None] - cands[0][None, :]) / dy
+    D = locs[1][:, None] + locs[0][None, :] + w1 * np.abs(V)
+    BP = [None, None]
+    for t in range(2, n):
+        dy = max(1, rows[t] - rows[t - 1])
+        Vt = (cands[t][:, None] - cands[t - 1][None, :]) / dy
+        tot = D[None, :, :] + w2 * np.abs(Vt[:, :, None] - V[None, :, :])
+        arg = tot.argmin(2)
+        best = np.take_along_axis(tot, arg[:, :, None], 2)[:, :, 0]
+        D = locs[t][:, None] + best + w1 * np.abs(Vt)
+        BP.append(arg); V = Vt
+    i, j = np.unravel_index(int(np.argmin(D)), D.shape)
+    path = [0] * n
+    path[n - 1], path[n - 2] = int(i), int(j)
+    for t in range(n - 1, 1, -1):
+        path[t - 2] = int(BP[t][path[t], path[t - 1]])
+    return path
 
 
 def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
@@ -266,6 +298,13 @@ def _one_path(j, prob, embs, peaks, mu, taken, k, x0, y0, wskip, gmax):
             rows.append(i); cands.append(idx.astype(float)); locs.append(loc)
         if len(rows) < 30:
             return {}
+        if SLOPE[0] is not None:
+            pth = _path_slope(rows, cands, locs, *SLOPE[0])
+            tr = {}
+            for t in range(len(rows) - 1, -1, -1):
+                x = int(cands[t][pth[t]])
+                tr[rows[t] + y0] = float(x + x0); taken[rows[t]].add(x)
+            return tr
         if wskip is None:
             dp = [locs[0]]; bp = [np.full(len(cands[0]), -1, int)]
             for t in range(1, len(rows)):
@@ -343,6 +382,11 @@ if a.emb:                                  # §6.246
                       ("эмб5 лучший из двух стартов + вес 0.7", {"init": "best", "w": 0.7}),
                       ("эмб5 лучший из двух стартов", {"init": "best"})):
         VARS += [(nm_, 0.6, None, 0)]; EMBV[nm_] = cfg_
+SLOPEV = {}
+for sp_ in a.slope:                         # ★ 02.10: Витерби 2-го порядка
+    w1_, w2_ = (float(z) for z in sp_.split(":"))
+    nm_ = f"наклон {w1_:g}/{w2_:g}"
+    VARS += [(nm_, 0.6, None, 0)]; SLOPEV[nm_] = (w1_, w2_)
 for r_ in a.v0rounds:                      # ★ 02.10: координатный спуск поверх прод-Витерби
     VARS += [(f"V0 + перекладка {r_}", 0.6, None, r_)]
 if a.kplus:                                # §6.244: K+N и без удержания (прод-Витерби, лишний путь)
@@ -405,6 +449,7 @@ for fi, f in enumerate(files, 1):
             if a.only and a.only not in name and not name.startswith("V0"):
                 res[name] = set(); continue
             HOLD_MODE[0] = "occl" if "заслон" in name else "near"
+            SLOPE[0] = SLOPEV.get(name)
             EMB.update({"min_k": EMB_MIN_K, "w": WEMB, "init": "rand", "iters": 12}); EMB.update(EMBV.get(name, {}))
             trs = [t for t in decode(prob, embs, K + max(0, -rr), x0, py0, pthr, ws, a.gmax, max(0, rr)) if len(t) >= 30]
             if "центроид карты" in name:

@@ -401,6 +401,14 @@ def run(a):
             pend = sorted((j for j in jobs if j["state"] == "pending" and (j.get("prefer") != "lp" or lp_reason != "")),
                           key=lambda j: (j["prio"], j["id"]))
             job = mine[0] if mine else (pend[0] if pend else None)
+            # ★ 02.10: на границе партии задание со СТРОГО лучшим приоритетом вытесняет своё. Своё — в очередь, продолжит со
+            #   снимка эпохи (ПК или ноутбук — кто освободится). Без этого опыт с более сильным обоснованием ждал чужие 13 ч:
+            #   своё задание ПК брал всегда первым.
+            if mine and pend and pend[0]["prio"] < mine[0]["prio"]:
+                mine[0].update(state="pending", pc_between=False, dirty=True)
+                say(pool, f"{mine[0]['id']}: уступает ПК заданию {pend[0]['id']} (приоритет {pend[0]['prio']} < {mine[0]['prio']}), "
+                          f"продолжит со снимка (эпох готово {epochs_done(mine[0])})")
+                job = pend[0]
             if job is None:
                 pj = [j for j in jobs if j["state"] == "lp-prep"]
                 if pj:

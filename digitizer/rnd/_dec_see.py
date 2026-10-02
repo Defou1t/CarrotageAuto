@@ -26,6 +26,7 @@ ap.add_argument("--cache", default=r"F:/nds/output/taskS/tcache")
 ap.add_argument("--dir", default="rp_fill/NF")
 ap.add_argument("--every", type=int, default=9)
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/dec_see.pkl")
+ap.add_argument("--steep", type=float, default=2.0, help="★ 02.10: разрез видимости по крутизне эталона (px/строку; строки круче — «крутые»)")
 a = ap.parse_args()
 TS = Path(a.ts); P = DEFAULT.cv
 WMAP = json.loads((TS / "rowdec_wellmap.json").read_text(encoding="utf-8"))
@@ -114,6 +115,7 @@ for fi, f in enumerate(files, 1):
         rmax = prob.max(1)
         for g, gt, cls in lst:
             hit = {t: 0 for t in THRS}; n = 0; pv = []
+            hs = {t: 0 for t in THRS}; ns = 0                   # ★ 02.10: крутые строки эталона
             for y in sorted(gt)[::3]:
                 i = y - py0
                 if not (0 <= i < prob.shape[0]):
@@ -123,14 +125,20 @@ for fi, f in enumerate(files, 1):
                 if hi <= lo:
                     continue
                 n += 1
+                sl = abs(gt.get(y + 1, gt[y]) - gt.get(y - 1, gt[y])) / 2.0
+                stp = sl > a.steep
+                ns += stp
                 seg = row[lo:hi]
                 loc = (seg >= row[lo - 1:hi - 1]) & (seg >= row[lo + 1:hi + 1])
                 pv.append(float(seg.max()) / max(1e-6, float(rmax[i])))
                 for t in THRS:
-                    hit[t] += bool((loc & (seg >= t * rmax[i])).any())
+                    h_ = bool((loc & (seg >= t * rmax[i])).any())
+                    hit[t] += h_
+                    hs[t] += h_ and stp
             if n >= 20:
                 REC.append(dict(sheet=f.stem, g=g, root=M.mnem_root(g), cls=cls, n=n,
-                                vis={t: hit[t] / n for t in THRS}, rel=float(np.median(pv)), k=len(lst)))
+                                vis={t: hit[t] / n for t in THRS}, rel=float(np.median(pv)), k=len(lst),
+                                ns=ns, hs=dict(hs), hit=dict(hit)))
     del rgb
     if fi % 20 == 0:
         print(f"  … {fi}/{len(files)}", file=sys.stderr)
@@ -145,3 +153,13 @@ for cls in ("с кандидатом", "без кандидата"):
         x = np.array([r["vis"][t] for r in R])
         print(f"      порог {t}·max: медиана {np.median(x):.2f}; ≥ 0.9 у {100*np.mean(x >= 0.9):.0f}%, ≥ 0.7 у {100*np.mean(x >= 0.7):.0f}%, "
               f"< 0.3 у {100*np.mean(x < 0.3):.0f}%")
+
+print(f"\n★ 02.10: КРУТЫЕ (> {a.steep} px/строку) И ПОЛОГИЕ СТРОКИ ЭТАЛОНА — доля с пиком карты в 3 px (сумма по кривым):")
+for cls in ("с кандидатом", "без кандидата"):
+    R = [r for r in REC if r["cls"] == cls and "ns" in r]
+    if not R:
+        continue
+    NS = sum(r["ns"] for r in R); NF = sum(r["n"] - r["ns"] for r in R)
+    for t in THRS:
+        HS = sum(r["hs"][t] for r in R); HF = sum(r["hit"][t] - r["hs"][t] for r in R)
+        print(f"   {cls}, порог {t}·max: крутые {HS / max(1, NS):.2f} (строк {NS}), пологие {HF / max(1, NF):.2f} (строк {NF})")
