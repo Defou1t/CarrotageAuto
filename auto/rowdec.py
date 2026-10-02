@@ -254,7 +254,7 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     embs = None
     # ★ 02.10 (§6.255): поля плиток — ручки `cv.rowdec_tile_ov` (строки, 64 = прод) и `cv.rowdec_tile_xov` (столбцы, 32 = прод).
     #   Поле зрения сети ≈ ±127 px, а у шва плитки контекст обрезан полем 64/32 — проверка, не теряет ли декодер на швах.
-    STEP, WIN = 512, 512
+    STEP, WIN = int(getattr(p, "rowdec_tile_rows", 512) or 512), 512     # ★ 02.10: высота плитки (512 = прод)
     OV = int(getattr(p, "rowdec_tile_ov", 64) or 64)
     XOV = int(getattr(p, "rowdec_tile_xov", 32) or 32)
     if not (0 < OV < STEP // 2 and 0 < XOV < WIN // 2):
