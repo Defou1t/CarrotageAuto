@@ -49,7 +49,7 @@ ap.add_argument("--dump", default="", help="pickle с {лист: (с_имене�
 # ★ 03.10 (§6.258): мера близости — решение заказчика. «row» — прежняя приёмка (медиана |Δx| по строкам) бит-в-бит;
 #   «plane» — медиана расстояния от точки эталона до ломаной трассы (уплотнённой по x, мосты ≤ 30 строк);
 #   `--held-min` > 0 — строгий вариант: вместо медианы доля общих строк в 3 px ≥ этого.
-ap.add_argument("--metric", default="row", choices=["row", "plane"])
+ap.add_argument("--metric", default="row", choices=["row", "plane", "plane2"])     # ★ 04.10: plane2 — «на плоскости» в обе стороны
 ap.add_argument("--held-min", type=float, default=0.0)
 # ★ 03.10 (§6.262): мера В ЗНАЧЕНИЯХ — уровень масштаба (сегменты 0 = 1×, 1 = 5×, …) обязан совпасть. Выдача по строкам
 #   пересчитывается: x → значение по шкале СВОЕГО уровня (из цепочки масштабов кривой эталона) → x на шкале уровня ЭТАЛОНА.
@@ -109,8 +109,13 @@ def err(tr, gt):
     com = [y for y in tr if y in gt]
     if len(com) < 30:
         return None, 0.0
-    if a.metric == "plane":
+    if a.metric in ("plane", "plane2"):
         d = _plane(tr, com, gt)
+        if a.metric == "plane2":
+            # ★ 04.10: и в обратную сторону — от точек выдачи до ломаной эталона (выдача, мечущаяся поперёк трека, задевает
+            #   эталон случайно — односторонняя мера это засчитывала); честно, если обе медианы ≤ 3 px
+            d2 = _plane(gt, com, tr)
+            return max(float(np.median(d)), float(np.median(d2))), len(com) / max(1, len(gt))
     else:
         d = np.array([abs(tr[y] - gt[y]) for y in com], float)
     if a.held_min > 0:

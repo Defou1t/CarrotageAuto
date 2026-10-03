@@ -157,6 +157,62 @@ def scan_curve(cv, gray, paper, OT, P):
                 u=u, has=has, tw=tw, twin=twin, lw=lw.astype(np.int8), lt=lt.astype(np.int8), lab=lab)
 
 
+def v4_extra(res, rgb, gray, paper, P):
+    """§6.271: длина вертикального рана туши по корзинам (блок 8 строк, максимум), цвет самого тёмного пикселя корзины
+    (R − B, G − (R + B)/2, /2 в int8), цвет туши под трассой выдачи (±3 px). Тушь — затемнение > vthr."""
+    st, nb, thr = P["stride"], P["nb"], P["vthr"]
+    half = st // 2
+    bx0, bx1 = res["band"]; ncol = bx1 - bx0
+    Pp = res["P"].astype(np.int64); n = len(Pp)
+    r0 = int(Pp[0]) - half; nr = n * st
+    edges = np.linspace(0, ncol, nb + 1).astype(np.int64)
+    RLk = np.zeros((n, ncol), np.uint16)
+    chroma = np.zeros((n, nb, 2), np.int8); tchroma = np.zeros((n, 2), np.int8)
+    xo = np.where(res["has"], res["u"].astype(np.float64) * ncol + bx0, np.nan)
+    CH = 512
+    M = np.zeros((nr, ncol), bool)
+    for c0 in range(0, n, CH):
+        c1 = min(n, c0 + CH); nbk = c1 - c0
+        a0 = r0 + c0 * st; a1 = a0 + nbk * st
+        D = np.clip(paper[a0:a1, None] - gray[a0:a1, bx0:bx1].astype(np.int16), 0, 255)
+        M[c0 * st:c1 * st] = D > thr
+        Dk = D.reshape(nbk, st, ncol); arow = Dk.argmax(1); dmax = Dk.max(1)
+        ii = np.arange(nbk)
+        for b in range(nb):
+            e0, e1 = edges[b], edges[b + 1]
+            jb = dmax[:, e0:e1].argmax(1); col = e0 + jb
+            dv = dmax[ii, col]; row = arow[ii, col]
+            px = rgb[a0 + ii * st + row, bx0 + col].astype(np.int16)
+            ok = dv > thr
+            chroma[c0:c1, b, 0] = np.where(ok, np.clip((px[:, 0] - px[:, 2]) // 2, -127, 127), 0)
+            chroma[c0:c1, b, 1] = np.where(ok, np.clip((px[:, 1] - (px[:, 0] + px[:, 2]) // 2) // 2, -127, 127), 0)
+        xs_ = xo[c0:c1]
+        okt = np.isfinite(xs_)
+        ci = np.round(np.where(okt, xs_, bx0) - bx0).astype(np.int64)
+        idx = np.clip(ci[:, None] + np.arange(-3, 4)[None, :], 0, ncol - 1)
+        win = dmax[ii[:, None], idx]; jj = win.argmax(1)
+        col = idx[ii, jj]; dv = dmax[ii, col]; row = arow[ii, col]
+        px = rgb[a0 + ii * st + row, bx0 + col].astype(np.int16)
+        okt = okt & (dv > thr)
+        tchroma[c0:c1, 0] = np.where(okt, np.clip((px[:, 0] - px[:, 2]) // 2, -127, 127), 0)
+        tchroma[c0:c1, 1] = np.where(okt, np.clip((px[:, 1] - (px[:, 0] + px[:, 2]) // 2) // 2, -127, 127), 0)
+    for c in range(ncol):
+        col = M[:, c]
+        if not col.any():
+            continue
+        d = np.diff(np.concatenate([[0], col.astype(np.int8), [0]]))
+        stt = np.flatnonzero(d == 1); enn = np.flatnonzero(d == -1)
+        rl = np.zeros(nr, np.uint16)
+        lens = np.minimum(enn - stt, 400).astype(np.uint16)
+        rid = np.cumsum(d[:-1] == 1)
+        rl[col] = lens[rid[col] - 1]
+        RLk[:, c] = rl.reshape(n, st).max(1)
+    vrun = np.maximum.reduceat(RLk, edges[:-1], axis=1).astype(np.int32)
+    res["vrun"] = (np.minimum(vrun, 400) * 255 // 400).astype(np.uint8)
+    res["chroma"] = chroma; res["tchroma"] = tchroma
+    return res
+
+
 def scan_sheet(job):
     sheet, img, got, curves, P = job
     from PIL import Image
@@ -177,6 +233,10 @@ def scan_sheet(job):
         if len(pts) >= 2:
             OT.append((c["name"], np.array([p[0] for p in pts], np.int64), np.array([p[1] for p in pts], np.float64)))
     res = [scan_curve(cv, gray, paper, OT, P) for cv in curves]
+    if P.get("v4"):
+        rgb = np.asarray(Image.open(img).convert("RGB"))
+        res = [None if r is None else v4_extra(r, rgb, gray, paper, P) for r in res]
+        del rgb
     tmp = outp.with_suffix(".tmp")
     pickle.dump(dict(sheet=sheet, curves=res), open(tmp, "wb"), protocol=4)
     os.replace(tmp, outp)
@@ -197,7 +257,7 @@ def main_scan(a):
         if len(cv["chain"]) >= 2:
             by[cv["sheet"]].append(dict(ci=i, **{k: cv[k] for k in ("set", "sheet", "name", "root", "chain", "gy", "gx", "lt",
                                                                      "ty", "tx", "lw")}))
-    P = dict(stride=a.stride, nb=a.nb, tol=a.tol, out=a.out)
+    P = dict(stride=a.stride, nb=a.nb, tol=a.tol, out=a.out, v4=a.v4, vthr=a.vthr)
     jobs, miss = [], Counter()
     for sh, cs in sorted(by.items()):
         q = SRC.get(sh)
@@ -316,6 +376,13 @@ def main_train(a):
     t_u = torch.from_numpy(np.nan_to_num(u, nan=0.0).astype(np.float32)).to(dev)
     t_has = torch.from_numpy(hs.astype(np.float32)).to(dev)
     t_tw = torch.from_numpy(cat("tw")).to(dev); t_twin = torch.from_numpy(cat("twin")).to(dev)
+    V4 = bool(a.v4) and all("vrun" in c for c in D)        # ★ §6.271: длина вертикальных ранов и цвет туши
+    if a.v4 and not V4:
+        sys.exit("⛔ --v4: в скане нет полей vrun/chroma — нужен скан с --v4")
+    if V4:
+        t_vrun = torch.from_numpy(cat("vrun")).to(dev)
+        t_chr = torch.from_numpy(np.concatenate([c["chroma"].reshape(len(c["P"]), -1) for c in D])).to(dev)
+        t_tch = torch.from_numpy(cat("tchroma")).to(dev)
     t_lw = torch.from_numpy(np.minimum(cat("lw"), KMAX - 1).astype(np.int64)).to(dev)
     t_lab = torch.from_numpy(cat("lab").astype(np.int64)).to(dev)
     cid = np.repeat(np.arange(len(D)), np.diff(off))
@@ -328,7 +395,7 @@ def main_train(a):
           f"скважин поля {len(field_wells)}; устройство {dev}")
     OFS = torch.arange(-nb // 2, nb // 2, device=dev)
     DIL = tuple(int(x) for x in a.dil.split(",")) * 2               # ★ §6.269: расширения (дважды); по умолчанию 1…32 — как v2
-    CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1]
+    CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1] + ((nb * 2 + nb * 2 + 2) if V4 else 0)
 
     def feats(gi, valid):
         """gi [B, L] глобальные индексы позиций, valid [B, L] → [B, CIN, L]"""
@@ -342,6 +409,10 @@ def main_train(a):
         rink = torch.gather(ink, 2, rel) * rv; rocc = torch.gather(occ, 2, rel) * rv
         sc = [t_u[gi][..., None] * hv[..., None], hv[..., None], t_tw[gi].float() / 255.0, t_twin[gi].float(),
               F.one_hot(t_lw[gi], KMAX).float() * valid[..., None], t_const[t_cid[gi]] * valid[..., None]]
+        if V4:
+            vr = t_vrun[gi].float() / 255.0 * valid[..., None]
+            rvr = torch.gather(vr, 2, rel) * rv
+            sc += [vr, rvr, t_chr[gi].float() / 127.0 * valid[..., None], t_tch[gi].float() / 127.0 * hv[..., None]]
         x = torch.cat([ink * valid[..., None], occ * valid[..., None], oh, rink, rocc] + sc, dim=2)
         return x.transpose(1, 2).contiguous()
 
@@ -443,7 +514,7 @@ def main_train(a):
     PROB = {}
     fi = [i for i, c in enumerate(D) if c["set"] == "поле"]
     T0 = time.time()
-    META = dict(cin=CIN, nb=nb, kmax=KMAX, nt=NT, stride=a.stride, ch=64, dil=list(DIL), k=5, tol=a.tol,
+    META = dict(cin=CIN, nb=nb, kmax=KMAX, nt=NT, stride=a.stride, ch=64, dil=list(DIL), k=5, tol=a.tol, v4=V4, vthr=a.vthr,
                 min_run=a.min_run, steps=a.steps, seeds=a.seeds)
     SD = Path(a.save_dir) if a.save_dir else None
     if SD:
@@ -528,6 +599,8 @@ def main():
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--dil", default="1,2,4,8,16,32", help="расширения одного прохода (стек повторяется дважды)")
     ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле и карту лист → фолд")
+    ap.add_argument("--v4", action="store_true", help="§6.271: скан — длина вертикальных ранов и цвет туши; обучение — эти каналы")
+    ap.add_argument("--vthr", type=int, default=100)
     ap.add_argument("--min-run", type=int, default=25)
     ap.add_argument("--dump", default=r"F:/nds/output/taskS/level_ink_pred.pkl")
     ap.add_argument("--model-out", default=r"F:/nds/output/taskS/level_ink_model.pt")
