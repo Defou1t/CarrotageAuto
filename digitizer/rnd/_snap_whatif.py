@@ -32,6 +32,8 @@ ap.add_argument("--variants", nargs="+", default=["8:30"], help="R:thr — пе�
 ap.add_argument("--every", type=int, default=1)
 ap.add_argument("--offset", type=int, default=0)
 ap.add_argument("--dump", default="")
+ap.add_argument("--resume", action="store_true", help="★ подхват по дампу: обработанные листы (SI) пропускаются; дамп пишется каждые 50 листов")
+ap.add_argument("--quiet", action="store_true", help="не печатать промежуточные суммы (слепая проверка)")
 a = ap.parse_args()
 TS = Path(a.ts)
 VARS = [tuple(int(v) for v in s.split(":")) for s in a.variants]
@@ -100,8 +102,24 @@ def match(rows, cols, ok):
 
 
 KEYS = ["без притяжки"] + [f"R {R}, порог {thr}" for R, thr in VARS]
-C = Counter(); PER = {k: [] for k in KEYS}; PERN = {k: [] for k in KEYS}
+C = Counter(); PER = {k: [] for k in KEYS}; PERN = {k: [] for k in KEYS}; SI = []
+if a.resume and a.dump and Path(a.dump).exists():
+    _d = pickle.load(open(a.dump, "rb"))
+    if list(_d["PER"]) == KEYS:
+        PER, PERN, SI = _d["PER"], _d["PERN"], _d["SI"]
+        C = Counter(_d["C"])
+        print(f"подхват: обработано {len(SI)} листов, последний №{SI[-1] if SI else 0}", file=sys.stderr)
+
+
+def save():
+    if a.dump:
+        tmp = a.dump + ".tmp"
+        pickle.dump(dict(PER=PER, PERN=PERN, SI=SI, C=dict(C)), open(tmp, "wb"))
+        Path(tmp).replace(a.dump)
+done_si = set(SI)
 for si, sh in enumerate(sheets, 1):
+    if si in done_si:
+        continue
     q = SRC.get(sh)
     if not q:
         continue
@@ -139,8 +157,13 @@ for si, sh in enumerate(sheets, 1):
     for k in KEYS:
         C[k] += cnt[k]; C[(k, "имён")] += cntn[k]
         PER[k].append(cnt[k]); PERN[k].append(cntn[k])
-    if si % 50 == 0:
-        print(f"  … {si}/{len(sheets)}: " + ", ".join(f"{k} {C[k]}" for k in KEYS), file=sys.stderr)
+    SI.append(si)
+    if len(SI) % 50 == 0:
+        save()
+        if a.quiet:
+            print(f"  … {si}/{len(sheets)}", file=sys.stderr)
+        else:
+            print(f"  … {si}/{len(sheets)}: " + ", ".join(f"{k} {C[k]}" for k in KEYS), file=sys.stderr)
 
 
 def ptest(d):
@@ -152,8 +175,9 @@ def ptest(d):
     return float(np.mean(np.abs(sims) >= abs(d.sum())))
 
 
-if a.dump:
-    pickle.dump(dict(PER=PER, PERN=PERN, C=dict(C)), open(a.dump, "wb"))
+save()
+if a.quiet:
+    print("=== SNAP DONE ==="); sys.exit(0)
 print(f"★ {a.sheets} (каждый {a.every}-й, сдвиг {a.offset}): кривых {C['кривых']}")
 b = np.array(PER[KEYS[0]]); bn = np.array(PERN[KEYS[0]])
 for k in KEYS:
