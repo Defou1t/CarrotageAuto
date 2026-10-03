@@ -46,15 +46,46 @@ ap.add_argument("--seed", type=int, default=20260824)
 # (например §6.156 — разложение по держанности скважины), пришлось бы ПЕРЕПИСАТЬ привязку 1:1, а
 # две реализации одной метрики неизбежно разъедутся. ⇒ отдаём посчитанное, а не повторяем его.
 ap.add_argument("--dump", default="", help="pickle с {лист: (с_именем, без_имени, кривых)}")
+# ★ 03.10 (§6.258): мера близости — решение заказчика. «row» — прежняя приёмка (медиана |Δx| по строкам) бит-в-бит;
+#   «plane» — медиана расстояния от точки эталона до ломаной трассы (уплотнённой по x, мосты ≤ 30 строк);
+#   `--held-min` > 0 — строгий вариант: вместо медианы доля общих строк в 3 px ≥ этого.
+ap.add_argument("--metric", default="row", choices=["row", "plane"])
+ap.add_argument("--held-min", type=float, default=0.0)
 a = ap.parse_args()
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
+
+
+_TREES = {}
+
+
+def _plane(tr, com, gt):
+    """расстояния от точек эталона (строки com) до ломаной трассы tr — кэш дерева по id словаря трассы"""
+    from scipy.spatial import cKDTree
+    k = id(tr)
+    if k not in _TREES:
+        ys = np.array(sorted(tr), float); xs = np.array([tr[int(y)] for y in ys], float)
+        P = [np.stack([ys, xs], 1)]
+        if len(ys) > 1:
+            dy = np.diff(ys); dx = np.diff(xs)
+            for i in np.flatnonzero((dy <= 30) & (np.abs(dx) > 1)):
+                n = int(np.ceil(abs(dx[i]))); t = np.arange(1, n) / n
+                P.append(np.stack([ys[i] + dy[i] * t, xs[i] + dx[i] * t], 1))
+        _TREES[k] = (cKDTree(np.concatenate(P)), tr)        # держим tr — id не переиспользуется, пока дерево живо
+    d, _ = _TREES[k][0].query(np.array([[y, gt[y]] for y in com], float))
+    return d
 
 
 def err(tr, gt):
     com = [y for y in tr if y in gt]
     if len(com) < 30:
         return None, 0.0
-    d = np.array([abs(tr[y] - gt[y]) for y in com], float)
+    if a.metric == "plane":
+        d = _plane(tr, com, gt)
+    else:
+        d = np.array([abs(tr[y] - gt[y]) for y in com], float)
+    if a.held_min > 0:
+        # строгий вариант: «медиана» подменяется так, чтобы HON(≤ 3) был ровно «доля в 3 px ≥ held_min»
+        return (0.0 if float(np.mean(d <= 3.0)) >= a.held_min else 99.0), len(com) / max(1, len(gt))
     return float(np.median(d)), len(com) / max(1, len(gt))
 
 
@@ -104,6 +135,7 @@ def count(mode):
     print(f"каталогов выдачи в {MD}: {len(dirs)}")
     per, sheets, skipped = {}, 0, 0
     for d in dirs:
+        _TREES.clear()                          # ★ 03.10: деревья мер — в пределах листа
         nm = BYDIR.get(d.name)
         if nm is None:
             skipped += 1; continue
