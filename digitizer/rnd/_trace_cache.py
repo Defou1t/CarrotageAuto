@@ -186,7 +186,8 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "slotgeom": ("slot_template_geom", lambda v: bool(int(v))), "sib": ("slot_sib", float),
                "gapfill": ("rowdec_gapfill", int), "confveto": ("rowdec_conf_veto", float),
                "conftake": ("rowdec_conf_take", float),
-               "gate": ("slot_gate", str), "slot": ("slot_model", str), "order": ("slot_order", str)}
+               "gate": ("slot_gate", str), "slot": ("slot_model", str), "order": ("slot_order", str),
+               "levelink": ("level_ink", str)}          # ★ 03.10 (§6.266): уровни масштаба по скану; "oof:<каталог>" — замер
 
 
 def cmd_replay():
@@ -243,6 +244,7 @@ def cmd_replay():
             cfg.cv.rowdec_conf_veto = 0.0         # ★ 27.09: §6.240 включено в прод; повтор без `confveto=0.8` — как до него
             cfg.cv.rowdec_conf_take = 0.0         #   (и `conftake=` — только явно)
             cfg.cv.rowdec_gapfill = 0
+            cfg.cv.level_ink = ""                 # ★ 03.10: §6.266 — повтор без `levelink=` — прежний декодер оборотов
             for k, v in kw.items():
                 attr, conv = REPLAY_KEYS[k]
                 setattr(cfg.cv, attr, conv(v))

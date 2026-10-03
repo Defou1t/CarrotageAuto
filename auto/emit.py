@@ -319,6 +319,51 @@ def _level_segments(tr, model, curve, top_y, n, gray=None):
         return single
 
 
+def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name):
+    """§6.266: переразложить уровни масштаба кривых с цепочкой моделью по скану (auto/level_ink.py). Чужие трассы — как в
+    готовом файле: записанные нами + DA (прочие слоты рамки вычищены)."""
+    from . import level_ink as LI
+    if not LI.available(spec):
+        LI._announce(f"⚠ уровни масштаба по скану ({spec}) НЕ включены: нет torch или весов — остаётся декодер оборотов")
+        return
+    try:
+        import decode_levels as DL
+    except Exception:
+        return
+    jobs = []
+    for c, k, new_xs, lw_segs in ink_jobs:
+        fam = DL.build_family(model, c)
+        if len(fam) >= 2:
+            jobs.append((c, k, new_xs, lw_segs, fam))
+    if not jobs:
+        return
+    gray = get_gray()
+    if gray is None:
+        LI._announce("⚠ уровни масштаба по скану: скан не загрузился — остаётся декодер оборотов")
+        return
+    paper = LI.paper_of(gray)
+    others = []
+    for c, k, new_xs, _ in ink_jobs:
+        rows = [c["top_y"] + i for i, x in enumerate(new_xs) if x != NULL]
+        if len(rows) >= 2:
+            others.append((c["name"], np.array(rows, np.int64), np.array([x for x in new_xs if x != NULL], np.float64)))
+    for c in model.get("curves", []):
+        if meta_mod.mnem_root(c.get("name", "")) == "DA":
+            pts = [(c["top_y"] + i, x) for i, x in enumerate(c["xs"]) if x != NULL]
+            if len(pts) >= 2:
+                others.append((c["name"], np.array([p_[0] for p_ in pts], np.int64), np.array([p_[1] for p_ in pts], np.float64)))
+    path = LI.resolve(spec, sheet=sheet_name)
+    for c, k, new_xs, lw_segs, fam in jobs:
+        ty, tx = LI.dense_rows(c["top_y"], new_xs, NULL)
+        f = LI.features(gray, paper, fam, c["name"], meta_mod.mnem_root(c["name"]), ty, tx, lw_segs, others)
+        if f is None:
+            continue
+        lv = LI.predict(f, path)
+        tops, bots, levs = LI.segments(f, lv, c["top_y"], c["n_rows"])
+        set_tag(ifds, k, 35492, 4, [len(tops)]); set_tag(ifds, k, 35494, 4, tops)
+        set_tag(ifds, k, 35496, 4, bots); set_tag(ifds, k, 35498, 4, levs)
+
+
 def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                     image=None, las=False, cv=None):
     """Инъекция AUTO-трасс в лёгкую рамку NeuraLOG → _auto.nlgx(+bck). Рамка НЕ фабрикуется."""
@@ -606,6 +651,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         for i in find_ifd(ifds, lambda tags: 34878 in tags):
             set_tag(ifds, i, 34878, 2, str(image))
     written, wrote_ifd = [], set()
+    ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):
         name = c["name"]
         if name not in mapping:
@@ -627,6 +673,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         set_tag(ifds, k, 35492, 4, [len(tops)]); set_tag(ifds, k, 35494, 4, tops)
         set_tag(ifds, k, 35496, 4, bots); set_tag(ifds, k, 35498, 4, levs)
         wrote_ifd.add(k)
+        ink_jobs.append((c, k, new_xs, list(zip(tops, bots, levs))))
         vx = [(i, x) for i, x in enumerate(new_xs) if x != NULL]
         rws = [top_y + i for i, _ in vx]; xsv = [x for _, x in vx]
         set_tag(ifds, k, 35478, 4, [min(xsv)]); set_tag(ifds, k, 35480, 4, [min(rws)])
@@ -653,6 +700,17 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         set_tag(ifds, k, 35490, 4, [NULL] * c["n_rows"])
         set_tag(ifds, k, 35492, 4, [0])
         cleared.append(c["name"].split()[0])
+
+    # ★★ 03.10 (§6.266): УРОВНИ МАСШТАБА ПО СКАНУ ВОКРУГ ЛИНИИ — второй проход, когда известны ВСЕ трассы листа (модель видит
+    #   занятость полосы чужими трассами). Кривые с цепочкой масштабов в каркасе; остальные и короткие — прежний декодер.
+    #   Замер §6.266 v2 (в значениях): поле 683 → 712 (+29, p = 0.0054, вне фолда), сорт A 172 → 181. ⚠ ОТКАТ: level_ink = "".
+    _cvp = cv
+    if _cvp is None:
+        from .config import DEFAULT as _D
+        _cvp = _D.cv
+    _li = getattr(_cvp, "level_ink", "") or ""
+    if _li and ink_jobs:
+        _level_ink_pass(_li, model, ifds, ink_jobs, _get_gray, set_tag, Path(frame_nlgx).name)
 
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"

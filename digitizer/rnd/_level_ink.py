@@ -370,7 +370,8 @@ def main_train(a):
         m = torch.arange(KMAX, device=dev)[None, :, None] >= kc[:, None, None]
         return lo.masked_fill(m, -1e4)
 
-    def fit(tr_idx, tag):
+    def fit(tr_idx, tag, seed=0):
+        torch.manual_seed(seed); rs = np.random.RandomState(seed)
         tr_idx = [i for i in tr_idx if (D[i]["lab"] >= 0).any()]
         ln = np.array([len(D[i]["P"]) for i in tr_idx], np.float64)
         pr = ln / ln.sum()
@@ -380,9 +381,9 @@ def main_train(a):
         L = a.crop; ar = torch.arange(L, device=dev)
         t0 = time.time(); run = 0.0
         for step in range(a.steps):
-            pick = np.random.choice(len(tr_idx), size=a.batch, p=pr)
+            pick = rs.choice(len(tr_idx), size=a.batch, p=pr)
             ci = [tr_idx[p] for p in pick]
-            st = np.array([off[c] + np.random.randint(0, max(1, len(D[c]["P"]) - L + 1)) for c in ci], np.int64)
+            st = np.array([off[c] + rs.randint(0, max(1, len(D[c]["P"]) - L + 1)) for c in ci], np.int64)
             en = np.array([off[c + 1] for c in ci], np.int64)
             st_t = torch.from_numpy(st).to(dev); en_t = torch.from_numpy(en).to(dev)
             gi = st_t[:, None] + ar[None, :]
@@ -406,29 +407,63 @@ def main_train(a):
         return net
 
     @torch.no_grad()
-    def predict(net, idx):
-        net.eval(); out = {}
+    def predict(nets, idx):
+        """→ {i: вероятности уровней [KMAX, n]} — среднее по моделям; пачки по длине, округлённой вверх до 1024 позиций
+        (немного разных форм — быстро; на краях вход дополнен нулями, как короткие куски при обучении)"""
+        for net in nets:
+            net.eval()
+        out = {}
+        by = defaultdict(list)
         for i in idx:
-            n = len(D[i]["P"])
-            gi = torch.arange(off[i], off[i] + n, device=dev)[None, :]
-            x = feats(gi, torch.ones_like(gi, dtype=torch.float32))
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
-                lo = net(x)
-            lo = mask_logits(lo.float(), KC[i:i + 1])
-            out[i] = lo.argmax(1)[0].cpu().numpy().astype(np.int16)
-        net.train()
+            by[-(-len(D[i]["P"]) // 1024) * 1024].append(i)
+        for Lb, ids in by.items():
+            bs = max(1, 32768 // Lb)
+            for b0 in range(0, len(ids), bs):
+                ib = ids[b0:b0 + bs]
+                st_t = torch.from_numpy(np.array([off[i] for i in ib], np.int64)).to(dev)
+                en_t = torch.from_numpy(np.array([off[i + 1] for i in ib], np.int64)).to(dev)
+                gi = st_t[:, None] + torch.arange(Lb, device=dev)[None, :]
+                valid = (gi < en_t[:, None]).float()
+                gi = torch.minimum(gi, en_t[:, None] - 1)
+                x = feats(gi, valid)
+                kc = KC[torch.from_numpy(np.array(ib, np.int64)).to(dev)]
+                pr = 0
+                for net in nets:
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
+                        lo = net(x)
+                    pr = pr + torch.softmax(mask_logits(lo.float(), kc), dim=1)
+                pr = (pr / len(nets)).cpu().numpy()
+                for j, i in enumerate(ib):
+                    out[i] = pr[j, :, :len(D[i]["P"])].astype(np.float32)
+        for net in nets:
+            net.train()
         return out
 
-    PRED = {}
+    PROB = {}
     fi = [i for i, c in enumerate(D) if c["set"] == "поле"]
+    T0 = time.time()
+    META = dict(cin=CIN, nb=nb, kmax=KMAX, nt=NT, stride=a.stride, ch=64, dil=[1, 2, 4, 8, 16, 32] * 2, k=5, tol=a.tol,
+                min_run=a.min_run, steps=a.steps, seeds=a.seeds)
+    SD = Path(a.save_dir) if a.save_dir else None
+    if SD:
+        SD.mkdir(parents=True, exist_ok=True)
+        import json as _json
+        (SD / "level_ink_folds.json").write_text(_json.dumps(
+            {D[i]["sheet"]: FOLD[well(D[i]["sheet"])] for i in fi}, ensure_ascii=False, indent=0), encoding="utf-8")
     for k in range(a.folds):
         tr = [i for i in fi if FOLD[well(D[i]["sheet"])] != k]; te = [i for i in fi if FOLD[well(D[i]["sheet"])] == k]
-        net = fit(tr, f"фолд {k}")
-        PRED.update(predict(net, te))
-        print(f"  фолд {k}: обучение {len(tr)} кривых, проверка {len(te)}")
-    net = fit(fi, "всё поле")
-    torch.save(net.state_dict(), a.model_out)
-    PRED.update(predict(net, [i for i, c in enumerate(D) if c["set"] == "сорт A"]))
+        nets = [fit(tr, f"фолд {k}, зерно {s_}", seed=1000 * k + s_) for s_ in range(a.seeds)]
+        if SD:
+            torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=k), SD / f"level_ink_f{k}.pt")
+        PROB.update(predict(nets, te))
+        print(f"  фолд {k}: обучение {len(tr)} кривых, проверка {len(te)}, моделей {len(nets)}; {time.time() - T0:.0f} с")
+    nets = [fit(fi, f"всё поле, зерно {s_}", seed=9000 + s_) for s_ in range(a.seeds)]
+    torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=None), a.model_out)
+    if SD:
+        torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=None), SD / "level_ink_all.pt")
+    PROB.update(predict(nets, [i for i, c in enumerate(D) if c["set"] == "сорт A"]))
+    print(f"  всё поле: моделей {len(nets)}; {time.time() - T0:.0f} с")
+    PRED = {i: pr.argmax(0).astype(np.int16) for i, pr in PROB.items()}
     # точность по меткам
     for sn in ("поле", "сорт A"):
         ok = tot = 0; okp = 0
@@ -460,7 +495,8 @@ def main_train(a):
         if len(cv["chain"]) >= 2:
             fm = re.sub(r"^BKZ_", "", cv["root"])
             FH[(cv["set"], fm, 0)] += h0; FH[(cv["set"], fm, 1)] += h1
-    pickle.dump(dict(pred={D[i]["ci"]: (D[i]["P"], PRED[i]) for i in PRED}, levels=LV), open(a.dump, "wb"))
+    pickle.dump(dict(pred={D[i]["ci"]: (D[i]["P"], PRED[i]) for i in PRED}, levels=LV,
+                     prob={D[i]["ci"]: PROB[i].astype(np.float16) for i in PROB}), open(a.dump, "wb"))
     rng = np.random.default_rng(0)
     for sn in ("поле", "сорт A"):
         d = np.array([v1 - v0 for (s, _), (v0, v1) in PER.items() if s == sn]); nz = d[d != 0]
@@ -488,6 +524,8 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--crop", type=int, default=512)
     ap.add_argument("--lr", type=float, default=2e-3)
+    ap.add_argument("--seeds", type=int, default=1)
+    ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле и карту лист → фолд")
     ap.add_argument("--min-run", type=int, default=25)
     ap.add_argument("--dump", default=r"F:/nds/output/taskS/level_ink_pred.pkl")
     ap.add_argument("--model-out", default=r"F:/nds/output/taskS/level_ink_model.pt")
