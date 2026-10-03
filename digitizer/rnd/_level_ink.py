@@ -327,6 +327,7 @@ def main_train(a):
     print(f"кривых {len(D)} (поле {sum(c['set'] == 'поле' for c in D)}), позиций {N}, меток {dict(sorted(n_lab.items()))}, "
           f"скважин поля {len(field_wells)}; устройство {dev}")
     OFS = torch.arange(-nb // 2, nb // 2, device=dev)
+    DIL = tuple(int(x) for x in a.dil.split(",")) * 2               # ★ §6.269: расширения (дважды); по умолчанию 1…32 — как v2
     CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1]
 
     def feats(gi, valid):
@@ -375,7 +376,7 @@ def main_train(a):
         tr_idx = [i for i in tr_idx if (D[i]["lab"] >= 0).any()]
         ln = np.array([len(D[i]["P"]) for i in tr_idx], np.float64)
         pr = ln / ln.sum()
-        net = Net(CIN).to(dev)
+        net = Net(CIN, dil=DIL).to(dev)
         opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
         sch = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.steps, pct_start=0.05)
         L = a.crop; ar = torch.arange(L, device=dev)
@@ -442,7 +443,7 @@ def main_train(a):
     PROB = {}
     fi = [i for i, c in enumerate(D) if c["set"] == "поле"]
     T0 = time.time()
-    META = dict(cin=CIN, nb=nb, kmax=KMAX, nt=NT, stride=a.stride, ch=64, dil=[1, 2, 4, 8, 16, 32] * 2, k=5, tol=a.tol,
+    META = dict(cin=CIN, nb=nb, kmax=KMAX, nt=NT, stride=a.stride, ch=64, dil=list(DIL), k=5, tol=a.tol,
                 min_run=a.min_run, steps=a.steps, seeds=a.seeds)
     SD = Path(a.save_dir) if a.save_dir else None
     if SD:
@@ -525,6 +526,7 @@ def main():
     ap.add_argument("--crop", type=int, default=512)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--seeds", type=int, default=1)
+    ap.add_argument("--dil", default="1,2,4,8,16,32", help="расширения одного прохода (стек повторяется дважды)")
     ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле и карту лист → фолд")
     ap.add_argument("--min-run", type=int, default=25)
     ap.add_argument("--dump", default=r"F:/nds/output/taskS/level_ink_pred.pkl")
