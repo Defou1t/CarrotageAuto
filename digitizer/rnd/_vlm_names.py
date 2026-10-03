@@ -227,8 +227,8 @@ elif a.cmd == "ask":
     only = set(a.only.split(",")) if a.only else None
     t0 = time.time()
     for j, m in sorted(META.items()):
-        if j in ANS or (only and j not in only):
-            continue
+        if (j in ANS and ANS[j].get("answer")) or (only and j not in only):
+            continue                                      # ★ 03.10: лист без ответа спрашивается заново
         lines = []; LET = {}                       # ★ 03.10: кандидаты — буквами (малые модели дробили «GZ41 DA1 SA1»)
         for t, d in m["tracks"].items():
             if t == "None":
@@ -264,12 +264,31 @@ elif a.cmd == "ask":
         if txt.startswith("ERROR"):
             print(f"  {j}: {txt[:300]}")
             continue                                      # ошибку не записываем — лист будет спрошен при подхвате
-        js = None
-        for mm in reversed(re.findall(r"\{[^{}]*\"#\d+\"[^{}]*\}", txt)):
+        def _parse(t_):
+            for mm in reversed(re.findall(r"\{[^{}]*\"#\d+\"[^{}]*\}", t_)):
+                try:
+                    return json.loads(mm)
+                except Exception:
+                    continue
+            return None
+        js = _parse(txt)
+        if js is None:
+            # ★ 03.10: рассуждающая модель не успела вывести JSON в пределах max_tokens — второй ход: её же рассуждение как
+            #   реплика ассистента и просьба дать только итог (без новых картинок; ответ берётся из её собственного вывода)
+            prev = ((msg.get("content") or "") + "\n" + (msg.get("reasoning_content") or ""))[-6000:]
+            body2 = {"model": a.model, "temperature": 0, "max_tokens": 400,
+                     "messages": [{"role": "user", "content": content}, {"role": "assistant", "content": prev},
+                                  {"role": "user", "content": "Stop reasoning now. Output ONLY the final JSON line mapping every tag "
+                                                              "to a letter, based on your analysis above."}]}
             try:
-                js = json.loads(mm); break
-            except Exception:
-                continue
+                r2 = urllib.request.urlopen(urllib.request.Request(a.url, data=json.dumps(body2).encode(),
+                                                                   headers={"Content-Type": "application/json"}), timeout=1800).read()
+                m2 = json.loads(r2)["choices"][0]["message"]
+                t2 = (m2.get("content") or "") + "\n" + (m2.get("reasoning_content") or "")[-800:]
+                js = _parse(t2)
+                txt = txt + "\n[ВТОРОЙ ХОД] " + t2[-400:]
+            except Exception as e:
+                txt = txt + f"\n[ВТОРОЙ ХОД: ошибка {e}]"
         if js:
             js = {k: LET.get(str(v).strip().strip(".").upper()[:1], v) if len(str(v).strip()) <= 2 else v for k, v in js.items()}
         ANS[j] = dict(answer=js, text=txt[-1200:], sec=round(time.time() - t1, 1))
