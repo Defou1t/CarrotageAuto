@@ -13,7 +13,7 @@ r"""_vlm_names.py — ИМЕНА КРИВЫХ ПО ЛЕГЕНДЕ ШАПКИ Л�
   _vlm_names.py ask --out F:/nds/output/vlm_names --model gemma-4-26b-a4b-it
   _vlm_names.py score --out F:/nds/output/vlm_names --model gemma-4-26b-a4b-it
 """
-import sys, argparse, json, pickle, hashlib, random, base64, time, re, urllib.request
+import sys, argparse, json, pickle, hashlib, random, base64, time, re, urllib.request, urllib.error
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 sys.path.insert(0, r"F:\nds\Auto"); sys.path.insert(0, r"F:\nds\Auto\digitizer"); sys.path.insert(0, r"F:\nds\Auto\digitizer\rnd")
 from pathlib import Path
@@ -195,10 +195,16 @@ if a.cmd == "build":
             pts = [(y, x) for y, x in sorted(W[w].items()) if y0 <= y < y1]
             if not pts:
                 continue
-            for frac in (0.15, 0.5, 0.85):
-                y, x = pts[int(frac * (len(pts) - 1))]
+            # метки — в типичном месте кривой: в каждой трети окна строка, где x ближе всего к медиане окна
+            #   (выдача может кусками уходить на чужую тушь; метка на таком куске сбивает с толку)
+            med = float(np.median([x for _, x in pts]))
+            thirds = [pts[k * len(pts) // 3:(k + 1) * len(pts) // 3] for k in range(3)]
+            for k, part in enumerate(thirds):
+                if not part:
+                    continue
+                y, x = min(part, key=lambda yx: abs(yx[1] - med))
                 px, py = x * s, (y - y0) * s
-                tx, ty = px + 30, py - 12
+                tx, ty = px + 30, py - 12 + 26 * (i % 3) - 26
                 dr.line([(px + 2, py), (tx, ty + 10)], fill=col, width=2)
                 dr.rectangle([tx, ty, tx + 34, ty + 22], fill=(255, 255, 255), outline=col, width=2)
                 dr.text((tx + 3, ty + 1), lab, fill=col, font=font)
@@ -223,12 +229,15 @@ elif a.cmd == "ask":
     for j, m in sorted(META.items()):
         if j in ANS or (only and j not in only):
             continue
-        lines = []
+        lines = []; LET = {}                       # ★ 03.10: кандидаты — буквами (малые модели дробили «GZ41 DA1 SA1»)
         for t, d in m["tracks"].items():
             if t == "None":
                 continue
-            names = "; ".join(f"{n} ({gloss(n) or 'see legend'})" for n in d["names"])
-            lines.append(f"Track {t}: tags {', '.join(d['labels'])} — choose among names: {names}")
+            opts = []
+            for n in d["names"]:
+                L = chr(ord("A") + len(LET)); LET[L] = n
+                opts.append(f"{L} = {n.split()[0]} ({gloss(n) or 'see legend'})")
+            lines.append(f"Track {t}: tags {', '.join(d['labels'])} — choose among: " + "; ".join(opts))
         prompt = ("You are reading a scanned paper well-log chart (Soviet/Ukrainian, 1960–2010s). IMAGE 1 is the chart header and "
                   "legend: tool/zond captions (e.g. A0.4M0.1N, A2.0M0.5N, N0.5M2.0A, ПС, ДС, ГК, НГК, T1, T2, A1, ΔT, α), their scale "
                   "lines, and how each curve is drawn — ink colour, bold or thin or dashed line, left-to-right order of the scale "
@@ -237,8 +246,7 @@ elif a.cmd == "ask":
                   "heights). For every tag decide which curve name it is, using ONLY the legend evidence (colour, line weight/style, "
                   "caption order and arrows, curve character). Each name may be used at most once within its track.\n"
                   + "\n".join(lines) +
-                  "\nThink briefly, then give the final answer as ONE line of JSON mapping every tag to a name, e.g. "
-                  "{\"#1\": \"<name>\", \"#2\": \"<name>\"}. Use the names exactly as written.")
+                  "\nThink briefly, then give the final answer as ONE line of JSON mapping every tag to the LETTER of its name, e.g. {\"#1\": \"B\", \"#2\": \"A\"}.")
         content = [{"type": "text", "text": prompt}]
         for part in ("header", "window"):
             b64 = base64.b64encode((OUT / f"{j}_{part}.png").read_bytes()).decode()
@@ -249,14 +257,21 @@ elif a.cmd == "ask":
         try:
             msg = json.loads(urllib.request.urlopen(req, timeout=3600).read())["choices"][0]["message"]
             txt = (msg.get("content") or "") + "\n" + (msg.get("reasoning_content") or "")[-1500:]
+        except urllib.error.HTTPError as e:
+            txt = f"ERROR HTTP {e.code}: {e.read()[:600]!r}"
         except Exception as e:
             txt = f"ERROR {type(e).__name__}: {e}"
+        if txt.startswith("ERROR"):
+            print(f"  {j}: {txt[:300]}")
+            continue                                      # ошибку не записываем — лист будет спрошен при подхвате
         js = None
         for mm in reversed(re.findall(r"\{[^{}]*\"#\d+\"[^{}]*\}", txt)):
             try:
                 js = json.loads(mm); break
             except Exception:
                 continue
+        if js:
+            js = {k: LET.get(str(v).strip().strip(".").upper()[:1], v) if len(str(v).strip()) <= 2 else v for k, v in js.items()}
         ANS[j] = dict(answer=js, text=txt[-1200:], sec=round(time.time() - t1, 1))
         json.dump(ANS, open(fa, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         print(f"  {j} [{m['kind']}] {time.time() - t1:.0f} с: {js}")

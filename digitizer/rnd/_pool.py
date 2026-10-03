@@ -398,8 +398,14 @@ def run(a):
         # ── 4. ПК: своё задание дальше, иначе первое из очереди, иначе забрать у ноутбука
         if pc is None and idle and not pc_trainings():
             mine = [j for j in jobs if j["state"] == "pc" and j.get("pc_between")]
-            pend = sorted((j for j in jobs if j["state"] == "pending" and (j.get("prefer") != "lp" or lp_reason != "")),
+            pend = sorted((j for j in jobs if j["state"] == "pending" and not j.get("hold") and
+                           (j.get("prefer") != "lp" or lp_reason != "")),
                           key=lambda j: (j["prio"], j["id"]))
+            # ★ 03.10: удержанное задание (`hold`) ПК не продолжает — снимок эпохи цел, снимет удержание `prio` (цепочка)
+            if mine and mine[0].get("hold"):
+                mine[0].update(state="pending", pc_between=False, dirty=True)
+                say(pool, f"{mine[0]['id']}: удержано — ПК его не продолжает (эпох готово {epochs_done(mine[0])})")
+                mine = []
             job = mine[0] if mine else (pend[0] if pend else None)
             # ★ 02.10: на границе партии задание со СТРОГО лучшим приоритетом вытесняет своё. Своё — в очередь, продолжит со
             #   снимка эпохи (ПК или ноутбук — кто освободится). Без этого опыт с более сильным обоснованием ждал чужие 13 ч:
@@ -468,7 +474,7 @@ def run(a):
         if lp_free:
             # «лучше на ПК» значит «ПК первым, если он свободен»; ПК занят другим заданием — берёт ноутбук. Задание, с которым
             # ноутбук уже сдался (FAIL — стойкий сбой, не нехватка памяти), ноутбуку не отдаётся.
-            pend = sorted((j for j in jobs if j["state"] == "pending" and not j.get("lp_failed") and
+            pend = sorted((j for j in jobs if j["state"] == "pending" and not j.get("lp_failed") and not j.get("hold") and
                            (j.get("prefer") != "pc" or not idle or pc is not None)),
                           key=lambda j: (j["prio"], j["id"]))
             if pend and lap.sync():
@@ -496,6 +502,7 @@ def run(a):
                     j["state"] = "cancelled"
                 if j["id"] in by:
                     j["prio"] = by[j["id"]]["prio"]     # приоритет меняет только цепочка (`prio`) — берём из файла
+                    j["hold"] = by[j["id"]].get("hold", False)
                 by[j["id"]] = j
             save_jobs(pool, {"jobs": sorted(by.values(), key=lambda j: (j["prio"], j["id"]))})
 
@@ -540,7 +547,17 @@ def setprio(a):
     for j in J["jobs"]:
         if j["id"] == a.id:
             j["prio"] = a.prio
+            j["hold"] = False                   # ★ 03.10: смена приоритета цепочкой = «пора» — снимает удержание
     save_jobs(a.pool, J); say(a.pool, f"приоритет {a.id} → {a.prio}")
+
+
+def hold(a):
+    """★ 03.10: удержать задание — ни ПК, ни ноутбук его не начинают и не продолжают (живую партию ПК не трогает); снимает `prio`"""
+    J = load_jobs(a.pool)
+    for j in J["jobs"]:
+        if j["id"] == a.id:
+            j["hold"] = True
+    save_jobs(a.pool, J); say(a.pool, f"удержано задание {a.id}")
 
 
 def show(a):
@@ -551,7 +568,7 @@ def show(a):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["run", "add", "cancel", "finish", "show", "prio"])
+    ap.add_argument("cmd", choices=["run", "add", "cancel", "finish", "show", "prio", "hold"])
     ap.add_argument("--pool", required=True)
     ap.add_argument("--id", default="")
     ap.add_argument("--prio", type=int, default=5)
@@ -562,4 +579,4 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.cmd == "finish":
         (pdir(a.pool) / "FINISH").write_text(time.strftime("%Y-%m-%d %H:%M"), encoding="utf-8"); sys.exit(0)
-    sys.exit({"run": run, "add": add, "cancel": cancel, "show": show, "prio": setprio}[a.cmd](a) or 0)
+    sys.exit({"run": run, "add": add, "cancel": cancel, "show": show, "prio": setprio, "hold": hold}[a.cmd](a) or 0)
