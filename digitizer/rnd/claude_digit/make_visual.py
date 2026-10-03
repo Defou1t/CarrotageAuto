@@ -339,6 +339,66 @@ for q in tmp.glob("*.png"):
     q.unlink()
 tmp.rmdir()
 
+# ═════════════════════════ G — переходы масштаба (§6.262) ═════════════════════════
+print("G — переходы масштаба")
+LVC_T = {0: (0, 170, 0), 1: (150, 0, 200), 2: (255, 140, 0), 3: (0, 160, 160)}       # эталон: 1× зелёный, 5× фиолетовый, …
+LVC_O = {0: (225, 0, 0), 1: (20, 60, 230), 2: (120, 60, 0), 3: (0, 0, 0)}             # выдача: 1× красный, 5× синий, …
+
+
+def lv_rows(c):
+    out = {}
+    for y0, y1, lv in c.get("segments") or []:
+        for y in range(int(y0), int(y1) + 1):
+            out[y] = int(lv)
+    return out
+
+
+def level_example(sheet, name, y0, y1, tag, note):
+    stem = SRC[sheet].stem
+    mt = {c["name"]: c for c in extract(str(SRC[sheet]))["curves"]}
+    key = key_of(stem)
+    got = next((TS / "rp_vc" / "N" / key).glob("*_auto.nlgx"))
+    mw = {c["name"]: c for c in extract(str(got))["curves"]}
+    ct, cw = mt[name], mw.get(name)
+    gt, lt = dense_curve(ct), lv_rows(ct)
+    tr, lw = (dense_curve(cw), lv_rows(cw)) if cw else ({}, {})
+    xs = [v for d in (gt, tr) for y, v in d.items() if y0 <= y < y1]
+    layers = []
+    for L in sorted(set(lt.values())):                         # эталон — по уровням
+        layers.append(({y: x for y, x in gt.items() if lt.get(y) == L}, LVC_T.get(L, (0, 0, 0)), 3, "dots"))
+    for L in sorted(set(lw.values()) or {0}):                  # выдача — по уровням, сдвинута на 10 px вправо (не закрывать тушь)
+        layers.append(({y: x + 10 / 0.6 for y, x in tr.items() if lw.get(y, 0) == L}, LVC_O.get(L, (0, 0, 0)), 2, "dots"))
+    img = window(IMGS[stem], y0, y1, min(xs) - 60, max(xs) + 80, 0.6, layers)
+    both = [y for y in gt if y in tr and y in lt and y0 <= y < y1]
+    acc = np.mean([lw.get(y, 0) == lt[y] for y in both]) if both else float("nan")
+    s_ = stats(tr, gt, y0, y1)
+    nseg_t = len(ct.get("segments") or []); nseg_w = len(cw.get("segments") or []) if cw else 0
+    cap = [f"{stem[:60]} — {name.split()[0]}, строки {y0}–{y1}: {note}",
+           f"сегментов масштаба: эталон {nseg_t}, выдача {nseg_w}; в окне уровень выдачи совпадает с эталоном на {acc:.0%} строк; "
+           f"|Δx| медиана {s_['med']:.1f} px — по пикселям кривая «честна». Выдача нарисована со сдвигом 10 px вправо, чтобы не "
+           f"закрывать тушь" if s_ else ""]
+    save("G", f"G{tag}_{stem[:30]}_{name.split()[0]}.png".replace(" ", "_").replace(",", ""),
+         caption_img(img, cap, [(LVC_T[0], "эталон, шкала 1×"), (LVC_T[1], "эталон, шкала 5×"),
+                                (LVC_O[0], "выдача, шкала 1×"), (LVC_O[1], "выдача, шкала 5×")]), " | ".join(cap))
+
+
+level_example("LOBACH_032_RK-F_0005-2000_500_1982-03-30_D_1.nlgx", "GK1 DA1 SA1", 25500, 28500, 1,
+              "ГК записан двумя перьями (1× у упора справа и 5× слева); эксперт переходит на 5×, выдача всегда считает 1×")
+LA = pickle.load(open(TS / "level_audit.pkl", "rb"))
+rng = random.Random(7)
+for tag, sel, note in (
+        (2, [r for r in LA if r["set"] == "поле" and r["honest"] and r["multi"] and r["res"] and r["lvl_acc"] is not None and r["lvl_acc"] < 0.6],
+         "резистивная кривая: декодер оборотов есть, но уровни во многом не совпали"),
+        (3, [r for r in LA if r["set"] == "поле" and r["honest"] and r["multi"] and not r["res"] and r["lvl_acc"] is not None and r["lvl_acc"] < 0.8],
+         "нерезистивная кривая с переходами: выдача всегда на 1×")):
+    if not sel:
+        continue
+    r = rng.choice(sel)
+    c = next(c for c in extract(str(SRC[r["sheet"]]))["curves"] if c["name"] == r["name"])
+    segs = [s for s in (c.get("segments") or []) if s[2] > 0]
+    yc = int((segs[len(segs) // 2][0] + segs[len(segs) // 2][1]) / 2) if segs else c["top_y"] + 1500
+    level_example(r["sheet"], r["name"], max(c["top_y"], yc - 1500), yc + 1500, tag, note)
+
 # ═════════════════════════ индекс ═════════════════════════
 SEC = {
     "A": ("A. Моя оцифровка «своими глазами» (без скриптов проекта)",
@@ -363,6 +423,11 @@ SEC = {
           "Слева — шапка (легенда зондов, образцы линий, цвета), справа — окно с метками #1…#K на кривых выдачи. Под картинкой — для каждой "
           "метки имя эталона (истина), имя прода и ответы: мой (Claude, где есть) и локальных моделей. Итог пилота на 50 листах: "
           "прод 37% на перепутанных, gemma-4 39%, Qwen2.5-VL 30%; я — 6 из 9 на трудных листах."),
+    "G": ("G. Переходы масштаба 1× → 5× (§6.262) — мера честности их не видела",
+          "Эталон раскрашен по уровню шкалы (зелёный 1×, фиолетовый 5×), выдача прода — тоже (красный 1×, синий 5×). "
+          "Пиксели совпадают, но если выдача на 5×-участке считает шкалу 1×, значение в LAS занижено впятеро. У 1267 из 2739 "
+          "кривых поля в эталоне есть переходы; с проверкой уровня именных честных на поле 576 вместо 861. Прод раскладывает "
+          "уровни только у резистивных кривых (ГЗ, БК, ИК…); у ГК, НГК, ЗАТ, ТМ — всегда 1×."),
     "F": ("F. Куда уходит лучшая трасса у кривых без честного кандидата (§6.257)",
           "Для кривой эталона (зелёная) — лучшая из всех трасс прода и декодера (красная) и момент ухода (пурпурная риска слева). "
           "Уходов у касания с другой кривой ≈ 10%; чаще трасса уходит в фон или на кривую далеко в стороне."),
