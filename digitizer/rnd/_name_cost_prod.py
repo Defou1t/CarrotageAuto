@@ -241,7 +241,8 @@ if a.dump:
     import pickle as _pk
     _d = {a.mode: perA}
     if a.mode2:
-        _d[a.mode2] = count(a.mode2)[0]
+        _CNT2 = count(a.mode2)              # ★ 03.10: второй режим считается ОДИН раз — и для выгрузки, и для парного сравнения
+        _d[a.mode2] = _CNT2[0]
     _tmp = a.dump + ".tmp"                  # ⛔ 27.09 (разбор): атомарно — снятый на записи процесс не оставит обрезок
     with open(_tmp, "wb") as _fh:
         _pk.dump(_d, _fh)
@@ -252,7 +253,7 @@ if a.dump:
           f"({', '.join(f'{k}: {len(v)} листов' for k, v in _d.items())})")
 
 if a.mode2:
-    perB, shB, skB, dB = count(a.mode2)
+    perB, shB, skB, dB = _CNT2 if a.dump else count(a.mode2)
     both = sorted(set(perA) & set(perB))
     print(f"\n{'='*78}\n★★ ПАРНОЕ СРАВНЕНИЕ {a.mode} → {a.mode2} НА {len(both)} ЛИСТАХ, "
           f"ОБРАБОТАННЫХ ОБОИМИ\n{'='*78}")

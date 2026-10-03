@@ -340,3 +340,67 @@ def segments(f, levels, top_y, n_rows, stride=8, min_run=25):
     for i in range(len(segs) - 1):                  # сплошное покрытие: конец = начало следующего − 1
         segs[i][1] = segs[i + 1][0] - 1
     return [s[0] for s in segs], [s[1] for s in segs], [int(s[2]) for s in segs]
+
+
+# ───────────── §6.267: сдвиговые цепочки (термометрия) — уровень по гладким участкам трассы ─────────────
+
+def is_shift(chain):
+    """сдвиговая цепочка: у каждой пары соседних уровней v_left растёт, ширина диапазона та же (±20%)"""
+    if len(chain) < 2:
+        return False
+    for p_, q_ in zip(chain, chain[1:]):
+        wp = p_["v_right"] - p_["v_left"]; wq = q_["v_right"] - q_["v_left"]
+        if not (q_["v_left"] > p_["v_left"]) or wp == 0 or abs(wq - wp) > 0.2 * abs(wp):
+            return False
+    return True
+
+
+def decode_shift(ty, tx, chain, step=0.03, min_len=150, edge=20):
+    """§6.267 — ТО ЖЕ, что `digitizer/rnd/_level_tm.py`. Гладкие участки плотной трассы (|Δx| ≤ step·ширины на строку,
+    ≥ min_len строк); первый — уровень 0; следующий — уровень предыдущего или +1, что даёт меньший разрыв значения между
+    концом предыдущего и началом этого (медианы edge крайних строк). → {строка начала участка: уровень} или None."""
+    K = len(chain)
+    w = abs(chain[0]["x_right"] - chain[0]["x_left"]) or 1.0
+    tx = tx.astype(np.float64)
+    ok = (np.diff(ty) == 1) & (np.abs(np.diff(tx)) <= step * w)
+    R, i, n = [], 0, len(ty)
+    while i < n - 1:
+        if not ok[i]:
+            i += 1; continue
+        j = i
+        while j < n - 1 and ok[j]:
+            j += 1
+        if ty[j] - ty[i] + 1 >= min_len:
+            R.append((i, j))
+        i = j + 1
+    if not R:
+        return None
+    lv, k, pv = {}, 0, None
+    for i, j in R:
+        xs = float(np.median(tx[i:i + edge])); xe = float(np.median(tx[max(i, j - edge + 1):j + 1]))
+        if pv is not None and k + 1 < K:
+            if abs(_val(chain[k + 1], xs) - pv) < abs(_val(chain[k], xs) - pv):
+                k += 1
+        lv[int(ty[i])] = k
+        pv = _val(chain[k], xe)
+    return lv
+
+
+def segments_from_changes(lv, top_y, n_rows):
+    """точки смены {строка: уровень} → сегменты на [top_y, top_y + n_rows − 1] (до первой точки — 0, после — наследуется)"""
+    y_end = top_y + n_rows - 1
+    pts = sorted((max(int(y), top_y), int(l)) for y, l in lv.items() if y <= y_end)
+    segs = [[top_y, y_end, 0]]
+    for y, l in pts:
+        if y == segs[-1][0]:
+            segs[-1][2] = l
+        elif l != segs[-1][2]:
+            segs[-1][1] = y - 1; segs.append([y, y_end, l])
+    out = []
+    for s_ in segs:
+        if out and out[-1][2] == s_[2]:
+            out[-1][1] = s_[1]
+        else:
+            out.append(s_)
+    return [s_[0] for s_ in out], [s_[1] for s_ in out], [s_[2] for s_ in out]
+

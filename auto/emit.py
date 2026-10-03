@@ -319,13 +319,12 @@ def _level_segments(tr, model, curve, top_y, n, gray=None):
         return single
 
 
-def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name):
+def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False):
     """§6.266: переразложить уровни масштаба кривых с цепочкой моделью по скану (auto/level_ink.py). Чужие трассы — как в
-    готовом файле: записанные нами + DA (прочие слоты рамки вычищены)."""
+    готовом файле: записанные нами + DA (прочие слоты рамки вычищены).
+    §6.267 (`shift`): у СДВИГОВЫХ цепочек (термометрия) — уровень по гладким участкам трассы, без скана и без torch;
+    участков нет — как у прочих."""
     from . import level_ink as LI
-    if not LI.available(spec):
-        LI._announce(f"⚠ уровни масштаба по скану ({spec}) НЕ включены: нет torch или весов — остаётся декодер оборотов")
-        return
     try:
         import decode_levels as DL
     except Exception:
@@ -333,9 +332,21 @@ def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name):
     jobs = []
     for c, k, new_xs, lw_segs in ink_jobs:
         fam = DL.build_family(model, c)
-        if len(fam) >= 2:
-            jobs.append((c, k, new_xs, lw_segs, fam))
-    if not jobs:
+        if len(fam) < 2:
+            continue
+        if shift and LI.is_shift(fam):
+            ty, tx = LI.dense_rows(c["top_y"], new_xs, NULL)
+            lv = LI.decode_shift(ty, tx, fam) if len(ty) >= 2 else None
+            if lv is not None:
+                tops, bots, levs = LI.segments_from_changes(lv, c["top_y"], c["n_rows"])
+                set_tag(ifds, k, 35492, 4, [len(tops)]); set_tag(ifds, k, 35494, 4, tops)
+                set_tag(ifds, k, 35496, 4, bots); set_tag(ifds, k, 35498, 4, levs)
+                continue
+        jobs.append((c, k, new_xs, lw_segs, fam))
+    if not jobs or not spec:
+        return
+    if not LI.available(spec):
+        LI._announce(f"⚠ уровни масштаба по скану ({spec}) НЕ включены: нет torch или весов — остаётся декодер оборотов")
         return
     gray = get_gray()
     if gray is None:
@@ -709,8 +720,9 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         from .config import DEFAULT as _D
         _cvp = _D.cv
     _li = getattr(_cvp, "level_ink", "") or ""
-    if _li and ink_jobs:
-        _level_ink_pass(_li, model, ifds, ink_jobs, _get_gray, set_tag, Path(frame_nlgx).name)
+    _ls = bool(getattr(_cvp, "level_shift", False))
+    if (_li or _ls) and ink_jobs:
+        _level_ink_pass(_li, model, ifds, ink_jobs, _get_gray, set_tag, Path(frame_nlgx).name, shift=_ls)
 
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
