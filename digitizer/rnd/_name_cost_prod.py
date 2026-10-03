@@ -51,6 +51,10 @@ ap.add_argument("--dump", default="", help="pickle с {лист: (с_имене�
 #   `--held-min` > 0 — строгий вариант: вместо медианы доля общих строк в 3 px ≥ этого.
 ap.add_argument("--metric", default="row", choices=["row", "plane"])
 ap.add_argument("--held-min", type=float, default=0.0)
+# ★ 03.10 (§6.262): мера В ЗНАЧЕНИЯХ — уровень масштаба (сегменты 0 = 1×, 1 = 5×, …) обязан совпасть. Выдача по строкам
+#   пересчитывается: x → значение по шкале СВОЕГО уровня (из цепочки масштабов кривой эталона) → x на шкале уровня ЭТАЛОНА.
+#   Уровни совпали — x не меняется (прежняя мера бит-в-бит); не совпали — ошибка = разница значений в пикселях шкалы эталона.
+ap.add_argument("--levels", action="store_true")
 a = ap.parse_args()
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
 
@@ -67,12 +71,38 @@ def _plane(tr, com, gt):
         P = [np.stack([ys, xs], 1)]
         if len(ys) > 1:
             dy = np.diff(ys); dx = np.diff(xs)
-            for i in np.flatnonzero((dy <= 30) & (np.abs(dx) > 1)):
+            for i in np.flatnonzero((dy <= 30) & (np.abs(dx) > 1) & (np.abs(dx) <= 3000)):   # ★ скачок за пределы листа (сдвиг уровня) не уплотнять
                 n = int(np.ceil(abs(dx[i]))); t = np.arange(1, n) / n
                 P.append(np.stack([ys[i] + dy[i] * t, xs[i] + dx[i] * t], 1))
         _TREES[k] = (cKDTree(np.concatenate(P)), tr)        # держим tr — id не переиспользуется, пока дерево живо
     d, _ = _TREES[k][0].query(np.array([[y, gt[y]] for y in com], float))
     return d
+
+
+def lv_rows(c):
+    """строка → уровень масштаба по сегментам кривой (вне сегментов — 0)"""
+    out = {}
+    for y0, y1, lv in c.get("segments") or []:
+        for y in range(int(y0), int(y1) + 1):
+            out[y] = int(lv)
+    return out
+
+
+def relevel(tr, lw, lg, chain):
+    """выдача tr (уровни lw) → x в шкале уровня эталона (lg) по цепочке масштабов кривой эталона"""
+    if len(chain) < 2:
+        return tr
+    out = {}
+    for y, x in tr.items():
+        lo, lt = lw.get(y, 0), lg.get(y, 0)
+        if lo == lt:
+            out[y] = x; continue
+        if lo >= len(chain) or lt >= len(chain):
+            out[y] = x + 1e4; continue                       # уровня нет в цепочке — заведомо мимо
+        so, sg = chain[lo], chain[lt]
+        v = so["v_left"] + (x - so["x_left"]) * (so["v_right"] - so["v_left"]) / ((so["x_right"] - so["x_left"]) or 1)
+        out[y] = sg["x_left"] + (v - sg["v_left"]) * (sg["x_right"] - sg["x_left"]) / ((sg["v_right"] - sg["v_left"]) or 1)
+    return out
 
 
 def err(tr, gt):
@@ -143,13 +173,22 @@ def count(mode):
         if got is None:
             skipped += 1; continue
         src = SRC[nm]
-        gts = {c["name"]: dense(c) for c in extract(str(src))["curves"]
+        _mt = extract(str(src)); _mw = extract(str(got))
+        gts = {c["name"]: dense(c) for c in _mt["curves"]
                if M.mnem_root(c["name"]) != "DA" and sum(1 for x in c["xs"] if x != NULL) >= 50}
-        wr = {c["name"]: dense(c) for c in extract(str(got))["curves"]
+        wr = {c["name"]: dense(c) for c in _mw["curves"]
               if M.mnem_root(c["name"]) != "DA"}
+        if a.levels:
+            import decode_levels as _DL
+            LG = {c["name"]: lv_rows(c) for c in _mt["curves"] if c["name"] in gts}
+            CH = {c["name"]: _DL.build_family(_mt, c) for c in _mt["curves"] if c["name"] in gts}
+            LW = {c["name"]: lv_rows(c) for c in _mw["curves"] if c["name"] in wr}
+            _rl = lambda w, g: relevel(wr[w], LW.get(w, {}), LG.get(g, {}), CH.get(g, []))
+        else:
+            _rl = lambda w, g: wr[w]
         tr_map = TRACK.get(nm, {})
         sheets += 1
-        nmd = sum(1 for k, gt in gts.items() if k in wr and HON(*err(wr[k], gt)))
+        nmd = sum(1 for k, gt in gts.items() if k in wr and HON(*err(_rl(k, k), gt)))
         fre = 0
         for t in set(tr_map.get(k) for k in gts) | set(tr_map.get(k) for k in wr):
             if t is None:
@@ -158,7 +197,7 @@ def count(mode):
             W = [k for k in wr if tr_map.get(k) == t]
             if not G or not W:
                 continue
-            ok = {(g, w): HON(*err(wr[w], gts[g])) for g in G for w in W}
+            ok = {(g, w): HON(*err(_rl(w, g), gts[g])) for g in G for w in W}
             fre += match(G, W, ok)
         per[nm] = (nmd, fre, len(gts))
     print(f"★ СВЕРКА {mode}: листов разобрано {sheets} + пропущено {skipped} = {sheets+skipped} "

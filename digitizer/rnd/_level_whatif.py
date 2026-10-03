@@ -47,6 +47,7 @@ def levels(c):
 
 
 C = {k: Counter() for k in SETS}
+ACC = {k: defaultdict(list) for k in SETS}
 FAMC = {k: defaultdict(Counter) for k in SETS}
 for sn, names in SETS.items():
     for sh in names:
@@ -95,6 +96,16 @@ for sn, names in SETS.items():
                     lastv = ld[y]
                 ldf[y] = lastv
             acc_dec = float(np.mean([ldf.get(y, 0) == lt[y] for y in both])) if ld else acc_now
+            # ★ тот же декодер на ТРАССЕ ЭКСПЕРТА (на тех же строках) — изоляция качества трассы
+            xt = {c["top_y"] + i: float(x) for i, x in enumerate(c["xs"]) if x != NULL}
+            ldt = refine.enforce_min_run(DL.decode(xt, fam, lam=LAM), MINRUN) if len(fam) >= 2 else {}
+            lastv, ldtf = 0, {}
+            for y in range(min(both), max(both) + 1):
+                if y in ldt:
+                    lastv = ldt[y]
+                ldtf[y] = lastv
+            acc_tru = float(np.mean([ldtf.get(y, 0) == lt[y] for y in both])) if ldt else acc_now
+            ACC[sn][M.mnem_root(nm)].append((acc_now, acc_dec, acc_tru))
             root = M.mnem_root(nm)
             for tag, acc in (("как есть", acc_now), ("декодер всем", acc_dec)):
                 C[sn][(group, tag)] += acc >= 0.9
@@ -114,3 +125,9 @@ for sn in SETS:
     print(f"   ⇒ именно-честных с верным уровнем: как есть {tot_now}, декодер всем {tot_dec} ({tot_dec - tot_now:+d})")
     print("   по семействам (n: как есть → декодер всем): " + ", ".join(
         f"{r} {v['n']}: {v['как есть']}→{v['декодер всем']}" for r, v in sorted(FAMC[sn].items(), key=lambda kv: -kv[1]["n"])[:14]))
+
+for sn in SETS:
+    print(f"★ {sn}: медиана верных строк уровня у именно-честных с переходами — прод / декодер на трассе прода / декодер на трассе эксперта:")
+    for r, v in sorted(ACC[sn].items(), key=lambda kv: -len(kv[1]))[:14]:
+        v = np.array(v)
+        print(f"   {r:8s} n {len(v):3d}: {np.median(v[:, 0]):.2f} / {np.median(v[:, 1]):.2f} / {np.median(v[:, 2]):.2f}")
