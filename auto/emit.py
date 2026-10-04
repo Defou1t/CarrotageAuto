@@ -402,12 +402,15 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
         return
     rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root)
     for name, (k, p) in rep_.items():
-        mapping[name] = (cands[k]["L"], cands[k]["tr"])
+        if k is None:                                   # §6.283: трассу слота забрал другой слот, своей нет — слот пуст
+            mapping.pop(name, None)
+        else:
+            mapping[name] = (cands[k]["L"], cands[k]["tr"])
     if rep_:
         try:
             (Path(out) / f"{stem}_linechoice.json").write_text(json.dumps(
-                [{"slot": n, "src": cands[k]["src"], "p": round(p, 4)} for n, (k, p) in rep_.items()], ensure_ascii=False),
-                encoding="utf-8")
+                [{"slot": n, "k": k, "src": None if k is None else cands[k]["src"], "p": round(p, 4)} for n, (k, p) in rep_.items()],
+                ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
 
