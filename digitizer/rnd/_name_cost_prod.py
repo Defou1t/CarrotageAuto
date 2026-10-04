@@ -61,10 +61,12 @@ ap.add_argument("--held-min", type=float, default=0.0)
 #   пересчитывается: x → значение по шкале СВОЕГО уровня (из цепочки масштабов кривой эталона) → x на шкале уровня ЭТАЛОНА.
 #   Уровни совпали — x не меняется (прежняя мера бит-в-бит); не совпали — ошибка = разница значений в пикселях шкалы эталона.
 ap.add_argument("--levels", action=argparse.BooleanOptionalAction, default=True)
+ap.add_argument("--pairs-dump", default="", help="★ 04.10: выгрузить пары 1:1 без имени (лист, трек, эталон, выдача) — разбор имён")
 a = ap.parse_args()
 print(f"★ мера: {a.metric}, {'в значениях (уровни масштаба)' if a.levels else 'в пикселях'}"
       f"{'' if (a.metric == 'plane2' and a.levels) else '  ⚠ не мера приёмки (с 04.10 — plane2 в значениях)'}")
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
+PAIRS = {}
 
 
 _TREES = {}
@@ -132,7 +134,7 @@ def err(tr, gt):
     return float(np.median(d)), len(com) / max(1, len(gt))
 
 
-def match(rows, cols, ok):
+def match(rows, cols, ok, pairs_out=None):
     pair = {}
 
     def try_(r, seen):
@@ -144,7 +146,10 @@ def match(rows, cols, ok):
                 pair[c] = r
                 return True
         return False
-    return sum(1 for r in rows if try_(r, set()))
+    n_ = sum(1 for r in rows if try_(r, set()))
+    if pairs_out is not None:
+        pairs_out.extend((r, c) for c, r in pair.items())
+    return n_
 
 
 # треки из пуловых дампов: имя листа -> {кривая: трек}
@@ -211,7 +216,10 @@ def count(mode):
             if not G or not W:
                 continue
             ok = {(g, w): HON(*err(_rl(w, g), gts[g])) for g in G for w in W}
-            fre += match(G, W, ok)
+            _pp = []
+            fre += match(G, W, ok, _pp)
+            if a.pairs_dump:
+                PAIRS.setdefault(mode, []).extend((nm, t, g_, w_) for g_, w_ in _pp)
         per[nm] = (nmd, fre, len(gts))
     print(f"★ СВЕРКА {mode}: листов разобрано {sheets} + пропущено {skipped} = {sheets+skipped} "
           f"против {len(dirs)} каталогов   "
@@ -281,3 +289,11 @@ if a.mode2:
               f"перестановочный p = {pp:.4f}; знаковый p = {ps:.5f}")
     print(f"\n⚠ Оба счёта посчитаны ОДНИМ проходом по одним каталогам — суммы и тесты сходятся "
           f"по построению. Переписывать их в роадмап порознь из разных прогонов нельзя (§6 правило 2).")
+
+if a.pairs_dump:                                # ★ 04.10: пары 1:1 без имени по режимам — для разбора имён (`_name_pairs.py`)
+    import pickle as _pk2
+    with open(a.pairs_dump + ".tmp", "wb") as _fh:
+        _pk2.dump(PAIRS, _fh)
+    import os as _os2
+    _os2.replace(a.pairs_dump + ".tmp", a.pairs_dump)
+    print(f"★ пары 1:1 выгружены: {a.pairs_dump} ({', '.join(f'{k}: {len(v)}' for k, v in PAIRS.items())})")
