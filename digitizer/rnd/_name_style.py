@@ -26,6 +26,7 @@ ap.add_argument("--mode", default="S")
 ap.add_argument("--taus", nargs="+", type=float, default=[0.8, 0.9])
 ap.add_argument("--folds", type=int, default=5)
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/name_style_swaps.pkl")
+ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле, словарь семейств и карту лист → фолд")
 a = ap.parse_args()
 TS = Path(a.ts)
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -188,3 +189,12 @@ for tau in a.taus:
         pr = Counter((M.mnem_root(s["A"]), M.mnem_root(s["B"]), s["delta"]) for s in sw)
         print("   пары (A, B, Δ): " + ", ".join(f"{x}↔{y} {dd:+d}: {c}" for (x, y, dd), c in pr.most_common(10)))
 pickle.dump(OUT, open(a.dump, "wb"))
+if a.save_dir:
+    import json
+    sd = Path(a.save_dir); sd.mkdir(parents=True, exist_ok=True)
+    meta = dict(fams=dict(FAMS), cat=CAT, thr=60, step=8, tau=max(a.taus))
+    for k, m in MODELS:
+        pickle.dump(dict(meta, model=m, fold=k), open(sd / f"name_style_f{k}.pkl", "wb"))
+    pickle.dump(dict(meta, model=mA, fold=None), open(sd / "name_style_all.pkl", "wb"))
+    (sd / "name_style_folds.json").write_text(json.dumps({sh: FOLD[well(sh)] for sh in FIELD}, ensure_ascii=False), encoding="utf-8")
+    print(f"модели сохранены: {sd}")

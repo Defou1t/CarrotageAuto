@@ -319,6 +319,45 @@ def _level_segments(tr, model, curve, top_y, n, gray=None):
         return single
 
 
+def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name, out, stem):
+    """§6.273: стиль каждой кривой (вдоль трассы, как её запишет цикл ниже) → парная модель «какой стиль какому имени» в
+    треке → перестановки трасс между слотами (меняется `mapping` на месте). Перестановки — в `<stem>_namestyle.json`."""
+    from . import name_style as NS, level_ink as LI
+    if not NS.available(spec):
+        NS._announce(f"⚠ имена по стилю линии ({spec}) НЕ включены: нет sklearn или модели — раскладка как есть")
+        return
+    gray, rgb = get_gray(), get_rgb()
+    if gray is None or rgb is None:
+        return
+    paper = LI.paper_of(gray)
+    entries = []
+    for c in model.get("curves", []):
+        name = c["name"]
+        if name not in mapping or meta_mod.mnem_root(name) == "DA":
+            continue
+        tr = mapping[name][1]
+        top_y = c["top_y"]; n = c["n_rows"]
+        new_xs = [int(round(tr[top_y + i])) if (top_y + i) in tr else NULL for i in range(n)]
+        st = None
+        if sum(1 for x in new_xs if x != NULL) >= 30:
+            ty, tx = LI.dense_rows(top_y, new_xs, NULL)
+            if len(ty):
+                st = NS.style_along(rgb, gray, paper, ty[::8], tx[::8])
+        entries.append((name, _slot_track(model, c, frame), st))
+    path = NS.resolve(spec, sheet=sheet_name)
+    if path is None:
+        return
+    sw = NS.swaps(entries, sheet_name, path, meta_mod.mnem_root)
+    for A, B, p in sw:
+        mapping[A], mapping[B] = mapping[B], mapping[A]
+    if sw:
+        try:
+            (Path(out) / f"{stem}_namestyle.json").write_text(json.dumps(
+                [{"A": A, "B": B, "p_order_ok": round(p, 4)} for A, B, p in sw], ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+
 def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False):
     """§6.266: переразложить уровни масштаба кривых с цепочкой моделью по скану (auto/level_ink.py). Чужие трассы — как в
     готовом файле: записанные нами + DA (прочие слоты рамки вычищены).
@@ -652,6 +691,21 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                 _gray["arr"] = None
         return _gray["arr"]
 
+    _rgb = {"arr": None, "loaded": False}
+
+    def _get_rgb():
+        if not _rgb["loaded"]:
+            _rgb["loaded"] = True
+            try:
+                if image:
+                    from PIL import Image as _Im
+                    _Im.MAX_IMAGE_PIXELS = None
+                    import numpy as _np
+                    _rgb["arr"] = _np.asarray(_Im.open(image).convert("RGB"))
+            except Exception:
+                _rgb["arr"] = None
+        return _rgb["arr"]
+
     # ПУТЬ К СКАНУ (тег 34878) — ПАТЧИМ ВСЕГДА, ДО цикла по кривым (19.07, отчёт Эдуарда
     # «не находит изображение»). Раньше патч стоял ВНУТРИ цикла и выполнялся только если хоть
     # одна кривая записалась: на листе с пустой выдачей в файле оставался путь из ИСХОДНОЙ рамки,
@@ -661,6 +715,15 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     if image:
         for i in find_ifd(ifds, lambda tags: 34878 in tags):
             set_tag(ifds, i, 34878, 2, str(image))
+    # ★★ 04.10 (§6.273): ИМЕНА ТРЕКА ПО СТИЛЮ ЛИНИИ (цвет, толщина, штрих) — перестановка трасс между слотами ДО записи, чтобы
+    #   уровни масштаба считались уже для нового слота. Стенд: поле +25 именных (p = 0.0048), сорт A +2.
+    _cvp0 = cv
+    if _cvp0 is None:
+        from .config import DEFAULT as _D0
+        _cvp0 = _D0.cv
+    _nsp = getattr(_cvp0, "name_style", "") or ""
+    if _nsp:
+        _name_style_pass(_nsp, model, frame, mapping, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem)
     written, wrote_ifd = [], set()
     ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):
