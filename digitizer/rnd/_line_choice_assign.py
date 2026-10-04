@@ -26,6 +26,8 @@ ap.add_argument("--grid", nargs="+", default=["free:0.2:0", "hung:0.2:0", "hung:
 ap.add_argument("--folds", type=int, default=5)
 ap.add_argument("--save-dir", default="", help="(stack) модели обоих ярусов: фолды и на всём поле, карта лист → фолд, τ/δ первой "
                 "точки сетки hung")
+ap.add_argument("--trace", default="", help="каталог `_line_choice_trace.py`: + признаки формы трассы (прямизна, размах, дрожание, "
+                "скачки, неизменный x)")
 ap.add_argument("--extra", action="store_true", help="+ признаки: width_h, used, дубль из другого источника, число дублей, "
                 "отступ начала / конца от строк слота, длина / строки слота")
 ap.add_argument("--feat", default="all", choices=["all", "nocur", "mix", "stack"],
@@ -68,10 +70,18 @@ def dups(CS):
 
 
 RECS = [pickle.load(open(f, "rb")) for f in sorted(Path(a.data).glob("*.pkl"))]
+TRF = {}
+if a.trace:
+    for f in sorted(Path(a.data).glob("*.pkl")):
+        t = pickle.load(open(Path(a.trace) / f.name, "rb"))
+        TRF[t["sheet"]] = t["feats"]
+SHAPE = ["straight", "xr_px", "mad_dx", "jumps", "flat", "agree_src", "agree_any"]
 ROWS = []
 for rec in RECS:
     sh = rec["sheet"]; CS = rec["cands"]; ns = len(rec["slots"])
     DU = dups(CS) if a.extra else None
+    if a.trace:
+        assert len(TRF[sh]) == len(CS), (sh, len(TRF[sh]), len(CS))
     for si, s in enumerate(rec["slots"]):
         cs = s["cands"]
         if not cs:
@@ -92,6 +102,8 @@ for rec in RECS:
                 nr = max(1, s["n_rows"])
                 f += [nz(st.get("width_h")), nz(st.get("used")), DU[r["k"]][1], DU[r["k"]][0],
                       (c["y0"] - s["top_y"]) / nr, (s["top_y"] + nr - 1 - c["y1"]) / nr, c["n"] / nr]
+            if a.trace:
+                f += [TRF[sh][r["k"]][x] for x in SHAPE]
             lab = None if r["lab"] is None else int(r["lab"][0])
             ROWS.append((sh, si, r["k"], f, lab, r["here"], r["elsewhere"]))
 X_ALL = np.array([r[3] for r in ROWS], float)
@@ -318,13 +330,14 @@ for g in a.grid:
         print(f"★ {g:16s} {sn:6s}: замен {len(sw):4d} (стала честной {sum(1 for x in sw if x['after'] and not x['before']):3d}, "
               f"перестала {sum(1 for x in sw if x['before'] and not x['after']):3d}, опустело {sum(1 for x in sw if x['empty']):3d}); "
               f"Δ {int(d.sum()):+4d} (листов ↑{int((d > 0).sum())}/↓{int((d < 0).sum())}, p = {p:.4f})")
-pickle.dump(dict(res=RES, all_changes=ALLCH), open(a.dump, "wb"))
+pickle.dump(dict(res=RES, all_changes=ALLCH, P=P, rows=[(r[0], r[1], r[2], r[4], r[5], r[6]) for r in ROWS], X=X_ALL), open(a.dump, "wb"))
 if a.save_dir and a.feat == "stack":
     import json
     sd = Path(a.save_dir); sd.mkdir(parents=True, exist_ok=True)
     g = next(x for x in a.grid if x.startswith("hung:"))
     _, tau, dlt = g.split(":")
-    meta = dict(kind="stack", fams=dict(FAMS), cat=CAT, nocur=NOCUR, extra=bool(a.extra), tau=float(tau), delta=float(dlt))
+    meta = dict(kind="stack", fams=dict(FAMS), cat=CAT, nocur=NOCUR, extra=bool(a.extra), shape=bool(a.trace), tau=float(tau),
+                delta=float(dlt))
     for k, (ma, mn, m2) in MODELS.items():
         nm = "line_choice_all.pkl" if k is None else f"line_choice_f{k}.pkl"
         pickle.dump(dict(meta, m_all=ma, m_nocur=mn, m2=m2, fold=k), open(sd / nm, "wb"))
