@@ -27,6 +27,7 @@ ap.add_argument("--taus", nargs="+", type=float, default=[0.8, 0.9])
 ap.add_argument("--folds", type=int, default=5)
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/name_style_swaps.pkl")
 ap.add_argument("--rough", action="store_true", help="§6.276: + извилистость обеих кривых (по трассе)")
+ap.add_argument("--rough-robust", action="store_true", help="§6.277: извилистость устойчивая (окна без скачков, медиана)")
 ap.add_argument("--cache", default=r"F:/nds/output/taskS/level_bench.pkl")
 ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле, словарь семейств и карту лист → фолд")
 a = ap.parse_args()
@@ -82,7 +83,19 @@ def hue(t):
 
 
 def rough(x):
-    """§6.276: извилистость — средний отход от медианы по 41 строке в долях размаха (5–95%) кривой"""
+    """§6.276: извилистость — средний отход от медианы по 41 строке в долях размаха (5–95%) кривой;
+    §6.277 (`--rough-robust`): медиана по окнам 400 строк (шаг 200), окна со скачком > 40 px мимо, < 3 окон — нет признака"""
+    if a.rough_robust:
+        if x is None or len(x) < 400:
+            return np.nan
+        from scipy.ndimage import median_filter
+        x = x.astype(float)
+        s_ = median_filter(x, size=41, mode="nearest")
+        dev = np.abs(x - s_); jump = np.abs(np.diff(x, prepend=x[0])) > 40
+        vals = [np.mean(dev[i:i + 400]) for i in range(0, len(x) - 400, 200) if not jump[i:i + 400].any()]
+        if len(vals) < 3:
+            return np.nan
+        return float(np.median(vals) / max(5.0, np.percentile(x, 95) - np.percentile(x, 5)))
     if x is None or len(x) < 200:
         return np.nan
     from scipy.ndimage import median_filter
@@ -95,7 +108,7 @@ def feat(tx, ty, A, B, sh):
     """признаки упорядоченной пары: кривая со стилем tx названа A, со стилем ty — B"""
     if a.rough:
         rx, ry = tx.get("rough", np.nan), ty.get("rough", np.nan)
-        extra = [rx, ry, (np.log(rx / ry) if (rx > 0 and ry > 0) else np.nan)]
+        extra = [rx, ry, (np.log(rx / ry) if (rx > 1e-6 and ry > 1e-6) else np.nan)]
     else:
         extra = []
     return extra + [tx["width"], ty["width"], tx["width"] - ty["width"], tx["c1"], tx["c2"], ty["c1"], ty["c2"],
