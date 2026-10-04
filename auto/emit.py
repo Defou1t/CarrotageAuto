@@ -374,12 +374,19 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
         return
     paper = LI.paper_of(gray)
     raw = [("prod", L, tr) for L, tr in list(traces or [])] + [("dec", L, tr) for L, tr in list(getattr(traces, "alt", None) or [])]
-    cands = []
-    for src, L, tr in raw:
+    # §6.287: пути другого декода (`traces.extra`) — только кандидатами выбора трассы; дубли путей основного пула отброшены
+    extra = list(getattr(traces, "extra", None) or [])
+    cands, keys = [], []
+    for i_, (src, L, tr) in enumerate(raw + [("dec", L, tr) for L, tr in extra]):
         d = LC.dense_tr(tr)
         if len(d) < 50:
             continue
         ys = np.array(sorted(d)); xs = np.array([d[y] for y in ys])
+        key = (int(ys[0]), int(ys[-1]), np.percentile(xs, [10, 50, 90]))
+        if i_ >= len(raw) and any(abs(key[0] - k0) <= 5 and abs(key[1] - k1) <= 5 and np.all(np.abs(key[2] - kq) <= 2)
+                                  for k0, k1, kq in keys):
+            continue
+        keys.append(key)
         cands.append(dict(src=src, L=L, tr=tr, dense=d, style=NS.style_along(rgb, gray, paper, ys[::8], xs[::8]),
                           rough=LC.rough_robust(xs)))
     if not cands:
