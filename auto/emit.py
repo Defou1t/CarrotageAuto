@@ -319,7 +319,7 @@ def _level_segments(tr, model, curve, top_y, n, gray=None):
         return single
 
 
-def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name, out, stem):
+def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name, out, stem, tag="namestyle"):
     """§6.273: стиль каждой кривой (вдоль трассы, как её запишет цикл ниже) → парная модель «какой стиль какому имени» в
     треке → перестановки трасс между слотами (меняется `mapping` на месте). Перестановки — в `<stem>_namestyle.json`."""
     from . import name_style as NS, level_ink as LI
@@ -352,7 +352,7 @@ def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name,
         mapping[A], mapping[B] = mapping[B], mapping[A]
     if sw:
         try:
-            (Path(out) / f"{stem}_namestyle.json").write_text(json.dumps(
+            (Path(out) / f"{stem}_{tag}.json").write_text(json.dumps(
                 [{"A": A, "B": B, "p_order_ok": round(p, 4)} for A, B, p in sw], ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
@@ -786,6 +786,9 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     _lcp = getattr(_cvp0, "line_choice", "") or ""
     if _lcp:
         _line_choice_pass(_lcp, model, mapping, traces, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem)
+    # ★ 04.10 (§6.286): имена по стилю ЕЩЁ РАЗ, уже по трассам после выбора (перестановки — в `<лист>_namestyle2.json`)
+    if _nsp and _lcp and getattr(_cvp0, "name_style_after", False):
+        _name_style_pass(_nsp, model, frame, mapping, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem, tag="namestyle2")
     written, wrote_ifd = [], set()
     ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):

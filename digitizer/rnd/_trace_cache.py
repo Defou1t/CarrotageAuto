@@ -190,7 +190,8 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "levelink": ("level_ink", str),          # ★ 03.10 (§6.266): уровни масштаба по скану; "oof:<каталог>" — замер
                "levelshift": ("level_shift", lambda v: bool(int(v))),   # ★ 03.10 (§6.267): сдвиговые цепочки по участкам
                "namestyle": ("name_style", str),        # ★ 04.10 (§6.273): имена по стилю линии; "oof:<каталог>" — замер
-               "linechoice": ("line_choice", str)}      # ★ 04.10 (§6.280): выбор трассы для слота; "oof:<каталог>" — замер
+               "linechoice": ("line_choice", str),      # ★ 04.10 (§6.280): выбор трассы для слота; "oof:<каталог>" — замер
+               "nsafter": ("name_style_after", lambda v: bool(int(v)))}   # ★ 04.10 (§6.286): имена по стилю ещё раз после выбора
 
 
 def cmd_replay():
@@ -251,6 +252,7 @@ def cmd_replay():
             cfg.cv.level_shift = False            # ★ 03.10: §6.267 — только явно `levelshift=1`
             cfg.cv.name_style = ""                # ★ 04.10: §6.273 — только явно `namestyle=`
             cfg.cv.line_choice = ""               # ★ 04.10: §6.280 — только явно `linechoice=`
+            cfg.cv.name_style_after = False       # ★ 04.10: §6.286 — только явно `nsafter=1`
             for k, v in kw.items():
                 attr, conv = REPLAY_KEYS[k]
                 setattr(cfg.cv, attr, conv(v))
