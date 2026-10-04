@@ -358,6 +358,60 @@ def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name,
             pass
 
 
+def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_name, out, stem):
+    """§6.280: модель выбора трассы для слота (auto/line_choice.py) — замена трассы слота на свободного кандидата ведения
+    (меняется `mapping` на месте). Замены — в `<stem>_linechoice.json`."""
+    from . import line_choice as LC, name_style as NS, level_ink as LI
+    if not LC.available(spec):
+        LC._announce(f"⚠ выбор трассы для слота ({spec}) НЕ включён: нет sklearn или модели — раскладка как есть")
+        return
+    try:
+        import decode_levels as DL
+    except Exception:
+        return
+    gray, rgb = get_gray(), get_rgb()
+    if gray is None or rgb is None:
+        return
+    paper = LI.paper_of(gray)
+    raw = [("prod", L, tr) for L, tr in list(traces or [])] + [("dec", L, tr) for L, tr in list(getattr(traces, "alt", None) or [])]
+    cands = []
+    for src, L, tr in raw:
+        d = LC.dense_tr(tr)
+        if len(d) < 50:
+            continue
+        ys = np.array(sorted(d)); xs = np.array([d[y] for y in ys])
+        cands.append(dict(src=src, L=L, tr=tr, dense=d, style=NS.style_along(rgb, gray, paper, ys[::8], xs[::8]),
+                          rough=LC.rough_robust(xs)))
+    if not cands:
+        return
+    slots, written = [], []
+    for c in model.get("curves", []):
+        name = c["name"]
+        if meta_mod.mnem_root(name) == "DA":
+            continue
+        if name in mapping:
+            tr = mapping[name][1]; top_y = c["top_y"]
+            w = {top_y + i: int(round(tr[top_y + i])) for i in range(c["n_rows"]) if (top_y + i) in tr}
+            written.append((name, LC.dense_tr(w)))
+        fam = DL.build_family(model, c)
+        if fam:
+            xl = min(min(s["x_left"], s["x_right"]) for s in fam); xr = max(max(s["x_left"], s["x_right"]) for s in fam)
+            slots.append((name, c["top_y"], c["n_rows"], (xl, xr)))
+    path = LC.resolve(spec, sheet=sheet_name)
+    if path is None:
+        return
+    rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root)
+    for name, (k, p) in rep_.items():
+        mapping[name] = (cands[k]["L"], cands[k]["tr"])
+    if rep_:
+        try:
+            (Path(out) / f"{stem}_linechoice.json").write_text(json.dumps(
+                [{"slot": n, "src": cands[k]["src"], "p": round(p, 4)} for n, (k, p) in rep_.items()], ensure_ascii=False),
+                encoding="utf-8")
+        except Exception:
+            pass
+
+
 def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False):
     """§6.266: переразложить уровни масштаба кривых с цепочкой моделью по скану (auto/level_ink.py). Чужие трассы — как в
     готовом файле: записанные нами + DA (прочие слоты рамки вычищены).
@@ -724,6 +778,11 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     _nsp = getattr(_cvp0, "name_style", "") or ""
     if _nsp:
         _name_style_pass(_nsp, model, frame, mapping, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem)
+    # ★★ 04.10 (§6.280): ВЫБОР ТРАССЫ ДЛЯ СЛОТА среди кандидатов ведения (прод-путь + декодер) — после перестановки имён, как
+    #   на стенде. Стенд: поле +24 (25 / 1), сорт A +8.
+    _lcp = getattr(_cvp0, "line_choice", "") or ""
+    if _lcp:
+        _line_choice_pass(_lcp, model, mapping, traces, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem)
     written, wrote_ifd = [], set()
     ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):
