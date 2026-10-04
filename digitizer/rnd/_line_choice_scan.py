@@ -57,6 +57,23 @@ def one(job):
     cands = [("prod", i, dense_tr(un(t))) for i, (L, t) in enumerate(c["traces"] or [])]
     cands += [("dec", i, dense_tr(un(t))) for i, (L, t) in enumerate(c["alt"] or [])]
     cands = [x for x in cands if len(x[2]) >= 50]
+    if P.get("extra"):                       # §6.287: пути другого декода — как `emit._line_choice_pass` (дубли основного пула прочь)
+        xp = Path(P["extra"]) / Path(tc_path).name
+        if xp.exists():
+            keys = []
+            for _, _, d in cands:
+                ys_ = np.array(sorted(d)); xs_ = np.array([d[y] for y in ys_])
+                keys.append((int(ys_[0]), int(ys_[-1]), np.percentile(xs_, [10, 50, 90])))
+            for i, (L, t) in enumerate(pickle.load(open(xp, "rb")).get("alt") or []):
+                d = dense_tr(un(t))
+                if len(d) < 50:
+                    continue
+                ys_ = np.array(sorted(d)); xs_ = np.array([d[y] for y in ys_])
+                key = (int(ys_[0]), int(ys_[-1]), np.percentile(xs_, [10, 50, 90]))
+                if any(abs(key[0] - k0) <= 5 and abs(key[1] - k1) <= 5 and np.all(np.abs(key[2] - kq) <= 2) for k0, k1, kq in keys):
+                    continue
+                keys.append(key)
+                cands.append(("dec", 1000 + i, d))
     mt = extract(src); mw = extract(got)
     fc = {cc["name"]: cc for cc in mt["curves"] if M.mnem_root(cc["name"]) != "DA"}
     G = {n: dense(cc) for n, cc in fc.items() if sum(1 for x in cc["xs"] if x != NULL) >= 50}
@@ -121,6 +138,7 @@ def main():
     ap.add_argument("--dir", default=r"F:/nds/output/taskS/rp_lvl/NS")
     ap.add_argument("--out", default=r"F:/nds/output/taskS/line_choice")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--extra-cache", default="", help="§6.287: кэш другого декода — его пути добавляются кандидатами (как в emit)")
     a = ap.parse_args()
     import multiprocessing as mp
     TS = Path(a.ts); Path(a.out).mkdir(parents=True, exist_ok=True)
@@ -137,7 +155,7 @@ def main():
         if not (tc.exists() and got):
             continue
         cpk = pickle.load(open(tc, "rb"))
-        jobs.append((sh, str(tc), str(got), str(q), cpk["image"], dict(out=a.out)))
+        jobs.append((sh, str(tc), str(got), str(q), cpk["image"], dict(out=a.out, extra=a.extra_cache)))
     print(f"листов {len(jobs)}")
     t0 = time.time(); done = 0
     with mp.Pool(a.workers) as pool:
