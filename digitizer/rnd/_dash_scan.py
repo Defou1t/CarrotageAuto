@@ -102,7 +102,7 @@ def dash_rows(gray, paper, cv, P):
                     if i_ + 1 < len(U) and U[i_ + 1, 0] - U[i_, 1] <= P["align"]:
                         hi_ = max(hi_, U[i_ + 1, 0])
                     flag |= (rows >= lo_) & (rows <= hi_)
-    return rows, flag
+    return rows, flag, strokes
 
 
 def scan_sheet(job):
@@ -115,13 +115,41 @@ def scan_sheet(job):
     for r in range(0, H, 2048):
         paper[r:r + 2048] = np.percentile(gray[r:r + 2048, ::4], 90, axis=1)
     out = []
+    rgb = np.asarray(Image.open(img).convert("RGB")) if P.get("color") else None
+    W = gray.shape[1]
+    def chroma_at(ys, xs):
+        px = rgb[ys, xs].astype(np.int32)
+        return np.stack([px[:, 0] - px[:, 2], px[:, 1] - (px[:, 0] + px[:, 2]) // 2], 1)
     for cv in curves:
         r = dash_rows(gray, paper, cv, P)
         if r is None:
             continue
-        rows, near = r
+        rows, near, strokes = r
         lt = seg_levels(cv["lt"], rows)
-        out.append(dict(ci=cv["ci"], set=cv["set"], root=cv["root"], rows=rows.astype(np.int32), near=near, lt=lt.astype(np.int8)))
+        rec = dict(ci=cv["ci"], set=cv["set"], root=cv["root"], rows=rows.astype(np.int32), near=near, lt=lt.astype(np.int8))
+        if rgb is not None:
+            # цвет линии эксперта: самый тёмный пиксель в ±2 px от вершины, каждая 16-я строка
+            gy, gx = cv["gy"][::16].astype(np.int64), np.round(cv["gx"][::16]).astype(np.int64)
+            ok = (gx >= 2) & (gx < W - 2) & (gy < gray.shape[0])
+            gy, gx = gy[ok], gx[ok]
+            win = np.stack([gray[gy, np.clip(gx + d, 0, W - 1)] for d in range(-2, 3)], 1)
+            bx = gx + win.argmin(1) - 2
+            dark = (paper[gy] - gray[gy, bx].astype(np.int16)) > P["thr"]
+            cc = chroma_at(gy[dark], bx[dark]) if dark.any() else np.zeros((0, 2), np.int32)
+            rec["curve_chroma"] = np.median(cc, 0) if len(cc) >= 20 else None
+            # цвет каждого штриха: медиана по пикселям рана
+            st_col = []
+            for c_, a_, b_ in strokes:
+                ys_ = np.arange(a_, b_, 3)
+                st_col.append((c_, a_, b_, np.median(chroma_at(ys_, np.full(len(ys_), c_)), 0)))
+            # «свой пунктир»: строки рядом со штрихом того же цвета, что линия
+            own = np.zeros(len(rows), bool)
+            if rec["curve_chroma"] is not None:
+                for c_, a_, b_, ch_ in st_col:
+                    if np.abs(ch_ - rec["curve_chroma"]).max() <= P["ctol"]:
+                        own |= (rows >= a_ - P["win"]) & (rows <= b_ + P["win"])
+            rec["own"] = own & near
+        out.append(rec)
     return sheet, out
 
 
@@ -141,6 +169,9 @@ def main():
     ap.add_argument("--align", type=int, default=1500)
     ap.add_argument("--n-al", type=int, default=3)
     ap.add_argument("--dump", default=r"F:/nds/output/taskS/dash_scan.pkl")
+    ap.add_argument("--color", action="store_true", help="цвет линии эксперта и штрихов: «свой пунктир» того же цвета")
+    ap.add_argument("--ctol", type=int, default=25)
+    ap.add_argument("--colored", type=int, default=30, help="линия «цветная», если max|цвет| ≥ этого")
     a = ap.parse_args()
     import multiprocessing as mp
     CUR = pickle.load(open(a.cache, "rb"))
@@ -152,9 +183,9 @@ def main():
     by = defaultdict(list)
     for i, cv in enumerate(CUR):
         if is_mult(cv["chain"]) and cv["lt"] and len(cv["gy"]) > 200:
-            by[cv["sheet"]].append(dict(ci=i, set=cv["set"], root=cv["root"], chain=cv["chain"], gy=cv["gy"], lt=cv["lt"]))
+            by[cv["sheet"]].append(dict(ci=i, set=cv["set"], root=cv["root"], chain=cv["chain"], gy=cv["gy"], gx=cv["gx"], lt=cv["lt"]))
     P = dict(z0=a.z0, z1=a.z1, thr=a.thr, win=a.win, cov_lo=a.cov_lo, cov_hi=a.cov_hi, run=a.run, run_max=a.run_max,
-             align=a.align, n_al=a.n_al)
+             align=a.align, n_al=a.n_al, color=a.color, ctol=a.ctol)
     jobs = [(sh, str(IMGS[SRC[sh].stem]), cs, P) for sh, cs in by.items() if sh in SRC and SRC[sh].stem in IMGS]
     print(f"листов {len(jobs)}, кривых {sum(len(j[2]) for j in jobs)}")
     R = []
@@ -183,6 +214,22 @@ def main():
     print(f"★ начало кривой (первые 400 строк): начало 5×+ — пунктир у {C[('начало', True, True)]} из "
           f"{C[('начало', True, True)] + C[('начало', True, False)]}; начало 1× — пунктир у {C[('начало', False, True)]} из "
           f"{C[('начало', False, True)] + C[('начало', False, False)]}")
+    if a.color:
+        K = Counter()
+        for r in R:
+            cc = r.get("curve_chroma")
+            if cc is None:
+                continue
+            kind = "цветные" if np.abs(cc).max() >= a.colored else "чёрные"
+            hi = r["lt"] >= 1
+            K[(kind, "1×")] += int((~hi).sum()); K[(kind, "5×")] += int(hi.sum())
+            K[(kind, "свой при 1×")] += int((r["own"] & ~hi).sum()); K[(kind, "свой при 5×")] += int((r["own"] & hi).sum())
+            K[(kind, "любой при 1×")] += int((r["near"] & ~hi).sum()); K[(kind, "любой при 5×")] += int((r["near"] & hi).sum())
+            K[(kind, "кривых")] += 1
+        for kind in ("цветные", "чёрные"):
+            print(f"★ {kind} линии ({K[(kind, 'кривых')]} кривых): пунктир ЛЮБОЙ — при 1× {K[(kind, 'любой при 1×')] / max(1, K[(kind, '1×')]):.1%}, "
+                  f"при 5× {K[(kind, 'любой при 5×')] / max(1, K[(kind, '5×')]):.1%}; СВОЕГО цвета — при 1× "
+                  f"{K[(kind, 'свой при 1×')] / max(1, K[(kind, '1×')]):.1%}, при 5× {K[(kind, 'свой при 5×')] / max(1, K[(kind, '5×')]):.1%}")
     for f, c in sorted(fam.items(), key=lambda kv: -(kv[1]["1×"] + kv[1]["5×"]))[:10]:
         print(f"   {f:6s}: пунктир при 1× {c['п1'] / max(1, c['1×']):.1%}, при 5×+ {c['п5'] / max(1, c['5×']):.1%} "
               f"(строк {c['1×'] + c['5×']})")
