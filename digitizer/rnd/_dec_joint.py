@@ -29,8 +29,9 @@ ap.add_argument("--ts", default=r"F:/nds/output/taskS")
 ap.add_argument("--cache", default=r"F:/nds/output/taskS/tcache")
 ap.add_argument("--every", type=int, default=9)
 ap.add_argument("--offset", type=int, default=0)
-ap.add_argument("--wskip", type=float, nargs="+", default=[0.5])
+ap.add_argument("--wskip", type=float, nargs="*", default=[0.5])     # ★ 04.10: «--wskip» без значений — без удержания
 ap.add_argument("--gmax", type=int, default=30)
+ap.add_argument("--metric", default="row", choices=["row", "plane2"], help="★ 04.10: plane2 — мера приёмки (на плоскости в обе стороны)")
 ap.add_argument("--rounds", type=int, default=0, help="кругов перекладки путей (0 — без варианта)")
 ap.add_argument("--v0rounds", type=int, nargs="*", default=[], help="★ 02.10: прод-Витерби + перекладка N кругов (без удержания) — B5 в дешёвом виде")
 ap.add_argument("--hjump", type=float, default=0.15, help="цена прыжка В ВАРИАНТАХ С УДЕРЖАНИЕМ (V0 — всегда прод 0.15)")
@@ -62,9 +63,36 @@ def un(t):
     return dict(zip(t[0].tolist(), t[1].tolist()))
 
 
+_PT = {}
+
+
+def _ptree(tr):
+    """KD-дерево ломаной трассы (уплотнение отрезков ≤ 30 строк, |dx| ≤ 3000) — как `_name_cost_prod._plane`; кэш по id"""
+    k = id(tr)
+    if k not in _PT:
+        from scipy.spatial import cKDTree
+        ys = np.array(sorted(tr), float); xs = np.array([tr[int(y)] for y in ys], float)
+        P = [np.stack([ys, xs], 1)]
+        if len(ys) > 1:
+            dy = np.diff(ys); dx = np.diff(xs)
+            for i in np.flatnonzero((dy <= 30) & (np.abs(dx) > 1) & (np.abs(dx) <= 3000)):
+                n = int(np.ceil(abs(dx[i]))); t = np.arange(1, n) / n
+                P.append(np.stack([ys[i] + dy[i] * t, xs[i] + dx[i] * t], 1))
+        _PT[k] = (cKDTree(np.concatenate(P)), tr)
+    return _PT[k][0]
+
+
 def hon(tr, gt, bridge=30):
     com = [y for y in gt if y in tr]
-    if len(com) < 30 or np.median([abs(tr[y] - gt[y]) for y in com]) > 3.0:
+    if len(com) < 30:
+        return False
+    if a.metric == "plane2":
+        # ★ 04.10: мера приёмки — на плоскости в обе стороны (медианы расстояний эталон → трасса и трасса → эталон ≤ 3 px)
+        d1, _ = _ptree(tr).query(np.array([[y, gt[y]] for y in com], float))
+        d2, _ = _ptree(gt).query(np.array([[y, tr[y]] for y in com], float))
+        if max(float(np.median(d1)), float(np.median(d2))) > 3.0:
+            return False
+    elif np.median([abs(tr[y] - gt[y]) for y in com]) > 3.0:
         return False
     rs = np.array(sorted(tr)); ok = 0
     for y in gt:
@@ -407,6 +435,7 @@ if a.parity_cache:
     files = [Path(a.cache) / f.name for f in sorted(Path(a.parity_cache).glob("*.pkl"))]
 T0 = time.time()
 for fi, f in enumerate(files, 1):
+    _PT.clear()                                  # ★ 04.10: деревья меры plane2 — в пределах листа
     v = pickle.load(open(f, "rb"))
     stem = Path(v["frame_nlgx"]).stem
     q = SRC.get(stem)
