@@ -271,6 +271,8 @@ def cmd_replay():
                 traces = prod
             else:
                 traces = T._WithAlt(prod); traces.alt = alt; traces.alt_gated = gated
+                if c.get("extra") is not None and not a.extra_cache:     # §6.287: кэш с путями второго порога
+                    traces.extra = [(L, unpack(t)) for L, t in c["extra"]]
                 if a.extra_cache:                    # §6.287: пути другого декода — только кандидатами выбора трассы
                     _xp = Path(a.extra_cache) / src.name
                     if _xp.exists():
@@ -405,6 +407,8 @@ def cmd_redec():
         new = dict(c)
         new["alt"] = None if alt is None else [(L, pack(tr)) for L, tr in alt]
         new["alt_conf"] = getattr(alt, "conf", None) if alt is not None else None
+        _ex = getattr(alt, "extra", None) if alt is not None else None      # §6.287: пути второго порога пиков
+        new["extra"] = None if _ex is None else [(L, pack(tr)) for L, tr in _ex]
         new["alt_gated"] = bool(gated)
         new["trace_knobs"] = knobs
         tmp = dst.with_suffix(".tmp"); pickle.dump(new, open(tmp, "wb"), protocol=4); tmp.replace(dst)

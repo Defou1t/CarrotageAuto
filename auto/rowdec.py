@@ -224,8 +224,10 @@ def ink_color(rgb, p, tr, step=8, halfw=3, min_rows=8):
     return _COLS[j - 1], vote[j] / n
 
 
-def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.0, conf_out=None):
-    """→ list[{row: x}] длиной k: траектории кривых трека в координатах ЛИСТА."""
+def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.0, conf_out=None, extra_thr=None,
+                extra_out=None):
+    """→ list[{row: x}] длиной k: траектории кривых трека в координатах ЛИСТА.
+    §6.287: `extra_thr` — второй порог пиков по той же карте (сеть не пересчитывается); его k траекторий — в `extra_out`."""
     import torch
     net, dev = _load(ckpt)
     # ★ 30.09 (§6.252): АНСАМБЛЬ КАРТ. `cv.rowdec_ens` — доп. каталоги моделей (тот же чекпойнт фолда в каждом, через
@@ -301,82 +303,89 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     #   с тёмной при 0.6 выпадает из кандидатов строки целиком. Критерий приёмки задан в §6.207.
     _v = getattr(p, "rowdec_peak_thr", None)
     pthr = 0.6 if _v is None else float(_v)      # ⚠ не `or 0.6`: 0.0 («все пики») превращался бы в 0.6
-    peaks = []
-    for i in range(prob.shape[0]):
-        row = prob[i]
-        thr = pthr * float(row.max())
-        idx = np.where((row >= thr) & (row >= np.roll(row, 1)) & (row >= np.roll(row, -1)))[0]
-        if len(idx) > 8 * k:
-            idx = np.sort(idx[np.argsort(row[idx])[-8 * k:]])
-        peaks.append(idx)
-
-    # прототипы личности; ⚠ при k ≤ 2 эмбеддинг ВЫКЛЮЧЕН: кластер вырожден и работает шумом
-    # (§6.140: K=1 69.7 → 72.7, K=2 54.3 → 56.5 после выключения).
-    use_emb = k >= emb_min_k
-    mu = None
-    # ★ §6.246: старт прототипов личности (`cv.rowdec_emb_init`: "rand" = прежний случайный, прод бит-в-бит; "x" — пики
-    #   опорной строки, где их ровно k, ближайшей к середине окна, по порядку x) и вес эмбеддинга (`cv.rowdec_emb_w`)
     wemb = float(getattr(p, "rowdec_emb_w", wemb) if getattr(p, "rowdec_emb_w", None) is not None else wemb)
-    if use_emb:
-        pts = [(i, x) for i in range(0, prob.shape[0], 7) for x in peaks[i]]
-        if len(pts) >= k * 8:
-            M = np.stack([embs[:, i, x] for i, x in pts])
-            if (getattr(p, "rowdec_emb_init", "rand") or "rand") == "x":
-                cand = [i for i in range(prob.shape[0]) if len(peaks[i]) == k]
-                if cand:
-                    i0 = min(cand, key=lambda i: abs(i - prob.shape[0] // 2))
-                    mu = np.stack([embs[:, i0, x] for x in sorted(peaks[i0])]).astype(M.dtype)
-            if mu is None:
-                rng = np.random.default_rng(0)
-                mu = M[rng.choice(len(M), k, replace=False)]
-            for _ in range(12):
-                lab = ((M[:, None, :] - mu[None]) ** 2).sum(-1).argmin(1)
-                for j in range(k):
-                    if (lab == j).any():
-                        mu[j] = M[lab == j].mean(0)
-        else:
-            use_emb = False
 
-    out = []
-    taken = [set() for _ in range(prob.shape[0])]
-    # ★ §6.237 УДЕРЖАНИЕ (`cv.rowdec_hold` — штраф за строку; 0 = выкл = прежний путь бит-в-бит). Путь обязан брать пик в
-    #   каждой строке, где пики есть; на пересечении, занятом прежним путём, своей кривой в строке нет, и путь прыгал на
-    #   чужую. С ручкой путь может «удержаться» — не брать пик, сохранив x, — но ТОЛЬКО если доступных пиков в 3·dy + 3 px
-    #   от него нет (слабый живой пик своей кривой обязан быть взят), не дольше `rowdec_hold_gmax` строк подряд. Строки
-    #   удержания в трассу не пишутся и не занимают пиков.
-    hold = float(getattr(p, "rowdec_hold", 0.0) or 0.0)
-    gmax = int(getattr(p, "rowdec_hold_gmax", 29) or 29)
-    for j in range(k):
-        rows, cands, locs = [], [], []
+    def _paths(pthr):
+        peaks = []
         for i in range(prob.shape[0]):
-            idx = np.array([x for x in peaks[i]
-                            if not any(abs(x - t) <= 3 for t in taken[i])], int)
-            if not len(idx):
-                continue
-            loc = -np.log(np.clip(prob[i, idx], 1e-6, 1.0))
-            if use_emb and mu is not None:
-                E = np.stack([embs[:, i, x] for x in idx])
-                loc = loc + wemb * np.sqrt(((E - mu[j]) ** 2).sum(-1))
-            rows.append(i); cands.append(idx.astype(float)); locs.append(loc)
-        if len(rows) < 30:
-            out.append({}); continue
-        if hold > 0:
-            out.append(_viterbi_hold(rows, cands, locs, taken, x0, y0, k, wjump, hold, gmax)); continue
-        dp = [locs[0]]; bp = [np.full(len(cands[0]), -1, int)]
-        for t in range(1, len(rows)):
-            dy = max(1, rows[t] - rows[t - 1])
-            jump = np.abs(cands[t][:, None] - cands[t - 1][None, :]) / dy
-            tot = dp[t - 1][None, :] + wjump * jump
-            arg = tot.argmin(1)
-            dp.append(locs[t] + tot[np.arange(len(cands[t])), arg]); bp.append(arg)
-        tr, s = {}, int(np.argmin(dp[-1]))
-        for t in range(len(rows) - 1, -1, -1):
-            x = int(cands[t][s])
-            tr[rows[t] + y0] = float(x + x0); taken[rows[t]].add(x)
-            s = int(bp[t][s])
-            if s < 0:
-                break
-        out.append(tr)
+            row = prob[i]
+            thr = pthr * float(row.max())
+            idx = np.where((row >= thr) & (row >= np.roll(row, 1)) & (row >= np.roll(row, -1)))[0]
+            if len(idx) > 8 * k:
+                idx = np.sort(idx[np.argsort(row[idx])[-8 * k:]])
+            peaks.append(idx)
+
+        # прототипы личности; ⚠ при k ≤ 2 эмбеддинг ВЫКЛЮЧЕН: кластер вырожден и работает шумом
+        # (§6.140: K=1 69.7 → 72.7, K=2 54.3 → 56.5 после выключения).
+        use_emb = k >= emb_min_k
+        mu = None
+        # ★ §6.246: старт прототипов личности (`cv.rowdec_emb_init`: "rand" = прежний случайный, прод бит-в-бит; "x" — пики
+        #   опорной строки, где их ровно k, ближайшей к середине окна, по порядку x) и вес эмбеддинга (`cv.rowdec_emb_w`)
+        if use_emb:
+            pts = [(i, x) for i in range(0, prob.shape[0], 7) for x in peaks[i]]
+            if len(pts) >= k * 8:
+                M = np.stack([embs[:, i, x] for i, x in pts])
+                if (getattr(p, "rowdec_emb_init", "rand") or "rand") == "x":
+                    cand = [i for i in range(prob.shape[0]) if len(peaks[i]) == k]
+                    if cand:
+                        i0 = min(cand, key=lambda i: abs(i - prob.shape[0] // 2))
+                        mu = np.stack([embs[:, i0, x] for x in sorted(peaks[i0])]).astype(M.dtype)
+                if mu is None:
+                    rng = np.random.default_rng(0)
+                    mu = M[rng.choice(len(M), k, replace=False)]
+                for _ in range(12):
+                    lab = ((M[:, None, :] - mu[None]) ** 2).sum(-1).argmin(1)
+                    for j in range(k):
+                        if (lab == j).any():
+                            mu[j] = M[lab == j].mean(0)
+            else:
+                use_emb = False
+
+        out = []
+        taken = [set() for _ in range(prob.shape[0])]
+        # ★ §6.237 УДЕРЖАНИЕ (`cv.rowdec_hold` — штраф за строку; 0 = выкл = прежний путь бит-в-бит). Путь обязан брать пик в
+        #   каждой строке, где пики есть; на пересечении, занятом прежним путём, своей кривой в строке нет, и путь прыгал на
+        #   чужую. С ручкой путь может «удержаться» — не брать пик, сохранив x, — но ТОЛЬКО если доступных пиков в 3·dy + 3 px
+        #   от него нет (слабый живой пик своей кривой обязан быть взят), не дольше `rowdec_hold_gmax` строк подряд. Строки
+        #   удержания в трассу не пишутся и не занимают пиков.
+        hold = float(getattr(p, "rowdec_hold", 0.0) or 0.0)
+        gmax = int(getattr(p, "rowdec_hold_gmax", 29) or 29)
+        for j in range(k):
+            rows, cands, locs = [], [], []
+            for i in range(prob.shape[0]):
+                idx = np.array([x for x in peaks[i]
+                                if not any(abs(x - t) <= 3 for t in taken[i])], int)
+                if not len(idx):
+                    continue
+                loc = -np.log(np.clip(prob[i, idx], 1e-6, 1.0))
+                if use_emb and mu is not None:
+                    E = np.stack([embs[:, i, x] for x in idx])
+                    loc = loc + wemb * np.sqrt(((E - mu[j]) ** 2).sum(-1))
+                rows.append(i); cands.append(idx.astype(float)); locs.append(loc)
+            if len(rows) < 30:
+                out.append({}); continue
+            if hold > 0:
+                out.append(_viterbi_hold(rows, cands, locs, taken, x0, y0, k, wjump, hold, gmax)); continue
+            dp = [locs[0]]; bp = [np.full(len(cands[0]), -1, int)]
+            for t in range(1, len(rows)):
+                dy = max(1, rows[t] - rows[t - 1])
+                jump = np.abs(cands[t][:, None] - cands[t - 1][None, :]) / dy
+                tot = dp[t - 1][None, :] + wjump * jump
+                arg = tot.argmin(1)
+                dp.append(locs[t] + tot[np.arange(len(cands[t])), arg]); bp.append(arg)
+            tr, s = {}, int(np.argmin(dp[-1]))
+            for t in range(len(rows) - 1, -1, -1):
+                x = int(cands[t][s])
+                tr[rows[t] + y0] = float(x + x0); taken[rows[t]].add(x)
+                s = int(bp[t][s])
+                if s < 0:
+                    break
+            out.append(tr)
+        return out
+
+    out = _paths(pthr)
+    if extra_thr is not None and extra_out is not None:      # §6.287: второй порог по той же карте
+        extra_out.append(_paths(float(extra_thr)))
     # ★ §6.240: уверенность траектории — медиана вероятности карты вдоль неё (для вето в `emit`); ключ — id словаря.
     #   ⛔ 27.09 (разбор): не модульный словарь — UI многопоточный, и параллельный прогон стирал чужие записи (вето молча
     #   выключалось). Словарь даёт вызывающий (`trace_auto`), живёт один вызов.
@@ -497,21 +506,7 @@ def trace_auto(rgb, sheet, p):
         if n > 0 and ti not in by_track and 0 <= ti < len(sheet.frame.tracks):
             by_track[ti] = []
 
-    out = []
-    conf = {}                       # §6.240: id(трасса) → медиана p, только для этого вызова
-    for ti, lines in by_track.items():
-        track = sheet.frame.tracks[ti]
-        if lines:
-            y0 = min(L.y0 for L in lines); y1 = max(L.y1 for L in lines)
-        else:
-            y0, y1 = int(sheet.frame.top_y), int(sheet.frame.bottom_y)
-        K = max(len(lines), int(kslots.get(ti, 0)))
-        if K <= 0:
-            continue
-        # ★ §6.239: K + `rowdec_k_plus` путей (0 = прод бит-в-бит). §6.237: из невзятых удержанием 71 из 196 ведутся по
-        #   ДРУГОЙ нарисованной линии (> 50 px) — лишняя линия трека, которой нет в эталоне, забирает путь.
-        K += int(getattr(p, "rowdec_k_plus", 0) or 0)
-        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf)
+    def _pair(trs, lines, ti):
         # ── ПРИВЯЗКА ТРАЕКТОРИИ К ЛИНИИ: 1:1 ПО СТОИМОСТИ, А НЕ СОРТИРОВКОЙ ────────────────
         # ⚠⚠ ЗАЧЕМ. Подпись решает не декодер, а то, КАКОЙ ЛИНИИ досталась траектория: линия несёт
         # цвет, класс и полосу, по которым `emit._map_lines_to_slots` раскладывает по слотам.
@@ -521,7 +516,8 @@ def trace_auto(rgb, sheet, p):
         # штраф за выход за полосу линии, назначение взаимно однозначное.
         trs = [t for t in trs if len(t) >= 30]
         if not trs:
-            continue
+            return []
+        out = []
         med = [float(np.median(list(t.values()))) for t in trs]
         # ── ★ ЦВЕТ ПОД ТРАЕКТОРИЕЙ (`cv.rowdec_color`, 0 = ВЫКЛ = поведение §6.141) ──────────
         # ⚠⚠ ЗАЧЕМ И ПОЧЕМУ НЕ ВЕТО. Цвет — единственный признак линии, которого траектория
@@ -577,8 +573,32 @@ def trace_auto(rgb, sheet, p):
                 for i, t in enumerate(trs):
                     if i not in used_i:
                         out.append((_synth_line(lines, ti, t, med[i], rgb, p), t))
+        return out
+
+    out = []
+    conf = {}                       # §6.240: id(трасса) → медиана p, только для этого вызова
+    xthr = float(getattr(p, "rowdec_extra_thr", 0.0) or 0.0) or None   # §6.287: второй порог пиков (0 = выкл)
+    extra = []
+    for ti, lines in by_track.items():
+        track = sheet.frame.tracks[ti]
+        if lines:
+            y0 = min(L.y0 for L in lines); y1 = max(L.y1 for L in lines)
+        else:
+            y0, y1 = int(sheet.frame.top_y), int(sheet.frame.bottom_y)
+        K = max(len(lines), int(kslots.get(ti, 0)))
+        if K <= 0:
+            continue
+        # ★ §6.239: K + `rowdec_k_plus` путей (0 = прод бит-в-бит). §6.237: из невзятых удержанием 71 из 196 ведутся по
+        #   ДРУГОЙ нарисованной линии (> 50 px) — лишняя линия трека, которой нет в эталоне, забирает путь.
+        K += int(getattr(p, "rowdec_k_plus", 0) or 0)
+        ext = [] if xthr else None
+        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext)
+        out.extend(_pair(trs, lines, ti))
+        if ext:                                   # §6.287: пути второго порога — та же привязка к линиям
+            extra.extend(_pair(ext[0], lines, ti))
     res = _Trs(out)
     res.conf = [(conf.get(id(t)),) for _, t in out]
+    res.extra = _Trs(extra) if xthr else None   # §6.287
     return res
 
 
