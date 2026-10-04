@@ -26,6 +26,8 @@ ap.add_argument("--mode", default="S")
 ap.add_argument("--taus", nargs="+", type=float, default=[0.8, 0.9])
 ap.add_argument("--folds", type=int, default=5)
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/name_style_swaps.pkl")
+ap.add_argument("--rough", action="store_true", help="§6.276: + извилистость обеих кривых (по трассе)")
+ap.add_argument("--cache", default=r"F:/nds/output/taskS/level_bench.pkl")
 ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле, словарь семейств и карту лист → фолд")
 a = ap.parse_args()
 TS = Path(a.ts)
@@ -79,17 +81,43 @@ def hue(t):
     return 4
 
 
+def rough(x):
+    """§6.276: извилистость — средний отход от медианы по 41 строке в долях размаха (5–95%) кривой"""
+    if x is None or len(x) < 200:
+        return np.nan
+    from scipy.ndimage import median_filter
+    s_ = median_filter(x.astype(float), size=41, mode="nearest")
+    rng_ = np.percentile(x, 95) - np.percentile(x, 5)
+    return float(np.mean(np.abs(x - s_)) / max(5.0, rng_))
+
+
 def feat(tx, ty, A, B, sh):
     """признаки упорядоченной пары: кривая со стилем tx названа A, со стилем ty — B"""
-    return [tx["width"], ty["width"], tx["width"] - ty["width"], tx["c1"], tx["c2"], ty["c1"], ty["c2"],
+    if a.rough:
+        rx, ry = tx.get("rough", np.nan), ty.get("rough", np.nan)
+        extra = [rx, ry, (np.log(rx / ry) if (rx > 0 and ry > 0) else np.nan)]
+    else:
+        extra = []
+    return extra + [tx["width"], ty["width"], tx["width"] - ty["width"], tx["c1"], tx["c2"], ty["c1"], ty["c2"],
             tx["c1"] - ty["c1"], tx["c2"] - ty["c2"], tx["dark"], ty["dark"], tx["gap"], ty["gap"],
             hue(tx), hue(ty), fcode(A), fcode(B), probe(A), probe(B), probe(A) - probe(B), decade(sh)]
 
 
 CAT = [13, 14, 15, 16]                                      # индексы категориальных признаков (оттенки, семейства)
+if a.rough:
+    CAT = [c + 3 for c in CAT]                               # три признака извилистости — в начале
 ST = {}                                                      # (лист, имя) → запись стиля
 for r in R:
     ST[(r["sheet"], r["name"])] = r
+if a.rough:                                                  # §6.276: извилистость по эталону и по выдаче
+    for cv in pickle.load(open(a.cache, "rb")):
+        r = ST.get((cv["sheet"], cv["name"]))
+        if r is None:
+            continue
+        if r["truth"] is not None:
+            r["truth"] = dict(r["truth"], rough=rough(cv["gx"]))
+        if r["out"] is not None:
+            r["out"] = dict(r["out"], rough=rough(cv["tx"]) if len(cv["tx"]) else np.nan)
 # пары имён в одном треке, у которых есть эталонный стиль
 TR = defaultdict(list)                                       # (лист, трек) → имена
 for (sh, nm), r in ST.items():
