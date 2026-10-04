@@ -22,9 +22,16 @@
 levelshift=1,namestyle=oof:F:/nds/output/taskS/name_style_v1,linechoice=oof:F:/nds/output/taskS/line_choice_v2` (режим NSL3 в `rp_lvl`;
 повтор `_trace_cache.py` по умолчанию эти четыре ручки выключает).
 
-**3. Идёт (планировщик):** §6.285 — порог пиков 0.3 вместе с v2 (`nds_pk3v2_ab`): повтор NSPL из `tcache_pk3`, счёт
-`_pk3v2_ab_score.log` (NS → NSPL); решает NSL3 ↔ NSPL: `scratchpad/merge_ab.py rp_lvl_NS_NSL3.pkl rp_lvl_NS_NSPL.pkl NS NSL3 NSPL`.
-Критерий — в ROADMAP §6.285 (поле именных ≥ +20 при p < 0.005, безымянных ≥ 0, сорт A ≥ 0).
+**3. Идёт (планировщик, 04.10 ~20:40; критерии всех — в ROADMAP до прогонов):**
+- §6.285 порог пиков 0.3 вместе с v2 (`nds_pk3v2_ab`): NSPL из `tcache_pk3`; `_pk3v2_ab_score.log`; решает
+  `scratchpad/merge_ab.py rp_lvl_NS_NSL3.pkl rp_lvl_NS_NSPL.pkl NS NSL3 NSPL`.
+- §6.286 имена по стилю ещё раз после выбора (`nds_nsla_ab`, ручка `cv.name_style_after`, повтор `nsafter=1`): `_nsla_ab_score.log`;
+  `merge_ab.py rp_lvl_NS_NSL3.pkl rp_lvl_NS_NSLA.pkl NS NSL3 NSLA`.
+- §6.287 пути декодера с порогом 0.3 — доп. кандидаты v2 (`nds_nslx_ab`, повтор `--extra-cache tcache_pk3`): `_nslx_ab_score.log`;
+  `merge_ab.py rp_lvl_NS_NSL3.pkl rp_lvl_NS_NSLX.pkl NS NSL3 NSLX`. Прод готов: `cv.rowdec_extra_thr = 0.3` (второй порог по той же
+  карте, основной путь бит-в-бит, сверка 2/2 с `tcache_pk3`; +6 с на лист).
+- Разбор: `nds_nsl3_px` (NSL3 по пикселям — сколько теряется на уровнях), `nds_pairs_nsl3` (пары 1:1 — какие имена путаются;
+  `scratchpad/pairs_conf.py rp_lvl_NSL3_pairs.pkl NSL3`), `nds_lc_scan_nsl3` (данные второго прохода выбора).
 
 **4. Итоги 04.10 вечер:**
 - ✅ §6.283 выбор трассы v2 — в проде (выше).
@@ -32,6 +39,7 @@ levelshift=1,namestyle=oof:F:/nds/output/taskS/name_style_v1,linechoice=oof:F:/n
 - ⛔ §6.274 порог пиков 0.3: безымянных +42 при p = 0.0101 — на границе, не принят → §6.285.
 - ⛔ §6.275 ручки выбора пути и раскладки (K1–K6): ни одна не принята.
 - ⛔ §6.284 склейка из кусков, вычистка выбросов, сглаживание — не помогают; слоты без честного кандидата — задача ведения.
+- ⛔ §6.288 «склейка по перу» для ГЗ со сменой масштаба: эксперт берёт 5× на длинных отрезках (перо 1× вне трека) — задача декодера.
 - Закрыто днём: §6.268–6.272 (шлюз, крупная модель, Витерби, «рельсы», наклон).
 
 **5. Знание заказчика** (память `carrotage-scale-levels-blind`, ROADMAP §6.266 / §6.271 / §6.273):
