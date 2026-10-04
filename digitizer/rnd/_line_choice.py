@@ -23,6 +23,7 @@ ap.add_argument("--data", default=r"F:/nds/output/taskS/line_choice")
 ap.add_argument("--grid", nargs="+", default=["0.7:0.3", "0.8:0.4"])
 ap.add_argument("--folds", type=int, default=5)
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_res.pkl")
+ap.add_argument("--save-dir", default="", help="модели фолдов, на всём поле, словарь семейств, карта лист → фолд")
 a = ap.parse_args()
 from sklearn.ensemble import HistGradientBoostingClassifier
 TS = Path(a.ts)
@@ -70,7 +71,7 @@ for rec in RECS:
                  np.log1p(c["n"]) - np.log1p(cur_n) if cur else np.nan, r["cover"] - cur_cov if cur else np.nan]
             lab = None if r["lab"] is None else int(r["lab"][0])
             ROWS.append((sh, si, r["k"], f, lab, r["here"], r["elsewhere"]))
-CAT = [11]
+CAT = [12]                                        # индекс кода семейства в признаках
 X = np.array([r[3] for r in ROWS], float)
 print(f"листов {len(RECS)}, пар слот × кандидат {len(ROWS)}, с меткой {sum(1 for r in ROWS if r[4] is not None)}, "
       f"честных {sum(1 for r in ROWS if r[4] == 1)}")
@@ -88,10 +89,12 @@ def fit(sheets):
 wells = sorted({well(r["sheet"]) for r in RECS if r["sheet"] in FIELD})
 FOLD = {w: i % a.folds for i, w in enumerate(wells)}
 P = np.full(len(ROWS), np.nan)
+FOLD_MODELS = []
 for k in range(a.folds):
     tr = {r["sheet"] for r in RECS if r["sheet"] in FIELD and FOLD[well(r["sheet"])] != k}
     te = [i for i, r in enumerate(ROWS) if r[0] in FIELD and FOLD[well(r[0])] == k]
     m = fit(tr); P[te] = m.predict_proba(X[te])[:, 1]
+    FOLD_MODELS.append((k, m))
     print(f"  фолд {k}: обучено")
 mA = fit(FIELD)
 te = [i for i, r in enumerate(ROWS) if r[0] in HOLD]
@@ -144,3 +147,14 @@ for g in a.grid:
               f"перестала {sum(1 for x in sw if x['before'] and not x['after'])}); Δ {int(d.sum()):+d} "
               f"(листов ↑{int((d > 0).sum())}/↓{int((d < 0).sum())}, p = {p:.4f})")
 pickle.dump(dict(res=RES, fams=FAMS), open(a.dump, "wb"))
+if a.save_dir:
+    import json
+    sd = Path(a.save_dir); sd.mkdir(parents=True, exist_ok=True)
+    tau, dlt = (float(x) for x in a.grid[0].split(":"))
+    meta = dict(fams=dict(FAMS), cat=CAT, tau=tau, delta=dlt)
+    for k, m in FOLD_MODELS:
+        pickle.dump(dict(meta, model=m, fold=k), open(sd / f"line_choice_f{k}.pkl", "wb"))
+    pickle.dump(dict(meta, model=mA, fold=None), open(sd / "line_choice_all.pkl", "wb"))
+    (sd / "line_choice_folds.json").write_text(json.dumps({r["sheet"]: FOLD[well(r["sheet"])] for r in RECS if r["sheet"] in FIELD},
+                                                          ensure_ascii=False), encoding="utf-8")
+    print(f"модели сохранены: {sd}")
