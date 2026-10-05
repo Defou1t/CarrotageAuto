@@ -43,8 +43,9 @@ ap.add_argument("--seq", default="", help="чекпойнт селектора �
 ap.add_argument("--wlg-roots", nargs="+", default=[r"F:\nds\projects\Archive"])
 ap.add_argument("--conf", default="", help="§6.240: сайдкар уверенности декодера (`_dec_conf.py`) — в повторе даётся emit как `traces.alt_conf`")
 ap.add_argument("--knob", action="append", default=[], help="§6.236: ручка ВЕДЕНИЯ для сборки, `имя=значение` (пишется в кэш)")
-ap.add_argument("--extra-cache", default="", help="§6.287: кэш другого декода — его пути даются выбору трассы (`traces.extra`) "
-                "как дополнительные кандидаты; ведение и раскладка — из --cache")
+ap.add_argument("--extra-cache", nargs="*", default=[], help="§6.287: кэши другого декода — их пути даются выбору трассы "
+                "(`traces.extra`) как дополнительные кандидаты, по порядку; `каталог|поле` (по умолчанию alt; extra — у redec с "
+                "`rowdec_extra_thr`); ведение и раскладка — из --cache")
 a = ap.parse_args()
 TS = Path(a.ts)
 CACHE = Path(a.cache)
@@ -273,11 +274,15 @@ def cmd_replay():
                 traces = T._WithAlt(prod); traces.alt = alt; traces.alt_gated = gated
                 if c.get("extra") is not None and not a.extra_cache:     # §6.287: кэш с путями второго порога
                     traces.extra = [(L, unpack(t)) for L, t in c["extra"]]
-                if a.extra_cache:                    # §6.287: пути другого декода — только кандидатами выбора трассы
-                    _xp = Path(a.extra_cache) / src.name
-                    if _xp.exists():
-                        _xc = pickle.load(open(_xp, "rb"))
-                        traces.extra = [(L, unpack(t)) for L, t in (_xc.get("alt") or [])]
+                if a.extra_cache:                    # §6.287: пути других декодов — только кандидатами выбора трассы
+                    _ex = []
+                    for _spec in a.extra_cache:
+                        _dir, _, _fld = _spec.partition("|")
+                        _xp = Path(_dir) / src.name
+                        if _xp.exists():
+                            _xc = pickle.load(open(_xp, "rb"))
+                            _ex += [(L, unpack(t)) for L, t in (_xc.get(_fld or "alt") or [])]
+                    traces.extra = _ex
                 _ac = c.get("alt_conf")              # ⚠ 3-й круг: пустой список у листа без трасс декодера — не «нет»
                 traces.alt_conf = _ac if _ac is not None else CONF.get(src.name)
                 # ⛔ 27.09 (разбор, 2-й круг): вето/взятие без уверенности молча не работают — такие листы считаются

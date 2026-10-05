@@ -384,8 +384,9 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
         return out
 
     out = _paths(pthr)
-    if extra_thr is not None and extra_out is not None:      # §6.287: второй порог по той же карте
-        extra_out.append(_paths(float(extra_thr)))
+    if extra_thr is not None and extra_out is not None:      # §6.287: доп. пороги по той же карте (один или список)
+        for _t in (extra_thr if isinstance(extra_thr, (list, tuple)) else [extra_thr]):
+            extra_out.append(_paths(float(_t)))
     # ★ §6.240: уверенность траектории — медиана вероятности карты вдоль неё (для вето в `emit`); ключ — id словаря.
     #   ⛔ 27.09 (разбор): не модульный словарь — UI многопоточный, и параллельный прогон стирал чужие записи (вето молча
     #   выключалось). Словарь даёт вызывающий (`trace_auto`), живёт один вызов.
@@ -577,8 +578,10 @@ def trace_auto(rgb, sheet, p):
 
     out = []
     conf = {}                       # §6.240: id(трасса) → медиана p, только для этого вызова
-    xthr = float(getattr(p, "rowdec_extra_thr", 0.0) or 0.0) or None   # §6.287: второй порог пиков (0 = выкл)
-    extra = []
+    # §6.287: доп. пороги пиков (0 = выкл): число или строка «0.3,0.15» — пути каждого порога по порядку
+    _xv = getattr(p, "rowdec_extra_thr", 0.0) or 0.0
+    xthr = [float(v) for v in str(_xv).replace(";", ",").split(",") if v.strip() and float(v) > 0] or None
+    extra_by = [[] for _ in (xthr or [])]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
         if lines:
@@ -594,11 +597,11 @@ def trace_auto(rgb, sheet, p):
         ext = [] if xthr else None
         trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext)
         out.extend(_pair(trs, lines, ti))
-        if ext:                                   # §6.287: пути второго порога — та же привязка к линиям
-            extra.extend(_pair(ext[0], lines, ti))
+        for _j, _e in enumerate(ext or []):       # §6.287: пути доп. порогов — та же привязка к линиям
+            extra_by[_j].extend(_pair(_e, lines, ti))
     res = _Trs(out)
     res.conf = [(conf.get(id(t)),) for _, t in out]
-    res.extra = _Trs(extra) if xthr else None   # §6.287
+    res.extra = _Trs([pr for lst_ in extra_by for pr in lst_]) if xthr else None   # §6.287: порог-за-порогом
     return res
 
 
