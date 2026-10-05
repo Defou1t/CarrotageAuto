@@ -29,9 +29,10 @@ def one(job):
     alt = [dense_tr(un(t)) for L, t in (ex.get(field) or [])]
     alt = [a for a in alt if len(a) >= 50]
     bx = []
-    if base_x and Path(base_x).exists():
-        bx = [dense_tr(un(t)) for L, t in (pickle.load(open(base_x, "rb")).get("alt") or [])]
-        bx = [b for b in bx if len(b) >= 50]
+    for bpath, bfield in (base_x or []):
+        if Path(bpath).exists():
+            bx += [dense_tr(un(t)) for L, t in (pickle.load(open(bpath, "rb")).get(bfield) or [])]
+    bx = [b for b in bx if len(b) >= 50]
     mt = extract(src)
     fc = {cc["name"]: cc for cc in mt["curves"] if M.mnem_root(cc["name"]) != "DA"}
     TA = [_tree(a) for a in alt]
@@ -69,8 +70,8 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--field", default="alt", help="поле кэша `--extra` с путями: alt (кэш redec с другим порогом) или extra "
                     "(кэш redec с `rowdec_extra_thr`)")
-    ap.add_argument("--base-extra", default="", help="кэш, чьи пути (alt) уже в пуле (напр. tcache_pk3): слоты с честным кандидатом "
-                    "среди них считаются «уже есть»")
+    ap.add_argument("--base-extra", nargs="*", default=[], help="кэши, чьи пути уже в пуле (`каталог|поле`, поле по умолчанию alt; "
+                    "напр. tcache_pk3 tcache_x15|extra): слоты с честным кандидатом среди них считаются «уже есть»")
     ap.add_argument("--dump", default=r"F:/nds/output/taskS/extra_cand_ceiling.pkl")
     a = ap.parse_args()
     import multiprocessing as mp
@@ -84,7 +85,7 @@ def main():
         q = SRC[sh]
         key = f"{q.stem[:40]}_{hashlib.md5(q.stem.encode('utf-8')).hexdigest()[:8]}"
         jobs.append((str(f), str(Path(a.extra) / (key + ".pkl")), str(q), a.field,
-                     str(Path(a.base_extra) / (key + ".pkl")) if a.base_extra else ""))
+                     [(str(Path(b.partition("|")[0]) / (key + ".pkl")), b.partition("|")[2] or "alt") for b in a.base_extra]))
     R = []; t0 = time.time()
     with mp.Pool(a.workers) as pool:
         for i, r in enumerate(pool.imap_unordered(one, jobs)):
