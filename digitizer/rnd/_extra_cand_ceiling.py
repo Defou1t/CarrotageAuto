@@ -15,7 +15,7 @@ import numpy as np
 
 
 def one(job):
-    rec_path, ex_path, src = job
+    rec_path, ex_path, src, field, base_x = job
     from extract_nlgx import extract
     from _multi_replica_probe import dense
     from _cand_ceiling import _tree, dense_tr
@@ -26,8 +26,12 @@ def one(job):
         return []
     ex = pickle.load(open(ex_path, "rb"))
     un = lambda t: dict(zip(t[0].tolist(), t[1].tolist()))
-    alt = [dense_tr(un(t)) for L, t in (ex["alt"] or [])]
+    alt = [dense_tr(un(t)) for L, t in (ex.get(field) or [])]
     alt = [a for a in alt if len(a) >= 50]
+    bx = []
+    if base_x and Path(base_x).exists():
+        bx = [dense_tr(un(t)) for L, t in (pickle.load(open(base_x, "rb")).get("alt") or [])]
+        bx = [b for b in bx if len(b) >= 50]
     mt = extract(src)
     fc = {cc["name"]: cc for cc in mt["curves"] if M.mnem_root(cc["name"]) != "DA"}
     TA = [_tree(a) for a in alt]
@@ -38,6 +42,12 @@ def one(job):
         had = any(r["lab"] and r["lab"][0] for r in s["cands"])
         gt = dense(fc[s["name"]]); tg = _tree(gt)
         xl, xr = s["band"]; wd = max(1.0, xr - xl)
+        if not had and bx:                      # честный уже есть среди путей базового пополнения пула
+            for b in bx:
+                u50 = (np.median(list(b.values())) - xl) / wd
+                if -0.1 <= u50 <= 1.1 and honest_d(b, _tree(b), gt, tg)[0]:
+                    had = True
+                    break
         got = False
         for a, ta in zip(alt, TA):
             u50 = (np.median(list(a.values())) - xl) / wd
@@ -57,6 +67,10 @@ def main():
     ap.add_argument("--scan", default=r"F:/nds/output/taskS/line_choice")
     ap.add_argument("--extra", default=r"F:/nds/output/taskS/tcache_pk3")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--field", default="alt", help="поле кэша `--extra` с путями: alt (кэш redec с другим порогом) или extra "
+                    "(кэш redec с `rowdec_extra_thr`)")
+    ap.add_argument("--base-extra", default="", help="кэш, чьи пути (alt) уже в пуле (напр. tcache_pk3): слоты с честным кандидатом "
+                    "среди них считаются «уже есть»")
     ap.add_argument("--dump", default=r"F:/nds/output/taskS/extra_cand_ceiling.pkl")
     a = ap.parse_args()
     import multiprocessing as mp
@@ -69,7 +83,8 @@ def main():
         sh = pickle.load(open(f, "rb"))["sheet"]
         q = SRC[sh]
         key = f"{q.stem[:40]}_{hashlib.md5(q.stem.encode('utf-8')).hexdigest()[:8]}"
-        jobs.append((str(f), str(Path(a.extra) / (key + ".pkl")), str(q)))
+        jobs.append((str(f), str(Path(a.extra) / (key + ".pkl")), str(q), a.field,
+                     str(Path(a.base_extra) / (key + ".pkl")) if a.base_extra else ""))
     R = []; t0 = time.time()
     with mp.Pool(a.workers) as pool:
         for i, r in enumerate(pool.imap_unordered(one, jobs)):
