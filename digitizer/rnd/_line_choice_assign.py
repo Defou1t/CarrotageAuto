@@ -29,6 +29,8 @@ ap.add_argument("--save-dir", default="", help="(stack) модели обоих 
 ap.add_argument("--trace", default="", help="каталог `_line_choice_trace.py`: + признаки формы трассы (прямизна, размах, дрожание, "
                 "скачки, неизменный x)")
 ap.add_argument("--hgb", default="300,0.08,31,1.0,20", help="бустинг: итераций, шаг, листьев, l2, мин. в листе")
+ap.add_argument("--norm", default="", help="нормировка стиля внутри листа: z — добавить z-оценки толщины, темноты, цвета по "
+                "кандидатам листа; zonly — то же, абсолютные значения стиля убрать")
 ap.add_argument("--insample", action="store_true", help="(all/nocur/mix) поле — модель на ВСЁМ поле, без фолдов: потолок признаков")
 ap.add_argument("--extra", action="store_true", help="+ признаки: width_h, used, дубль из другого источника, число дублей, "
                 "отступ начала / конца от строк слота, длина / строки слота")
@@ -82,6 +84,12 @@ ROWS = []
 for rec in RECS:
     sh = rec["sheet"]; CS = rec["cands"]; ns = len(rec["slots"])
     DU = dups(CS) if a.extra else None
+    if a.norm:                                           # нормировка стиля по кандидатам листа
+        _st = {}
+        for key_ in ("width", "dark", "c1", "c2", "gap"):
+            v_ = np.array([nz((c_["style"] or {}).get(key_)) for c_ in CS], float)
+            mu_, sd_ = np.nanmedian(v_) if np.isfinite(v_).any() else 0.0, np.nanstd(v_) if np.isfinite(v_).sum() > 1 else 1.0
+            _st[key_] = (v_ - mu_) / (sd_ if sd_ and np.isfinite(sd_) else 1.0)
     if a.trace:
         assert len(TRF[sh]) == len(CS), (sh, len(TRF[sh]), len(CS))
     for si, s in enumerate(rec["slots"]):
@@ -106,6 +114,11 @@ for rec in RECS:
                       (c["y0"] - s["top_y"]) / nr, (s["top_y"] + nr - 1 - c["y1"]) / nr, c["n"] / nr]
             if a.trace:
                 f += [TRF[sh][r["k"]][x] for x in SHAPE]
+            if a.norm:
+                f += [_st[key_][r["k"]] for key_ in ("width", "dark", "c1", "c2", "gap")]
+                if a.norm == "zonly":
+                    for j_ in (6, 7, 8, 9, 10):                     # абсолютные width, c1, c2, dark, gap
+                        f[j_] = np.nan
             lab = None if r["lab"] is None else int(r["lab"][0])
             ROWS.append((sh, si, r["k"], f, lab, r["here"], r["elsewhere"]))
 X_ALL = np.array([r[3] for r in ROWS], float)
