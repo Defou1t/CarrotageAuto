@@ -28,6 +28,8 @@ ap.add_argument("--save-dir", default="", help="(stack) модели обоих 
                 "точки сетки hung")
 ap.add_argument("--trace", default="", help="каталог `_line_choice_trace.py`: + признаки формы трассы (прямизна, размах, дрожание, "
                 "скачки, неизменный x)")
+ap.add_argument("--hgb", default="300,0.08,31,1.0,20", help="бустинг: итераций, шаг, листьев, l2, мин. в листе")
+ap.add_argument("--insample", action="store_true", help="(all/nocur/mix) поле — модель на ВСЁМ поле, без фолдов: потолок признаков")
 ap.add_argument("--extra", action="store_true", help="+ признаки: width_h, used, дубль из другого источника, число дублей, "
                 "отступ начала / конца от строк слота, длина / строки слота")
 ap.add_argument("--feat", default="all", choices=["all", "nocur", "mix", "stack"],
@@ -112,11 +114,19 @@ NOCUR = [j for j in range(X_ALL.shape[1]) if j not in (19, 20, 21, 22)]
 X = X_ALL
 
 
+HGB = [float(v) for v in a.hgb.split(",")]
+
+
+def _hgb(cat):
+    return HistGradientBoostingClassifier(max_iter=int(HGB[0]), learning_rate=HGB[1], max_leaf_nodes=int(HGB[2]),
+                                          l2_regularization=HGB[3], min_samples_leaf=int(HGB[4]), categorical_features=cat,
+                                          random_state=0)
+
+
 def fit(sheets):
     idx = [i for i, r in enumerate(ROWS) if r[0] in sheets and r[4] is not None]
     cat = np.zeros(X.shape[1], bool); cat[CAT] = True
-    m = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.08, max_leaf_nodes=31, l2_regularization=1.0,
-                                       categorical_features=cat, random_state=0)
+    m = _hgb(cat)
     m.fit(X[idx], np.array([ROWS[i][4] for i in idx]))
     return m
 
@@ -129,6 +139,11 @@ def oof(cols):
     global X
     X = X_ALL[:, cols]
     P = np.full(len(ROWS), np.nan)
+    if a.insample:                                       # потолок признаков: поле предсказывается моделью, видевшей его
+        m = fit(FIELD)
+        te = [i for i, r in enumerate(ROWS) if r[0] in FIELD or r[0] in HOLD]
+        P[te] = m.predict_proba(X[te])[:, 1]
+        return P
     for k in range(a.folds):
         tr = {r["sheet"] for r in RECS if r["sheet"] in FIELD and FOLD[well(r["sheet"])] != k}
         te = [i for i, r in enumerate(ROWS) if r[0] in FIELD and FOLD[well(r[0])] == k]
@@ -158,8 +173,7 @@ Y = np.array([-1 if r[4] is None else r[4] for r in ROWS])
 
 def fit_idx(idx, Xm):
     cat = np.zeros(Xm.shape[1], bool); cat[CAT] = True
-    m = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.08, max_leaf_nodes=31, l2_regularization=1.0,
-                                       categorical_features=cat, random_state=0)
+    m = _hgb(cat)
     m.fit(Xm[idx], Y[idx])
     return m
 
