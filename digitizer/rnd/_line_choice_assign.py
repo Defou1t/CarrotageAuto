@@ -31,6 +31,8 @@ ap.add_argument("--trace", default="", help="каталог `_line_choice_trace.
 ap.add_argument("--hgb", default="300,0.08,31,1.0,20", help="бустинг: итераций, шаг, листьев, l2, мин. в листе")
 ap.add_argument("--norm", default="", help="нормировка стиля внутри листа: z — добавить z-оценки толщины, темноты, цвета по "
                 "кандидатам листа; zonly — то же, абсолютные значения стиля убрать")
+ap.add_argument("--data-extra", default="", help="§6.295: скан листов ВНЕ поля и сорта A — только в обучение (листы скважин поля — "
+                "по фолдам поля, скважин сорта A — исключены)")
 ap.add_argument("--well-frac", type=float, default=1.0, help="кривая обучения: доля скважин обучения в каждом фолде (случайно)")
 ap.add_argument("--well-seed", type=int, default=0)
 ap.add_argument("--insample", action="store_true", help="(all/nocur/mix) поле — модель на ВСЁМ поле, без фолдов: потолок признаков")
@@ -76,6 +78,12 @@ def dups(CS):
 
 
 RECS = [pickle.load(open(f, "rb")) for f in sorted(Path(a.data).glob("*.pkl"))]
+OUT = set()
+if a.data_extra:                                          # §6.295: листы вне поля и сорта A — только обучение
+    _rx = [pickle.load(open(f, "rb")) for f in sorted(Path(a.data_extra).glob("*.pkl"))]
+    _rx = [r for r in _rx if r["sheet"] not in FIELD and r["sheet"] not in HOLD]
+    OUT = {r["sheet"] for r in _rx}
+    RECS += _rx
 TRF = {}
 if a.trace:
     for f in sorted(Path(a.data).glob("*.pkl")):
@@ -148,6 +156,12 @@ def fit(sheets):
 
 wells = sorted({well(r["sheet"]) for r in RECS if r["sheet"] in FIELD})
 FOLD = {w: i % a.folds for i, w in enumerate(wells)}
+HOLD_W = {well(x) for x in HOLD}
+
+
+def out_train(k=None):
+    """§6.295: листы вне поля, допустимые в обучение: не из скважин сорта A; из скважин поля — только не держанного фолда k"""
+    return {x for x in OUT if well(x) not in HOLD_W and (k is None or FOLD.get(well(x)) != k)}
 
 
 def oof(cols):
@@ -165,14 +179,14 @@ def oof(cols):
         if a.well_frac < 1.0:                              # кривая обучения: часть скважин обучения
             tw = list(rs_.choice(tw, max(1, int(round(a.well_frac * len(tw)))), replace=False))
         tw = set(tw)
-        tr = {r["sheet"] for r in RECS if r["sheet"] in FIELD and well(r["sheet"]) in tw}
+        tr = {r["sheet"] for r in RECS if r["sheet"] in FIELD and well(r["sheet"]) in tw} | out_train(k)
         te = [i for i, r in enumerate(ROWS) if r[0] in FIELD and FOLD[well(r[0])] == k]
         P[te] = fit(tr).predict_proba(X[te])[:, 1]
     te = [i for i, r in enumerate(ROWS) if r[0] in HOLD]
     allw = sorted({well(r["sheet"]) for r in RECS if r["sheet"] in FIELD})
     if a.well_frac < 1.0:
         allw = list(rs_.choice(allw, max(1, int(round(a.well_frac * len(allw)))), replace=False))
-    P[te] = fit({r["sheet"] for r in RECS if r["sheet"] in FIELD and well(r["sheet"]) in set(allw)}).predict_proba(X[te])[:, 1]
+    P[te] = fit({r["sheet"] for r in RECS if r["sheet"] in FIELD and well(r["sheet"]) in set(allw)} | out_train()).predict_proba(X[te])[:, 1]
     return P
 
 
@@ -271,10 +285,11 @@ else:
     fs = [x for x in ROWS_OF if x in FIELD]
     MODELS = {}
     for k in range(a.folds):
-        p2, te, MODELS[k] = stage2([x for x in fs if FOLD[well(x)] != k], [x for x in fs if FOLD[well(x)] == k], a.folds - 1)
+        p2, te, MODELS[k] = stage2([x for x in fs if FOLD[well(x)] != k] + sorted(out_train(k)), [x for x in fs if FOLD[well(x)] == k],
+                                   a.folds - 1)
         P[te] = p2
         print(f"  второй ярус: фолд {k} готов")
-    p2, te, MODELS[None] = stage2(fs, [x for x in ROWS_OF if x in HOLD], a.folds)
+    p2, te, MODELS[None] = stage2(fs + sorted(out_train()), [x for x in ROWS_OF if x in HOLD], a.folds)
     P[te] = p2
 print(f"листов {len(RECS)}, пар {len(ROWS)}; P посчитаны вне фолда")
 
@@ -344,6 +359,8 @@ for g in a.grid:
     mode, tau, dlt = g.split(":"); tau = float(tau); dlt = float(dlt)
     D = Counter(); SW = []; AC = []
     for sh, by in BY.items():
+        if sh in OUT:
+            continue                                      # листы вне поля — только обучение
         rec = RECD[sh]; cl = clusters(rec["cands"])
         ch = solve(rec, by, mode, tau, dlt)
         for si, c in ch.items():
