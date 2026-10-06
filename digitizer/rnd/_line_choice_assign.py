@@ -31,6 +31,8 @@ ap.add_argument("--trace", default="", help="каталог `_line_choice_trace.
 ap.add_argument("--hgb", default="300,0.08,31,1.0,20", help="бустинг: итераций, шаг, листьев, l2, мин. в листе")
 ap.add_argument("--norm", default="", help="нормировка стиля внутри листа: z — добавить z-оценки толщины, темноты, цвета по "
                 "кандидатам листа; zonly — то же, абсолютные значения стиля убрать")
+ap.add_argument("--well-frac", type=float, default=1.0, help="кривая обучения: доля скважин обучения в каждом фолде (случайно)")
+ap.add_argument("--well-seed", type=int, default=0)
 ap.add_argument("--insample", action="store_true", help="(all/nocur/mix) поле — модель на ВСЁМ поле, без фолдов: потолок признаков")
 ap.add_argument("--extra", action="store_true", help="+ признаки: width_h, used, дубль из другого источника, число дублей, "
                 "отступ начала / конца от строк слота, длина / строки слота")
@@ -157,12 +159,20 @@ def oof(cols):
         te = [i for i, r in enumerate(ROWS) if r[0] in FIELD or r[0] in HOLD]
         P[te] = m.predict_proba(X[te])[:, 1]
         return P
+    rs_ = np.random.default_rng(a.well_seed)
     for k in range(a.folds):
-        tr = {r["sheet"] for r in RECS if r["sheet"] in FIELD and FOLD[well(r["sheet"])] != k}
+        tw = sorted({well(r["sheet"]) for r in RECS if r["sheet"] in FIELD and FOLD[well(r["sheet"])] != k})
+        if a.well_frac < 1.0:                              # кривая обучения: часть скважин обучения
+            tw = list(rs_.choice(tw, max(1, int(round(a.well_frac * len(tw)))), replace=False))
+        tw = set(tw)
+        tr = {r["sheet"] for r in RECS if r["sheet"] in FIELD and well(r["sheet"]) in tw}
         te = [i for i, r in enumerate(ROWS) if r[0] in FIELD and FOLD[well(r[0])] == k]
         P[te] = fit(tr).predict_proba(X[te])[:, 1]
     te = [i for i, r in enumerate(ROWS) if r[0] in HOLD]
-    P[te] = fit(FIELD).predict_proba(X[te])[:, 1]
+    allw = sorted({well(r["sheet"]) for r in RECS if r["sheet"] in FIELD})
+    if a.well_frac < 1.0:
+        allw = list(rs_.choice(allw, max(1, int(round(a.well_frac * len(allw)))), replace=False))
+    P[te] = fit({r["sheet"] for r in RECS if r["sheet"] in FIELD and well(r["sheet"]) in set(allw)}).predict_proba(X[te])[:, 1]
     return P
 
 
