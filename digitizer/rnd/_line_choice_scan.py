@@ -57,14 +57,20 @@ def one(job):
     cands = [("prod", i, dense_tr(un(t))) for i, (L, t) in enumerate(c["traces"] or [])]
     cands += [("dec", i, dense_tr(un(t))) for i, (L, t) in enumerate(c["alt"] or [])]
     cands = [x for x in cands if len(x[2]) >= 50]
+    xsrc = None
     if P.get("extra"):                       # §6.287: пути другого декода — как `emit._line_choice_pass` (дубли основного пула прочь)
         xp = Path(P["extra"]) / Path(tc_path).name
         if xp.exists():
+            xsrc = pickle.load(open(xp, "rb")).get("alt") or []
+    elif c.get("extra") is not None:         # кэш сборки с `rowdec_extra_thr` — пути доп. порогов в нём самом
+        xsrc = c["extra"]
+    if xsrc is not None:
+        if True:
             keys = []
             for _, _, d in cands:
                 ys_ = np.array(sorted(d)); xs_ = np.array([d[y] for y in ys_])
                 keys.append((int(ys_[0]), int(ys_[-1]), np.percentile(xs_, [10, 50, 90])))
-            for i, (L, t) in enumerate(pickle.load(open(xp, "rb")).get("alt") or []):
+            for i, (L, t) in enumerate(xsrc):
                 d = dense_tr(un(t))
                 if len(d) < 50:
                     continue
@@ -139,13 +145,14 @@ def main():
     ap.add_argument("--out", default=r"F:/nds/output/taskS/line_choice")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--extra-cache", default="", help="§6.287: кэш другого декода — его пути добавляются кандидатами (как в emit)")
+    ap.add_argument("--sheets", default="", help="свой список листов (файл в --ts); по умолчанию поле + сорт A")
     a = ap.parse_args()
     import multiprocessing as mp
     TS = Path(a.ts); Path(a.out).mkdir(parents=True, exist_ok=True)
     SRC = {q.name: q for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx")}
     lst = lambda f: [l.strip() for l in (TS / f).read_text(encoding="utf-8").splitlines() if l.strip()]
     jobs = []
-    for sh in lst("wellmap_sheets.txt") + lst("holdoutA_sheets.txt"):
+    for sh in (lst(a.sheets) if a.sheets else lst("wellmap_sheets.txt") + lst("holdoutA_sheets.txt")):
         q = SRC.get(sh)
         if not q:
             continue

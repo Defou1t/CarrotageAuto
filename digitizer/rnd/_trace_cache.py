@@ -122,6 +122,8 @@ def cmd_build():
             alt=None if getattr(traces, "alt", None) is None else [(L, pack(tr)) for L, tr in traces.alt],
             alt_gated=bool(getattr(traces, "alt_gated", True)),
             alt_conf=getattr(traces, "alt_conf", None),       # §6.240 (кэши до 27.09 — без него; тогда сайдкар `--conf`)
+            # §6.287: пути доп. порогов пиков (`cv.rowdec_extra_thr`) — кандидаты выбора трассы; повтор отдаёт их emit
+            extra=None if getattr(traces, "extra", None) is None else [(L, pack(tr)) for L, tr in traces.extra],
             frame=sheet.frame, stem=stem, image=str(image), frame_nlgx=str(frame_nlgx),
             trace_knobs=dict(TRACE_KNOBS),
             # ★ §6.247 (кэш v2): всё, что берёт `rowdec.trace_auto` из листа, — для пересчёта ОДНОГО декодера (`redec`)
