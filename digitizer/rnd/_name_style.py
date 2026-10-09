@@ -29,6 +29,7 @@ ap.add_argument("--dump", default=r"F:/nds/output/taskS/name_style_swaps.pkl")
 ap.add_argument("--rough", action="store_true", help="§6.276: + извилистость обеих кривых (по трассе)")
 ap.add_argument("--rough-robust", action="store_true", help="§6.277: извилистость устойчивая (окна без скачков, медиана)")
 ap.add_argument("--cache", default=r"F:/nds/output/taskS/level_bench.pkl")
+ap.add_argument("--style-extra", default="", help="§6.296: скан стиля листов ВНЕ поля и сорта A — только в обучение (скважины сорта A исключены, скважины поля — по фолдам)")
 ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле, словарь семейств и карту лист → фолд")
 a = ap.parse_args()
 TS = Path(a.ts)
@@ -39,6 +40,11 @@ well = lambda sh: SRC[sh].parent.parent.name if sh in SRC else sh
 lst = lambda f: {l.strip() for l in (TS / f).read_text(encoding="utf-8").splitlines() if l.strip()}
 FIELD, HOLD = lst("wellmap_sheets.txt"), lst("holdoutA_sheets.txt")
 R = pickle.load(open(a.style, "rb"))
+OUT = set()
+if a.style_extra:                                        # §6.296
+    _rx = [r for r in pickle.load(open(a.style_extra, "rb")) if r["sheet"] not in FIELD and r["sheet"] not in HOLD]
+    OUT = {r["sheet"] for r in _rx}
+    R = list(R) + _rx
 P = pickle.load(open(a.pairs, "rb"))[a.mode]
 # трек кривой: пары 1:1 дают трек сопоставленных; для остальных — карта слотов (как в `_name_swaps.py`)
 smap = pickle.load(open(TS / "slotmap.pkl", "rb"))
@@ -204,13 +210,22 @@ base = Counter()
 for (sh, t), mt in MT.items():
     base[sh] += sum(1 for w, g in mt.items() if w == g)
 print(f"база (имя верно по парам 1:1): поле {sum(v for s, v in base.items() if s in FIELD)}, сорт A {sum(v for s, v in base.items() if s in HOLD)}")
+HOLD_W = {well(sh) for sh in HOLD}
+
+
+def out_train(k=None):
+    """§6.296: листы вне поля в обучение: не из скважин сорта A; из скважин поля — только не держанного фолда k"""
+    return {x for x in OUT if well(x) not in HOLD_W and (k is None or FOLD.get(well(x)) != k)}
+
+
+print(f"листов вне поля в обучении: {len(out_train())} из {len(OUT)}")
 MODELS = []
 for k in range(a.folds):
-    tr = {sh for sh in FIELD if FOLD[well(sh)] != k}
+    tr = {sh for sh in FIELD if FOLD[well(sh)] != k} | out_train(k)
     m, n = fit(tr)
     MODELS.append((k, m))
     print(f"  фолд {k}: обучающих пар {n}")
-mA, n = fit(FIELD)
+mA, n = fit(FIELD | out_train())
 print(f"  модель на всём поле: обучающих пар {n}")
 rng = np.random.default_rng(0)
 OUT = {}

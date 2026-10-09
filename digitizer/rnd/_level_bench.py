@@ -38,6 +38,7 @@ ap.add_argument("--down", type=float, default=1.0, help="down_mult: удорож
 ap.add_argument("--med", type=int, default=0, help="медианный фильтр x трассы по строкам перед декодером (окно, 0 — нет)")
 ap.add_argument("--tag", default="")
 ap.add_argument("--fam-table", action="store_true")
+ap.add_argument("--sheets", default="", help="(build) §6.296: свой список листов (файл в --ts), набор «вне» вместо поля и сорта A")
 ap.add_argument("--cap", type=float, default=400.0)
 ap.add_argument("--lamt", type=float, default=50.0)
 ap.add_argument("--bias-px", type=float, default=0.01)
@@ -61,7 +62,7 @@ if a.cmd == "build":
     lst = lambda f: [l.strip() for l in (TS / f).read_text(encoding="utf-8").splitlines() if l.strip()]
     SRC = {q.name: q for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx")}
     CUR = []
-    for sn, f in (("поле", "wellmap_sheets.txt"), ("сорт A", "holdoutA_sheets.txt")):
+    for sn, f in ((("вне", a.sheets),) if a.sheets else (("поле", "wellmap_sheets.txt"), ("сорт A", "holdoutA_sheets.txt"))):
         for sh in lst(f):
             q = SRC.get(sh)
             if not q:

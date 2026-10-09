@@ -363,8 +363,19 @@ def main_train(a):
         for c in pickle.load(open(f, "rb"))["curves"]:
             if c is not None:
                 D.append(c)
+    n_main = len(D)
+    if a.data_extra:                                     # §6.296: кривые вне поля — после основных (индексы основных те же)
+        _sh = {c["sheet"] for c in D}
+        for f in sorted(Path(a.data_extra).glob("*.pkl")):
+            for c in pickle.load(open(f, "rb"))["curves"]:
+                if c is not None and c["sheet"] not in _sh:
+                    D.append(dict(c, set="вне"))
     field_wells = sorted({well(c["sheet"]) for c in D if c["set"] == "поле"})
     FOLD = {wl: i % a.folds for i, wl in enumerate(field_wells)}
+    HOLD_W = {well(c["sheet"]) for c in D if c["set"] == "сорт A"}
+    ox = [i for i, c in enumerate(D) if c["set"] == "вне" and well(c["sheet"]) not in HOLD_W]
+    out_train = lambda k=None: [i for i in ox if k is None or FOLD.get(well(D[i]["sheet"])) != k]
+    print(f"кривых вне поля в обучении: {len(ox)} из {len(D) - n_main}")
     nb = D[0]["ink"].shape[1]; NT = D[0]["tw"].shape[1]
     # склейка в общий массив позиций
     off = np.cumsum([0] + [len(c["P"]) for c in D])
@@ -523,13 +534,13 @@ def main_train(a):
         (SD / "level_ink_folds.json").write_text(_json.dumps(
             {D[i]["sheet"]: FOLD[well(D[i]["sheet"])] for i in fi}, ensure_ascii=False, indent=0), encoding="utf-8")
     for k in range(a.folds):
-        tr = [i for i in fi if FOLD[well(D[i]["sheet"])] != k]; te = [i for i in fi if FOLD[well(D[i]["sheet"])] == k]
+        tr = [i for i in fi if FOLD[well(D[i]["sheet"])] != k] + out_train(k); te = [i for i in fi if FOLD[well(D[i]["sheet"])] == k]
         nets = [fit(tr, f"фолд {k}, зерно {s_}", seed=1000 * k + s_) for s_ in range(a.seeds)]
         if SD:
             torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=k), SD / f"level_ink_f{k}.pt")
         PROB.update(predict(nets, te))
         print(f"  фолд {k}: обучение {len(tr)} кривых, проверка {len(te)}, моделей {len(nets)}; {time.time() - T0:.0f} с")
-    nets = [fit(fi, f"всё поле, зерно {s_}", seed=9000 + s_) for s_ in range(a.seeds)]
+    nets = [fit(fi + out_train(), f"всё поле, зерно {s_}", seed=9000 + s_) for s_ in range(a.seeds)]
     torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=None), a.model_out)
     if SD:
         torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=None), SD / "level_ink_all.pt")
@@ -599,6 +610,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--dil", default="1,2,4,8,16,32", help="расширения одного прохода (стек повторяется дважды)")
     ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле и карту лист → фолд")
+    ap.add_argument("--data-extra", default="", help="(train) §6.296: скан кривых ВНЕ поля и сорта A (каталог `scan --out`) — только в обучение: скважины сорта A исключены, скважины поля — по фолдам")
     ap.add_argument("--v4", action="store_true", help="§6.271: скан — длина вертикальных ранов и цвет туши; обучение — эти каналы")
     ap.add_argument("--vthr", type=int, default=100)
     ap.add_argument("--min-run", type=int, default=25)
