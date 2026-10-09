@@ -64,6 +64,14 @@ def style_along(rgb, gray, paper, ys, xs, P):
 
 
 def scan_sheet(job):
+    try:
+        return _scan_sheet(job)
+    except OSError as e:                                  # битый скан — лист пропускается
+        print(f"ПРОПУСК {job[0]}: {e}", flush=True)
+        return job[0], []
+
+
+def _scan_sheet(job):
     sheet, img, curves, P = job
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None

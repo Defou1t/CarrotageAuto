@@ -214,6 +214,14 @@ def v4_extra(res, rgb, gray, paper, P):
 
 
 def scan_sheet(job):
+    try:
+        return _scan_sheet(job)
+    except OSError as e:                                  # битый скан — лист пропускается
+        print(f"ПРОПУСК {job[0]}: {e}", flush=True)
+        return job[0], "пропуск", 0, 0.0
+
+
+def _scan_sheet(job):
     sheet, img, got, curves, P = job
     from PIL import Image
     from extract_nlgx import extract, NULL
