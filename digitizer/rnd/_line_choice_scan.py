@@ -42,6 +42,15 @@ def honest_d(ct, tc, gt, tg):
 
 
 def one(job):
+    """обёртка: битый скан или падение одного листа не роняет весь скан — лист пропускается с пометкой"""
+    try:
+        return _one(job)
+    except Exception as e:
+        print(f"  ПРОПУСК {job[0][:50]}: {type(e).__name__}: {str(e)[:120]}", flush=True)
+        return job[0], -1
+
+
+def _one(job):
     sh, tc_path, got, src, img, P = job
     outp = Path(P["out"]) / (hashlib.md5(sh.encode("utf-8")).hexdigest()[:16] + ".pkl")
     if outp.exists():
