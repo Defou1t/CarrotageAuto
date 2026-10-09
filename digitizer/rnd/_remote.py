@@ -204,6 +204,11 @@ def lp_busy(check_gpu=True):
     """★ 30.09 (правило заказчика «оставлять ресурсы на игры»): ноутбук занят для обучения, если он на батарее, если идёт
     игра (процесс из `steamapps\\common` или ArcheAge) или — до старта партии — GPU загружен кем-то другим > 30%.
     → причина или ''"""
+    # ★ 09.10 (решение заказчика): ВЫКЛЮЧАТЕЛЬ НОУТБУКА — файл на нём самом. Проверяется здесь, потому что `lp-busy`
+    #   исполняется на ноутбуке при каждом опросе: уже запущенный пул ПК слушается сразу, без перезапуска. SSH не трогает.
+    #   Включить обратно: `ssh Defou1tAsus "del F:\nds\remote\DISABLED"`.
+    if (RJOBS / "DISABLED").exists():
+        return "отключён заказчиком (F:\\nds\\remote\\DISABLED)"
     import psutil
     b = psutil.sensors_battery()
     if b is not None and not b.power_plugged:
@@ -375,9 +380,9 @@ def cmd_begin(a):
     if not a.allow_mixed:
         print("⛔ смешанный кэш ПК+ноутбук не равен кэшу ПК (декодер: AVX-512 против AVX2, 5 листов из 36 с иным счётом) — "
               "только ПК; осознанно — `--allow-mixed`"); return 1
-    c, out = ssh(f'if exist "{LP_PY}" if exist F:\\nds\\Auto echo READY', 20)
+    c, out = ssh(f'if exist "{LP_PY}" if exist F:\\nds\\Auto if not exist {RJOBS}\\DISABLED echo READY', 20)
     if "READY" not in out:
-        print(f"ноутбук {HOST}: {'нет связи' if c == 255 else 'не готов (нет F: или окружения)'} — только ПК"); return 1
+        print(f"ноутбук {HOST}: {'нет связи' if c == 255 else 'не готов или отключён (DISABLED)'} — только ПК"); return 1
     st = lp(f"lp-state --tag {a.tag}")
     if st.get("t") and (TS / f"remote_{a.tag}.pc.txt").exists():
         # перезапуск драйвера: задание уже роздано — раздачу не переигрываем, остаток заберёт `wait`

@@ -144,9 +144,10 @@ class Laptop:
     def ready(self, own=False):
         """→ '' если ноутбук можно нагружать, иначе причина"""
         import _remote as R
-        c, out = R.ssh(f'if exist "{R.LP_PY}" if exist F:\\nds\\Auto echo READY', 20)
+        # ★ 09.10: выключатель `F:\nds\remote\DISABLED` на ноутбуке (то же проверяет `lp-busy` — для уже идущего пула)
+        c, out = R.ssh(f'if exist "{R.LP_PY}" if exist F:\\nds\\Auto if not exist {R.RJOBS}\\DISABLED echo READY', 20)
         if "READY" not in out:
-            return "нет связи" if c == 255 else "не готов (нет F: или окружения)"
+            return "нет связи" if c == 255 else "не готов или отключён (F:\\nds\\remote\\DISABLED)"
         try:
             if not self.sync():                    # код ноутбука = код ПК (отпечаток), иначе ноутбук не нагружаем
                 return "код не сверен"
