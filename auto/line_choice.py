@@ -92,6 +92,28 @@ def available(spec):
     return resolve(spec) is not None
 
 
+class Bag:
+    """§6.297: ансамбль бустингов на подвыборках строк (разные зёрна, доля признаков) — P усредняется. Интерфейс sklearn
+    (fit / predict_proba), чтобы стенд и прод брали его вместо одного HistGradientBoostingClassifier."""
+
+    def __init__(self, make, n=5, frac=0.7):
+        self.make, self.n, self.frac = make, n, frac
+
+    def fit(self, X, y):
+        rng = np.random.default_rng(0)
+        self.ms = []
+        for s in range(self.n):
+            idx = rng.choice(len(y), size=max(1, int(self.frac * len(y))), replace=False)
+            m = self.make(s)
+            m.fit(X[idx], y[idx])
+            self.ms.append(m)
+        self.make = None                                   # фабрика не пиклится
+        return self
+
+    def predict_proba(self, X):
+        return np.mean([m.predict_proba(X) for m in self.ms], axis=0)
+
+
 def _load(path):
     key = str(path)
     if key not in _CACHE:

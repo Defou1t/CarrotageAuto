@@ -28,6 +28,7 @@ ap.add_argument("--save-dir", default="", help="(stack) модели обоих 
                 "точки сетки hung")
 ap.add_argument("--trace", default="", help="каталог `_line_choice_trace.py`: + признаки формы трассы (прямизна, размах, дрожание, "
                 "скачки, неизменный x)")
+ap.add_argument("--bag", type=int, default=1, help="§6.297: ансамбль из N бустингов на 70%% строк (зёрна, доля признаков 0.8)")
 ap.add_argument("--hgb", default="300,0.08,31,1.0,20", help="бустинг: итераций, шаг, листьев, l2, мин. в листе")
 ap.add_argument("--norm", default="", help="нормировка стиля внутри листа: z — добавить z-оценки толщины, темноты, цвета по "
                 "кандидатам листа; zonly — то же, абсолютные значения стиля убрать")
@@ -141,9 +142,16 @@ HGB = [float(v) for v in a.hgb.split(",")]
 
 
 def _hgb(cat):
-    return HistGradientBoostingClassifier(max_iter=int(HGB[0]), learning_rate=HGB[1], max_leaf_nodes=int(HGB[2]),
+    if a.bag > 1:
+        from auto.line_choice import Bag
+        return Bag(lambda s: _hgb1(cat, s, 0.8), n=a.bag)
+    return _hgb1(cat, 0, 1.0)
+
+
+def _hgb1(cat, seed, mf):
+    return HistGradientBoostingClassifier(max_features=mf, max_iter=int(HGB[0]), learning_rate=HGB[1], max_leaf_nodes=int(HGB[2]),
                                           l2_regularization=HGB[3], min_samples_leaf=int(HGB[4]), categorical_features=cat,
-                                          random_state=0)
+                                          random_state=seed)
 
 
 def fit(sheets):
