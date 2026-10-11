@@ -22,6 +22,7 @@ ap.add_argument("--ts", default=r"F:/nds/output/taskS")
 ap.add_argument("--taus", nargs="+", type=float, default=[0.5, 0.6, 0.7, 0.8])
 ap.add_argument("--folds", type=int, default=5)
 ap.add_argument("--extra-cache", default="", help="кэш `_level_bench` листов вне поля — только в обучение (скважины сорта A исключены)")
+ap.add_argument("--prior", default="", help="§6.301: кэш `_level_bench` (эталон вне поля) — приор log10 значений семейства; + признаки правдоподобия значения пробега при каждом k")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/level_runs.pkl")
 a = ap.parse_args()
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -101,7 +102,14 @@ def curve_runs(cv):
                 res_.append(np.nan); continue
             vp = val(ch[labs[j - 1]], np.median(tx[max(0, s_ - hd):s_]))
             res_.append(abs(val(ch[k], np.median(tx[s_:s_ + hd])) - vp) / r0)
-        F.append([K, np.log(max(1e-3, f)), shift, grp(cv["root"]), labs[j], labs[j - 1] if j > 0 else -1,
+        zk = []
+        pk = PRIOR.get(re.sub(r"^BKZ_", "", cv["root"])) if PRIOR else None
+        for k in range(KMAX):
+            if pk is None or k >= K:
+                zk.append(np.nan); continue
+            vm = val(ch[k], float(np.median(tx[s_:e_])))
+            zk.append((np.log10(vm) - pk[0]) / pk[1] if vm > 0 else -9.0)
+        F.append(zk + [K, np.log(max(1e-3, f)), shift, grp(cv["root"]), labs[j], labs[j - 1] if j > 0 else -1,
                   labs[j + 1] if j < len(st) - 1 else -1, j, len(st) - 1 - j, len(st), np.log1p(n), n / len(tx),
                   np.median(uu), np.percentile(uu, 10), np.percentile(uu, 90), np.mean(uu > 0.9), np.mean(uu < 0.1),
                   np.std(np.diff(uu)) if n > 2 else 0.0, jin, jout] + res_)
@@ -127,6 +135,20 @@ def relabel(R, newlabs):
 
 
 CUR = pickle.load(open(a.cache, "rb"))
+PRIOR = {}
+if a.prior:                                                   # §6.301: распределение log10 значений семейства по эталону вне поля
+    _acc = {}
+    for cv in pickle.load(open(a.prior, "rb")):
+        ch = cv["chain"]
+        if not ch:
+            continue
+        lt = np.minimum(seg_levels(cv["lt"], cv["gy"]), len(ch) - 1)
+        v = np.array([val(ch[l], x) for l, x in zip(lt[::25], cv["gx"][::25].astype(float))])
+        v = v[v > 0]
+        if len(v):
+            _acc.setdefault(re.sub(r"^BKZ_", "", cv["root"]), []).extend(np.log10(v).tolist())
+    PRIOR = {k: (float(np.median(v)), float(max(0.1, np.percentile(v, 75) - np.percentile(v, 25)))) for k, v in _acc.items() if len(v) >= 50}
+    print(f"приор: семейств {len(PRIOR)}")
 EXTRA = pickle.load(open(a.extra_cache, "rb")) if a.extra_cache else []
 SRC = {q.name: q for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx")}
 well = lambda sh: SRC[sh].parent.parent.name if sh in SRC else sh
@@ -147,7 +169,7 @@ CI = np.array([i for i, R in enumerate(CURVES) for _ in R["F"]])
 SET = np.array([CURVES[i]["set"] for i in CI]); WL = np.array([well(CURVES[i]["sheet"]) for i in CI])
 OUTL = np.array([l for R in CURVES for l in R["labs"]])
 print(f"кривых с цепочкой {len(CURVES)}, пробегов {len(Y)}; оракул ≠ выдаче у {int(((Y >= 0) & (Y != OUTL)).sum())}")
-CAT = [3]
+CAT = [3 + (KMAX if a.prior else 0)]
 
 
 def fit(mask):

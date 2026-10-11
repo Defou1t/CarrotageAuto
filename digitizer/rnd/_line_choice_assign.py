@@ -28,6 +28,7 @@ ap.add_argument("--save-dir", default="", help="(stack) модели обоих 
                 "точки сетки hung")
 ap.add_argument("--trace", default="", help="каталог `_line_choice_trace.py`: + признаки формы трассы (прямизна, размах, дрожание, "
                 "скачки, неизменный x)")
+ap.add_argument("--bag-frac", type=float, default=0.7, help="§6.301: доля строк в подвыборке ансамбля")
 ap.add_argument("--bag", type=int, default=1, help="§6.297: ансамбль из N бустингов на 70%% строк (зёрна, доля признаков 0.8)")
 ap.add_argument("--hgb", default="300,0.08,31,1.0,20", help="бустинг: итераций, шаг, листьев, l2, мин. в листе")
 ap.add_argument("--norm", default="", help="нормировка стиля внутри листа: z — добавить z-оценки толщины, темноты, цвета по "
@@ -42,6 +43,7 @@ ap.add_argument("--extra", action="store_true", help="+ признаки: width_
 ap.add_argument("--feat", default="all", choices=["all", "nocur", "mix", "stack"],
                 help="nocur — без признаков отношения к нынешней раскладке (here, elsewhere, разницы с нынешним); mix — среднее P двух моделей; "
                      "stack — второй ярус: исходные признаки + P обеих моделей (вне фолда, вложенно) + конкуренция за кандидата между слотами")
+ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -144,7 +146,7 @@ HGB = [float(v) for v in a.hgb.split(",")]
 def _hgb(cat):
     if a.bag > 1:
         from auto.line_choice import Bag
-        return Bag(lambda s: _hgb1(cat, s, 0.8), n=a.bag)
+        return Bag(lambda s: _hgb1(cat, s, 0.8), n=a.bag, frac=a.bag_frac)
     return _hgb1(cat, 0, 1.0)
 
 
@@ -385,6 +387,45 @@ for g in a.grid:
             D[sh] += after - before
             SW.append(dict(sheet=sh, slot=s["name"], before=bool(before), after=bool(after), empty=c is None))
     RES[g] = SW; ALLCH[g] = AC
+    if a.miss:                                            # §6.301: почему честный кандидат не встал
+        M = Counter(); RK = Counter()
+        for sh, by in BY.items():
+            if sh in OUT or sh not in FIELD:
+                continue
+            rec = RECD[sh]; cl = clusters(rec["cands"]); ch = solve(rec, by, mode, tau, dlt)
+            fin = {}
+            for si, idx in by.items():
+                cur_ = next((cl[ROWS[i][2]] for i in idx if ROWS[i][5]), None)
+                fin[si] = ch.get(si, cur_)
+            hon = {si: {cl[ROWS[i][2]] for i in idx if ROWS[i][4]} for si, idx in by.items()}
+            owner = defaultdict(list)
+            for si, c in fin.items():
+                if c is not None:
+                    owner[c].append(si)
+            for si, idx in by.items():
+                if not rec["slots"][si]["has_truth"] or not hon[si] or fin[si] in hon[si]:
+                    continue
+                ph = max(P[i] for i in idx if ROWS[i][4]); pb = max(P[i] for i in idx)
+                rk = 1 + sum(1 for c in {cl[ROWS[i][2]] for i in idx} if max(P[i] for i in idx if cl[ROWS[i][2]] == c) > ph)
+                RK[min(rk, 4)] += 1
+                took = any(owner.get(c) for c in hon[si])
+                c = fin[si]
+                if c is None:
+                    cat = "слот пуст"
+                elif any(c in hon[s2] for s2 in by if s2 != si):
+                    cat = "стоит трасса, честная для ДРУГОГО слота"
+                else:
+                    cat = "стоит трасса, ни для кого не честная"
+                M[(cat, "честную забрал другой слот" if took else "честная свободна", "P честной < τ" if ph < tau else "P честной ≥ τ")] += 1
+                # взаимный обмен: честная этого слота стоит в слоте s2, а в этом слоте — честная для s2
+                for c_h in hon[si]:
+                    for s2 in owner.get(c_h, []):
+                        if s2 != si and fin[si] is not None and fin[si] in hon.get(s2, set()):
+                            M[("  ↳ из них взаимный обмен двух слотов", rec["slots"][si]["root"] + "↔" + rec["slots"][s2]["root"], "")] += 1
+        print(f"\n★ {g}: разбор промахов поля ({sum(M.values())} слотов с честным кандидатом, нечестных после назначения)")
+        for k_, v_ in M.most_common():
+            print(f"   {v_:5d}  {' | '.join(k_)}")
+        print(f"   ранг честной по P среди кластеров слота: {dict(sorted(RK.items()))} (4 = 4 и ниже)")
     for sn, S in (("поле", FIELD), ("сорт A", HOLD)):
         d = np.array([D.get(x, 0) for x in S]); nzv = d[d != 0]
         p = float(np.mean(np.abs((rng.choice([-1, 1], size=(20000, len(nzv))) * nzv).sum(1)) >= abs(d.sum()))) if len(nzv) else 1.0
