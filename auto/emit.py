@@ -330,7 +330,7 @@ def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name,
     if gray is None or rgb is None:
         return
     paper = LI.paper_of(gray)
-    entries = []
+    entries = []; chains = {}
     for c in model.get("curves", []):
         name = c["name"]
         if name not in mapping or meta_mod.mnem_root(name) == "DA":
@@ -343,11 +343,23 @@ def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name,
             ty, tx = LI.dense_rows(top_y, new_xs, NULL)
             if len(ty):
                 st = NS.style_along(rgb, gray, paper, ty[::8], tx[::8])
+                if st is not None and NS.wants_vals(spec, sheet_name):     # §6.299: значения — уровни декодера под этим именем
+                    import decode_levels as DL
+                    chains[name] = DL.build_family(model, c)
+                    tops, bots, levs = _level_segments(tr, model, c, top_y, n, gray=get_gray() if _is_mbk_name(name) else None)
+                    lv = np.zeros(len(ty), np.int16)
+                    for t0, t1, l in zip(tops, bots, levs):
+                        if l:
+                            lv[(ty >= t0) & (ty <= t1)] = l
+                    st = dict(st, _px=(np.asarray(ty, np.int64), np.asarray(tx, np.float64), lv))
+        elif NS.wants_vals(spec, sheet_name):
+            import decode_levels as DL
+            chains[name] = DL.build_family(model, c)
         entries.append((name, _slot_track(model, c, frame), st))
     path = NS.resolve(spec, sheet=sheet_name)
     if path is None:
         return
-    sw = NS.swaps(entries, sheet_name, path, meta_mod.mnem_root)
+    sw = NS.swaps(entries, sheet_name, path, meta_mod.mnem_root, chains=chains)
     for A, B, p in sw:
         mapping[A], mapping[B] = mapping[B], mapping[A]
     if sw:

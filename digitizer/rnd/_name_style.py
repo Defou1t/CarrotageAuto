@@ -30,6 +30,7 @@ ap.add_argument("--rough", action="store_true", help="§6.276: + извилис�
 ap.add_argument("--rough-robust", action="store_true", help="§6.277: извилистость устойчивая (окна без скачков, медиана)")
 ap.add_argument("--cache", default=r"F:/nds/output/taskS/level_bench.pkl")
 ap.add_argument("--style-extra", default="", help="§6.296: скан стиля листов ВНЕ поля и сорта A — только в обучение (скважины сорта A исключены, скважины поля — по фолдам)")
+ap.add_argument("--vals", action="store_true", help="§6.299: + порядок значений пары (доля строк, где кривая под A выше кривой под B, при этом назначении и при перестановке; значения — по шкалам и уровням назначенных имён)")
 ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле, словарь семейств и карту лист → фолд")
 a = ap.parse_args()
 TS = Path(a.ts)
@@ -110,6 +111,9 @@ def rough(x):
     return float(np.mean(np.abs(x - s_)) / max(5.0, rng_))
 
 
+ST_PRE = {(r["sheet"], r["name"]): r for r in R}
+
+
 def feat(tx, ty, A, B, sh):
     """признаки упорядоченной пары: кривая со стилем tx названа A, со стилем ty — B"""
     if a.rough:
@@ -119,9 +123,53 @@ def feat(tx, ty, A, B, sh):
         extra = []
     return extra + [tx["width"], ty["width"], tx["width"] - ty["width"], tx["c1"], tx["c2"], ty["c1"], ty["c2"],
             tx["c1"] - ty["c1"], tx["c2"] - ty["c2"], tx["dark"], ty["dark"], tx["gap"], ty["gap"],
-            hue(tx), hue(ty), fcode(A), fcode(B), probe(A), probe(B), probe(A) - probe(B), decade(sh)]
+            hue(tx), hue(ty), fcode(A), fcode(B), probe(A), probe(B), probe(A) - probe(B), decade(sh)] + (vals_feat(tx, ty, A, B, sh) if a.vals else [])
 
 
+def _vals(px, name, sh):
+    ch = CH.get((sh, name))
+    if px is None or not ch:
+        return None
+    ys, xs, lv = px
+    v = np.empty(len(xs))
+    for k in np.unique(lv):
+        m = lv == k; c_ = ch[min(int(k), len(ch) - 1)]
+        v[m] = c_["v_left"] + (xs[m] - c_["x_left"]) * (c_["v_right"] - c_["v_left"]) / ((c_["x_right"] - c_["x_left"]) or 1)
+    return ys, v
+
+
+def _gt(px1, n1, px2, n2, sh):
+    a1, a2 = _vals(px1, n1, sh), _vals(px2, n2, sh)
+    if a1 is None or a2 is None:
+        return np.nan
+    com, i1, i2 = np.intersect1d(a1[0], a2[0], return_indices=True)
+    return float(np.mean(a1[1][i1] > a2[1][i2])) if len(com) >= 50 else np.nan
+
+
+def vals_feat(tx, ty, A, B, sh):
+    """§6.299: кривая со стилем tx названа A, ty — B: доля строк vA(x) > vB(y) и при перестановке vA(y) > vB(x)"""
+    px, py = tx.get("_px"), ty.get("_px")
+    f1 = _gt(px, A, py, B, sh); f2 = _gt(py, A, px, B, sh)
+    return [f1, f2, f1 - f2 if np.isfinite(f1) and np.isfinite(f2) else np.nan]
+
+
+CH = {}
+if a.vals:                                                   # §6.299: пиксели, уровни и цепочки шкал из кэша
+    for cv in pickle.load(open(a.cache, "rb")):
+        r = ST_PRE.get((cv["sheet"], cv["name"]))
+        if r is None:
+            continue
+        CH[(cv["sheet"], cv["name"])] = cv["chain"]
+        def _lv(segs, rows):
+            o = np.zeros(len(rows), np.int16)
+            for y0, y1, l in segs or []:
+                if l:
+                    o[(rows >= y0) & (rows <= y1)] = l
+            return o
+        if r["truth"] is not None:
+            r["truth"] = dict(r["truth"], _px=(cv["gy"].astype(np.int64), cv["gx"].astype(np.float64), _lv(cv["lt"], cv["gy"])))
+        if r["out"] is not None and len(cv["ty"]):
+            r["out"] = dict(r["out"], _px=(cv["ty"].astype(np.int64), cv["tx"].astype(np.float64), _lv(cv["lw"], cv["ty"])))
 CAT = [13, 14, 15, 16]                                      # индексы категориальных признаков (оттенки, семейства)
 if a.rough:
     CAT = [c + 3 for c in CAT]                               # три признака извилистости — в начале
@@ -248,7 +296,7 @@ pickle.dump(OUT, open(a.dump, "wb"))
 if a.save_dir:
     import json
     sd = Path(a.save_dir); sd.mkdir(parents=True, exist_ok=True)
-    meta = dict(fams=dict(FAMS), cat=CAT, thr=60, step=8, tau=max(a.taus))
+    meta = dict(fams=dict(FAMS), cat=CAT, thr=60, step=8, tau=max(a.taus), vals=bool(a.vals))
     for k, m in MODELS:
         pickle.dump(dict(meta, model=m, fold=k), open(sd / f"name_style_f{k}.pkl", "wb"))
     pickle.dump(dict(meta, model=mA, fold=None), open(sd / "name_style_all.pkl", "wb"))

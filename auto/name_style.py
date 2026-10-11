@@ -95,14 +95,42 @@ def _hue(t):
     return 4
 
 
-def feat(tx, ty, A, B, sheet, fams, root_of):
-    """признаки упорядоченной пары — ТО ЖЕ, что `_name_style.feat` (семейство — код из словаря модели; новое — новый код)"""
+def feat(tx, ty, A, B, sheet, fams, root_of, chains=None):
+    """признаки упорядоченной пары — ТО ЖЕ, что `_name_style.feat` (семейство — код из словаря модели; новое — новый код);
+    chains (имя → цепочка шкал) — §6.299: + порядок значений пары (`vals_feat`)"""
     def fcode(name):
         f = re.sub(r"^BKZ_", "", root_of(name))
         return fams.setdefault(f, len(fams))
     return [tx["width"], ty["width"], tx["width"] - ty["width"], tx["c1"], tx["c2"], ty["c1"], ty["c2"],
             tx["c1"] - ty["c1"], tx["c2"] - ty["c2"], tx["dark"], ty["dark"], tx["gap"], ty["gap"],
-            _hue(tx), _hue(ty), fcode(A), fcode(B), _probe(A), _probe(B), _probe(A) - _probe(B), _decade(sheet)]
+            _hue(tx), _hue(ty), fcode(A), fcode(B), _probe(A), _probe(B), _probe(A) - _probe(B), _decade(sheet)] +         (vals_feat(tx, ty, A, B, chains) if chains is not None else [])
+
+
+def _vals(px, ch):
+    if px is None or not ch:
+        return None
+    ys, xs, lv = px
+    v = np.empty(len(xs))
+    for k in np.unique(lv):
+        m = lv == k; c_ = ch[min(int(k), len(ch) - 1)]
+        v[m] = c_["v_left"] + (xs[m] - c_["x_left"]) * (c_["v_right"] - c_["v_left"]) / ((c_["x_right"] - c_["x_left"]) or 1)
+    return ys, v
+
+
+def _gt(px1, ch1, px2, ch2):
+    a1, a2 = _vals(px1, ch1), _vals(px2, ch2)
+    if a1 is None or a2 is None:
+        return np.nan
+    com, i1, i2 = np.intersect1d(a1[0], a2[0], return_indices=True)
+    return float(np.mean(a1[1][i1] > a2[1][i2])) if len(com) >= 50 else np.nan
+
+
+def vals_feat(tx, ty, A, B, chains):
+    """§6.299 — ТО ЖЕ, что `_name_style.vals_feat`: кривая со стилем tx названа A, ty — B (в стиле `_px` = строки, x, уровни
+    декодера под нынешним именем кривой): доля строк vA(x) > vB(y), при перестановке vA(y) > vB(x) и их разность"""
+    px, py = tx.get("_px"), ty.get("_px")
+    f1 = _gt(px, chains.get(A), py, chains.get(B)); f2 = _gt(py, chains.get(A), px, chains.get(B))
+    return [f1, f2, f1 - f2 if np.isfinite(f1) and np.isfinite(f2) else np.nan]
 
 
 def resolve(spec, sheet=None):
@@ -134,6 +162,12 @@ def available(spec):
     return resolve(spec) is not None
 
 
+def wants_vals(spec, sheet=None):
+    """§6.299: модель учена с порядком значений пары — прогону имён нужны уровни и цепочки шкал"""
+    p = resolve(spec, sheet=sheet)
+    return bool(p is not None and _load(p).get("vals"))
+
+
 def _load(path):
     key = str(path)
     if key not in _CACHE:
@@ -142,9 +176,11 @@ def _load(path):
     return _CACHE[key]
 
 
-def swaps(entries, sheet, path, root_of, tau=None):
-    """entries — [(имя, трек, стиль)] (стиль None — кривая не участвует) → [(A, B, P)] перестановок имён"""
+def swaps(entries, sheet, path, root_of, tau=None, chains=None):
+    """entries — [(имя, трек, стиль)] (стиль None — кривая не участвует) → [(A, B, P)] перестановок имён;
+    chains — имя → цепочка шкал (нужна модели с `vals`)"""
     ck = _load(path)
+    chains = (chains or {}) if ck.get("vals") else None
     model, fams = ck["model"], dict(ck["fams"])
     tau = ck["tau"] if tau is None else tau
     by = {}
@@ -157,7 +193,7 @@ def swaps(entries, sheet, path, root_of, tau=None):
         for i in range(len(L)):
             for j in range(i + 1, len(L)):
                 A, sa = L[i]; B, sb = L[j]
-                p = float(model.predict_proba(np.array([feat(sa, sb, A, B, sheet, fams, root_of)], float))[0, 1])
+                p = float(model.predict_proba(np.array([feat(sa, sb, A, B, sheet, fams, root_of, chains)], float))[0, 1])
                 if p < 1 - tau:
                     cand.append((p, A, B))
         used = set()
