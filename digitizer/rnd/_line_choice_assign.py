@@ -43,6 +43,8 @@ ap.add_argument("--extra", action="store_true", help="+ признаки: width_
 ap.add_argument("--feat", default="all", choices=["all", "nocur", "mix", "stack"],
                 help="nocur — без признаков отношения к нынешней раскладке (here, elsewhere, разницы с нынешним); mix — среднее P двух моделей; "
                      "stack — второй ярус: исходные признаки + P обеих моделей (вне фолда, вложенно) + конкуренция за кандидата между слотами")
+ap.add_argument("--pairwise", action="store_true", help="§6.302: + признак второго яруса — доля побед кандидата в парах внутри слота (парная модель по разностям признаков, вложенно вне фолда)")
+ap.add_argument("--prod-all", action="store_true", help="§6.302: модель на всём (line_choice_all) — ещё и на сорте A; только для прода")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -271,6 +273,57 @@ def cross(p, sheets):
     return F
 
 
+def _slot_groups(sheets):
+    g = defaultdict(list)
+    for sh in sheets:
+        for i in ROWS_OF.get(sh, []):
+            g[(sh, ROWS[i][1])].append(i)
+    return list(g.values())
+
+
+def pw_fit(sheets, cols):
+    """§6.302: парная модель «i честнее j» по разностям признаков (пары честный × нечестный внутри слота, до 30 на слот)"""
+    rs = np.random.default_rng(0); XP, YP = [], []
+    for idx in _slot_groups(sheets):
+        pos = [i for i in idx if Y[i] == 1]; neg = [i for i in idx if Y[i] == 0]
+        pr = [(i, j) for i in pos for j in neg]
+        if not pr:
+            continue
+        if len(pr) > 30:
+            pr = [pr[t] for t in rs.choice(len(pr), 30, replace=False)]
+        for i, j in pr:
+            d = X_ALL[i, cols] - X_ALL[j, cols]
+            XP.append(d); YP.append(1); XP.append(-d); YP.append(0)
+    m = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.08, max_leaf_nodes=31, l2_regularization=1.0,
+                                       min_samples_leaf=20, random_state=0)
+    m.fit(np.array(XP), np.array(YP))
+    return m
+
+
+def pw_score(m, sheets, cols, out):
+    """доля побед строки над остальными кандидатами слота"""
+    for idx in _slot_groups(sheets):
+        if len(idx) < 2:
+            out[idx] = 0.5; continue
+        A = X_ALL[idx][:, cols]
+        D = (A[:, None, :] - A[None, :, :]).reshape(-1, len(cols))
+        pp = m.predict_proba(D)[:, 1].reshape(len(idx), len(idx))
+        np.fill_diagonal(pp, np.nan)
+        out[idx] = np.nanmean(pp, 1)
+
+
+PWC = [j for j in range(X_ALL.shape[1]) if j not in (12, 13, 14)]   # без категориальных кодов (семейство, зонд, десятилетие)
+
+
+def pw_oof(sheets, nf):
+    ws = sorted({well(x) for x in sheets}); fo = {w: i % nf for i, w in enumerate(ws)}
+    out = np.full(len(ROWS), np.nan)
+    for k in range(nf):
+        m = pw_fit([x for x in sheets if fo[well(x)] != k], PWC)
+        pw_score(m, [x for x in sheets if fo[well(x)] == k], PWC, out)
+    return out
+
+
 def stage2(train_sheets, test_sheets, nf_inner):
     pa = s1_oof(train_sheets, ALLC, nf_inner); pn = s1_oof(train_sheets, NOCUR, nf_inner)
     trl = rows_in(train_sheets, True); te = rows_in(test_sheets)
@@ -279,6 +332,10 @@ def stage2(train_sheets, test_sheets, nf_inner):
     pn[te] = mn.predict_proba(X_ALL[te][:, NOCUR])[:, 1]
     Fx = cross(0.5 * (pa + pn), list(train_sheets) + list(test_sheets))
     X2 = np.hstack([X_ALL, pa[:, None], pn[:, None], Fx])
+    if a.pairwise:                                       # §6.302: вложенно — обучение по внутренним фолдам, проверка моделью на всём обучении
+        pw = pw_oof(train_sheets, nf_inner)
+        pw_score(pw_fit(train_sheets, PWC), test_sheets, PWC, pw)
+        X2 = np.hstack([X2, pw[:, None]])
     m2 = fit_idx(trl, X2)
     return m2.predict_proba(X2[te])[:, 1], te, (ma, mn, m2)
 
@@ -299,7 +356,12 @@ else:
                                    a.folds - 1)
         P[te] = p2
         print(f"  второй ярус: фолд {k} готов")
-    p2, te, MODELS[None] = stage2(fs + sorted(out_train()), [x for x in ROWS_OF if x in HOLD], a.folds)
+    if a.prod_all:                                       # §6.302: модель ТОЛЬКО для прода — ещё и сорт A с листами его скважин (сорт A тогда «свой»)
+        _all = fs + sorted(out_train()) + [x for x in ROWS_OF if x in HOLD] + sorted(x for x in OUT if well(x) in HOLD_W)
+        p2, te, MODELS[None] = stage2(sorted(set(_all)), [x for x in ROWS_OF if x in HOLD], a.folds)
+        print("⚠ --prod-all: модель на всём учена и на сорте A — его цифры ниже НЕ вне выборки")
+    else:
+        p2, te, MODELS[None] = stage2(fs + sorted(out_train()), [x for x in ROWS_OF if x in HOLD], a.folds)
     P[te] = p2
 print(f"листов {len(RECS)}, пар {len(ROWS)}; P посчитаны вне фолда")
 
