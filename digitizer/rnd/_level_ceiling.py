@@ -19,6 +19,8 @@ import numpy as np
 ap = argparse.ArgumentParser()
 ap.add_argument("--cache", default=r"F:/nds/output/taskS/level_bench_nslx4.pkl")
 ap.add_argument("--pen", nargs="+", type=float, default=[5.0, 20.0])
+ap.add_argument("--jump", type=float, default=0.4, help="§6.304: разворот — |Δx| ≥ этой доли ширины полосы за ≤ 10 строк")
+ap.add_argument("--edge", type=float, default=0.85, help="§6.304: разворот — перед прыжком трасса у края (u ≥ edge / ≤ 1 − edge)")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/level_ceiling.pkl")
 a = ap.parse_args()
 
@@ -39,6 +41,31 @@ def pix(s, v):
     return s["x_left"] + (v - s["v_left"]) * (s["x_right"] - s["x_left"]) / ((s["v_right"] - s["v_left"]) or 1)
 
 
+def wrap_levels(cv, K):
+    """§6.304 (заказчик 13.10): уровень по направлению разворотов трассы — ушла за правый край и появилась левее (Δx < 0) — +1,
+    обратный разворот (Δx > 0) — −1; старт — так, чтобы уровень нигде не был < 0. → (уровни по строкам трассы, есть ли развороты)"""
+    ty, tx, ch = cv["ty"], cv["tx"].astype(np.float64), cv["chain"]
+    xl = min(min(s["x_left"], s["x_right"]) for s in ch); xr = max(max(s["x_left"], s["x_right"]) for s in ch)
+    W = max(1.0, xr - xl)
+    d = np.zeros(len(ty), np.int16)
+    if len(ty) > 1:
+        dy = np.diff(ty); dx = np.diff(tx)
+        J = np.flatnonzero((dy <= 10) & (np.abs(dx) >= a.jump * W))
+        u = (tx - xl) / W
+        for j in J:
+            ub = np.median(u[max(0, j - 4):j + 1]); ua = np.median(u[j + 1:j + 21])
+            if len(u[j + 1:j + 21]) < 20:
+                continue
+            if dx[j] < 0 and ub >= a.edge and ua <= 0.5:
+                d[j + 1] = 1                                   # ушла за правый край — появилась левее: уровень вверх
+            elif dx[j] > 0 and ub <= 1 - a.edge and ua >= 0.5:
+                d[j + 1] = -1                                  # обратный разворот
+
+    cum = np.cumsum(d)
+    lev = cum - min(0, int(cum.min()))
+    return np.clip(lev, 0, K - 1).astype(np.int16), bool(np.any(d != 0))
+
+
 def viterbi(bad, pen):
     K, n = bad.shape
     cost = bad[:, 0].astype(np.float64).copy(); bp = np.zeros((K, n), np.int16)
@@ -54,7 +81,7 @@ def viterbi(bad, pen):
 
 
 CUR = pickle.load(open(a.cache, "rb"))
-VAR = ["выдача", "метки отрезков", "непрерывность", "вып. ИЛИ непр.", "одна метка"] + [f"Витерби {p:g}" for p in a.pen] + ["оракул по строкам"]
+VAR = ["выдача", "развороты", "выдача + старт по разворотам", "метки отрезков", "непрерывность", "вып. ИЛИ непр.", "одна метка"] + [f"Витерби {p:g}" for p in a.pen] + ["оракул по строкам"]
 C = Counter(); OUT = []
 for cv in CUR:
     gy, gx, ty, tx, ch = cv["gy"], cv["gx"], cv["ty"], cv["tx"], cv["chain"]
@@ -84,6 +111,16 @@ for cv in CUR:
         for s_, e_ in zip(st, en):
             lev[s_:e_] = int(np.argmin(bad[:, s_:e_].sum(1)))
         res["метки отрезков"] = hon(lev)
+        wl, has_w = wrap_levels(cv, K)
+        wl_c = wl[it]                                          # на общих строках
+        res["развороты"] = hon(wl_c)
+        # гибрид: уровни выдачи, но до первого разворота — стартовый уровень по правилу
+        hyb = np.minimum(lw, K - 1).copy()
+        if has_w:
+            fj = int(np.flatnonzero(np.diff(np.concatenate([[wl[0]], wl])) != 0)[0]) if np.any(np.diff(wl) != 0) else len(wl)
+            y_fj = cv["ty"][min(fj, len(wl) - 1)]
+            hyb[com < y_fj] = wl[0]
+        res["выдача + старт по разворотам"] = hon(hyb)
         # непрерывность значения: якорь — самый длинный пробег с уровнем выдачи; соседние пробеги — k с ближайшим значением
         # на стыке (медианы 10 крайних строк), в долях диапазона шкалы 0
         rng0 = abs(ch[0]["v_right"] - ch[0]["v_left"]) or 1.0

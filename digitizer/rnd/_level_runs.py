@@ -23,6 +23,7 @@ ap.add_argument("--taus", nargs="+", type=float, default=[0.5, 0.6, 0.7, 0.8])
 ap.add_argument("--folds", type=int, default=5)
 ap.add_argument("--extra-cache", default="", help="кэш `_level_bench` листов вне поля — только в обучение (скважины сорта A исключены)")
 ap.add_argument("--prior", default="", help="§6.301: кэш `_level_bench` (эталон вне поля) — приор log10 значений семейства; + признаки правдоподобия значения пробега при каждом k")
+ap.add_argument("--sib", action="store_true", help="§6.304: + признаки соседей — |log10 значения пробега при k − log10 медианы значений других резистивных кривых листа (уровни выдачи)| по каждому k")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/level_runs.pkl")
 a = ap.parse_args()
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -60,6 +61,38 @@ def pix(s, v):
 
 
 KMAX = 4
+
+
+SIB = {}                                                      # §6.304: лист → [(строки, значения выдачи)] резистивных кривых
+RESF = {"GZ", "OGZ", "PZ", "BK", "MBK", "IK", "IKA", "IKR", "MGZ", "MPZ", "BMK"}
+
+
+def _out_vals(cv):
+    ch = cv["chain"]
+    if not ch or not len(cv["ty"]):
+        return None
+    lw = np.minimum(seg_levels(cv["lw"], cv["ty"]), len(ch) - 1)
+    v = np.array([val(ch[l], x) for l, x in zip(lw, cv["tx"].astype(float))])
+    return cv["ty"], v
+
+
+def sib_feat(cv, s_, e_, ch, K):
+    """по каждому k: |log10 v_k(медиана x пробега) − log10 медиана значений соседей на строках пробега|"""
+    ty = cv["ty"]; y0, y1 = ty[s_], ty[e_ - 1]
+    ref = []
+    for (nm, (ys, vs)) in SIB.get(cv["sheet"], []):
+        if nm == cv["name"]:
+            continue
+        m = (ys >= y0) & (ys <= y1) & (vs > 0)
+        if m.sum() >= 15:
+            ref.append(np.median(vs[m]))
+    out = []
+    for k in range(KMAX):
+        if not ref or k >= K:
+            out.append(np.nan); continue
+        vk = val(ch[k], float(np.median(cv["tx"][s_:e_])))
+        out.append(abs(np.log10(vk) - np.log10(np.median(ref))) if vk > 0 else 9.0)
+    return out
 
 
 def curve_runs(cv):
@@ -109,6 +142,8 @@ def curve_runs(cv):
                 zk.append(np.nan); continue
             vm = val(ch[k], float(np.median(tx[s_:e_])))
             zk.append((np.log10(vm) - pk[0]) / pk[1] if vm > 0 else -9.0)
+        if a.sib:
+            zk = zk + sib_feat(cv, s_, e_, ch, K)
         F.append(zk + [K, np.log(max(1e-3, f)), shift, grp(cv["root"]), labs[j], labs[j - 1] if j > 0 else -1,
                   labs[j + 1] if j < len(st) - 1 else -1, j, len(st) - 1 - j, len(st), np.log1p(n), n / len(tx),
                   np.median(uu), np.percentile(uu, 10), np.percentile(uu, 90), np.mean(uu > 0.9), np.mean(uu < 0.1),
@@ -152,6 +187,12 @@ if a.prior:                                                   # §6.301: рас�
 EXTRA = pickle.load(open(a.extra_cache, "rb")) if a.extra_cache else []
 SRC = {q.name: q for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx")}
 well = lambda sh: SRC[sh].parent.parent.name if sh in SRC else sh
+if a.sib:
+    for cv in CUR + EXTRA:
+        if re.sub(r"^BKZ_", "", cv["root"]) in RESF:
+            ov = _out_vals(cv)
+            if ov is not None:
+                SIB.setdefault(cv["sheet"], []).append((cv["name"], ov))
 CURVES = []
 for cv in CUR + EXTRA:
     R = curve_runs(cv)
@@ -169,7 +210,7 @@ CI = np.array([i for i, R in enumerate(CURVES) for _ in R["F"]])
 SET = np.array([CURVES[i]["set"] for i in CI]); WL = np.array([well(CURVES[i]["sheet"]) for i in CI])
 OUTL = np.array([l for R in CURVES for l in R["labs"]])
 print(f"кривых с цепочкой {len(CURVES)}, пробегов {len(Y)}; оракул ≠ выдаче у {int(((Y >= 0) & (Y != OUTL)).sum())}")
-CAT = [3 + (KMAX if a.prior else 0)]
+CAT = [3 + KMAX + (KMAX if a.sib else 0)]               # приор — всегда KMAX столбцов (NaN без --prior)
 
 
 def fit(mask):
