@@ -383,6 +383,21 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             out.append(tr)
         return out
 
+    _dd = getattr(p, "rowdec_peak_dump", "") or ""
+    if _dd:                                                 # ★ 13.10 (§6.305): пики карты (≥ 0.2·max строки) для стенда ведения
+        import pickle as _pk
+        from pathlib import Path as _P
+        rows_ = []
+        for i in range(prob.shape[0]):
+            row = prob[i]; mx_ = float(row.max())
+            idx = np.where((row >= 0.2 * mx_) & (row >= np.roll(row, 1)) & (row >= np.roll(row, -1)))[0]
+            if len(idx) > 12 * k:
+                idx = np.sort(idx[np.argsort(row[idx])[-12 * k:]])
+            rows_.append((mx_, idx.astype(np.int16), row[idx].astype(np.float16),
+                          embs[:, i, idx].T.astype(np.float16) if k >= emb_min_k else None))
+        _P(_dd).mkdir(parents=True, exist_ok=True)
+        _pk.dump(dict(stem=_DUMP_CTX[0], ti=_DUMP_CTX[1], k=k, y0=y0, x0=x0, Wb=Wb, wjump=wjump, wemb=wemb, emb_min_k=emb_min_k,
+                      pthr=pthr, rows=rows_), open(_P(_dd) / f"{_DUMP_CTX[0][:60]}_t{_DUMP_CTX[1]}.pkl", "wb"), protocol=4)
     out = _paths(pthr)
     if extra_thr is not None and extra_out is not None:      # §6.287: доп. пороги по той же карте (один или список)
         for _t in (extra_thr if isinstance(extra_thr, (list, tuple)) else [extra_thr]):
@@ -397,6 +412,9 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                 xs = np.fromiter(tr.values(), np.float64, len(tr)).astype(np.int64) - x0
                 conf_out[id(tr)] = float(np.median(prob[ys, xs]))
     return out
+
+
+_DUMP_CTX = ("", 0)            # §6.305: (лист, трек) для `rowdec_peak_dump`
 
 
 class _Trs(list):
@@ -595,6 +613,8 @@ def trace_auto(rgb, sheet, p):
         #   ДРУГОЙ нарисованной линии (> 50 px) — лишняя линия трека, которой нет в эталоне, забирает путь.
         K += int(getattr(p, "rowdec_k_plus", 0) or 0)
         ext = [] if xthr else None
+        global _DUMP_CTX
+        _DUMP_CTX = (getattr(getattr(sheet, "meta", None), "raw_stem", "") or "", ti)      # §6.305: подпись выгрузки пиков
         trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext)
         out.extend(_pair(trs, lines, ti))
         for _j, _e in enumerate(ext or []):       # §6.287: пути доп. порогов — та же привязка к линиям
