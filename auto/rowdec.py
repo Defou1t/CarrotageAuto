@@ -225,7 +225,7 @@ def ink_color(rgb, p, tr, step=8, halfw=3, min_rows=8):
 
 
 def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.0, conf_out=None, extra_thr=None,
-                extra_out=None):
+                extra_out=None, extra_inert=None):
     """→ list[{row: x}] длиной k: траектории кривых трека в координатах ЛИСТА.
     §6.287: `extra_thr` — второй порог пиков по той же карте (сеть не пересчитывается); его k траекторий — в `extra_out`."""
     import torch
@@ -305,7 +305,9 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     pthr = 0.6 if _v is None else float(_v)      # ⚠ не `or 0.6`: 0.0 («все пики») превращался бы в 0.6
     wemb = float(getattr(p, "rowdec_emb_w", wemb) if getattr(p, "rowdec_emb_w", None) is not None else wemb)
 
-    def _paths(pthr):
+    def _paths(pthr, inert=False, kplus=0):
+        """§6.305: inert — состояние несёт сглаженный наклон пути v (EMA `rowdec_inert_alpha`), переход + `rowdec_inert_w`·|Δx/dy − v|;
+        kplus — путей больше k (прототипы личности — по k). Оба выкл = прежний путь бит-в-бит."""
         peaks = []
         for i in range(prob.shape[0]):
             row = prob[i]
@@ -350,7 +352,8 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
         #   удержания в трассу не пишутся и не занимают пиков.
         hold = float(getattr(p, "rowdec_hold", 0.0) or 0.0)
         gmax = int(getattr(p, "rowdec_hold_gmax", 29) or 29)
-        for j in range(k):
+        w_in = float(getattr(p, "rowdec_inert_w", 1.0) or 1.0); a_in = float(getattr(p, "rowdec_inert_alpha", 0.3) or 0.3)
+        for j in range(k + kplus):
             rows, cands, locs = [], [], []
             for i in range(prob.shape[0]):
                 idx = np.array([x for x in peaks[i]
@@ -358,7 +361,7 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                 if not len(idx):
                     continue
                 loc = -np.log(np.clip(prob[i, idx], 1e-6, 1.0))
-                if use_emb and mu is not None:
+                if use_emb and mu is not None and j < k:
                     E = np.stack([embs[:, i, x] for x in idx])
                     loc = loc + wemb * np.sqrt(((E - mu[j]) ** 2).sum(-1))
                 rows.append(i); cands.append(idx.astype(float)); locs.append(loc)
@@ -367,12 +370,19 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             if hold > 0:
                 out.append(_viterbi_hold(rows, cands, locs, taken, x0, y0, k, wjump, hold, gmax)); continue
             dp = [locs[0]]; bp = [np.full(len(cands[0]), -1, int)]
+            V = np.zeros(len(cands[0]))
             for t in range(1, len(rows)):
                 dy = max(1, rows[t] - rows[t - 1])
-                jump = np.abs(cands[t][:, None] - cands[t - 1][None, :]) / dy
-                tot = dp[t - 1][None, :] + wjump * jump
+                if inert:                                   # §6.305: инерция наклона
+                    step = (cands[t][:, None] - cands[t - 1][None, :]) / dy
+                    tot = dp[t - 1][None, :] + wjump * np.abs(step) + w_in * np.abs(step - V[None, :])
+                else:
+                    jump = np.abs(cands[t][:, None] - cands[t - 1][None, :]) / dy
+                    tot = dp[t - 1][None, :] + wjump * jump
                 arg = tot.argmin(1)
                 dp.append(locs[t] + tot[np.arange(len(cands[t])), arg]); bp.append(arg)
+                if inert:
+                    V = (1 - a_in) * V[arg] + a_in * step[np.arange(len(cands[t])), arg]
             tr, s = {}, int(np.argmin(dp[-1]))
             for t in range(len(rows) - 1, -1, -1):
                 x = int(cands[t][s])
@@ -402,6 +412,9 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     if extra_thr is not None and extra_out is not None:      # §6.287: доп. пороги по той же карте (один или список)
         for _t in (extra_thr if isinstance(extra_thr, (list, tuple)) else [extra_thr]):
             extra_out.append(_paths(float(_t)))
+    if extra_inert and extra_out is not None:              # §6.305: пути с инерцией (порог, доп. пути) — после доп. порогов
+        for _t, _kp in extra_inert:
+            extra_out.append(_paths(float(_t), inert=True, kplus=int(_kp)))
     # ★ §6.240: уверенность траектории — медиана вероятности карты вдоль неё (для вето в `emit`); ключ — id словаря.
     #   ⛔ 27.09 (разбор): не модульный словарь — UI многопоточный, и параллельный прогон стирал чужие записи (вето молча
     #   выключалось). Словарь даёт вызывающий (`trace_auto`), живёт один вызов.
@@ -599,7 +612,10 @@ def trace_auto(rgb, sheet, p):
     # §6.287: доп. пороги пиков (0 = выкл): число или строка «0.3,0.15» — пути каждого порога по порядку
     _xv = getattr(p, "rowdec_extra_thr", 0.0) or 0.0
     xthr = [float(v) for v in str(_xv).replace(";", ",").split(",") if v.strip() and float(v) > 0] or None
-    extra_by = [[] for _ in (xthr or [])]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
+    # §6.305: пути с инерцией наклона — `cv.rowdec_extra_inert` = «порог:доп.пути,…» (напр. «0.6:0,0.3:2»; "" = выкл)
+    _xi = str(getattr(p, "rowdec_extra_inert", "") or "")
+    xin = [(float(t_.split(":")[0]), int(t_.split(":")[1]) if ":" in t_ else 0) for t_ in _xi.replace(";", ",").split(",") if t_.strip()] or None
+    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []))]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
         if lines:
@@ -612,16 +628,16 @@ def trace_auto(rgb, sheet, p):
         # ★ §6.239: K + `rowdec_k_plus` путей (0 = прод бит-в-бит). §6.237: из невзятых удержанием 71 из 196 ведутся по
         #   ДРУГОЙ нарисованной линии (> 50 px) — лишняя линия трека, которой нет в эталоне, забирает путь.
         K += int(getattr(p, "rowdec_k_plus", 0) or 0)
-        ext = [] if xthr else None
+        ext = [] if (xthr or xin) else None
         global _DUMP_CTX
         _DUMP_CTX = (getattr(getattr(sheet, "meta", None), "raw_stem", "") or "", ti)      # §6.305: подпись выгрузки пиков
-        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext)
+        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext, extra_inert=xin)
         out.extend(_pair(trs, lines, ti))
         for _j, _e in enumerate(ext or []):       # §6.287: пути доп. порогов — та же привязка к линиям
             extra_by[_j].extend(_pair(_e, lines, ti))
     res = _Trs(out)
     res.conf = [(conf.get(id(t)),) for _, t in out]
-    res.extra = _Trs([pr for lst_ in extra_by for pr in lst_]) if xthr else None   # §6.287: порог-за-порогом
+    res.extra = _Trs([pr for lst_ in extra_by for pr in lst_]) if (xthr or xin) else None   # §6.287: порог-за-порогом
     return res
 
 
