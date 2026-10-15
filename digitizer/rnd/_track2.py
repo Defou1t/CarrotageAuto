@@ -25,6 +25,7 @@ ap.add_argument("--variant", default="base", choices=["base", "inert"])
 ap.add_argument("--thr", type=float, default=0.6, help="порог пиков (доля max строки), как `rowdec_peak_thr`")
 ap.add_argument("--wacc", type=float, default=0.5, help="inert: вес |Δx/dy − v|")
 ap.add_argument("--alpha", type=float, default=0.3, help="inert: EMA наклона (вес нового шага)")
+ap.add_argument("--kplus", type=int, default=0, help="путей на трек больше k (§6.305)")
 ap.add_argument("--out", default="")
 ap.add_argument("--parity", default="", help="кэш redec (tcache_pkdev): сверить base с его `alt`")
 ap.add_argument("--workers", type=int, default=4)
@@ -45,6 +46,7 @@ def peaks_at(D, thr):
 def paths(D, variant):
     k, y0, x0, wjump, wemb = D["k"], D["y0"], D["x0"], D["wjump"], D["wemb"]
     P = peaks_at(D, a.thr)
+    kp = k + a.kplus                                       # прототипы личности — по k (как прод), путей — k + kplus
     use_emb = k >= D["emb_min_k"]; mu = None
     if use_emb:
         pts = [(i, j) for i in range(0, len(P), 7) for j in range(len(P[i][0]))]
@@ -61,14 +63,14 @@ def paths(D, variant):
             use_emb = False
     out = []
     taken = [set() for _ in range(len(P))]
-    for j in range(k):
+    for j in range(kp):
         rows, cands, locs = [], [], []
         for i, (ii, pp, ee) in enumerate(P):
             keep = np.array([q for q in range(len(ii)) if not any(abs(int(ii[q]) - t) <= 3 for t in taken[i])], int)
             if not len(keep):
                 continue
             loc = -np.log(np.clip(pp[keep].astype(np.float64), 1e-6, 1.0))
-            if use_emb and mu is not None:
+            if use_emb and mu is not None and j < k:
                 loc = loc + wemb * np.sqrt(((ee[keep].astype(np.float32) - mu[j]) ** 2).sum(-1))
             rows.append(i); cands.append(ii[keep].astype(float)); locs.append(loc)
         if len(rows) < 30:
