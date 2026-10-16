@@ -68,9 +68,12 @@ def _one(job):
     cands = [x for x in cands if len(x[2]) >= 50]
     xsrc = None
     if P.get("extra"):                       # §6.287: пути другого декода — как `emit._line_choice_pass` (дубли основного пула прочь)
-        xp = Path(P["extra"]) / Path(tc_path).name
-        if xp.exists():
-            xsrc = pickle.load(open(xp, "rb")).get("alt") or []
+        xsrc = []
+        for spec in P["extra"].split(";"):    # §6.305: несколько кэшей «каталог|поле» по порядку (как `--extra-cache` повтора)
+            dd, _, fld = spec.partition("|")
+            xp = Path(dd) / Path(tc_path).name
+            if xp.exists():
+                xsrc += pickle.load(open(xp, "rb")).get(fld or "alt") or []
     elif c.get("extra") is not None:         # кэш сборки с `rowdec_extra_thr` — пути доп. порогов в нём самом
         xsrc = c["extra"]
     if xsrc is not None:
@@ -153,7 +156,7 @@ def main():
     ap.add_argument("--dir", default=r"F:/nds/output/taskS/rp_lvl/NS")
     ap.add_argument("--out", default=r"F:/nds/output/taskS/line_choice")
     ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--extra-cache", default="", help="§6.287: кэш другого декода — его пути добавляются кандидатами (как в emit)")
+    ap.add_argument("--extra-cache", default="", help="§6.287: кэш другого декода — его пути добавляются кандидатами (как в emit); §6.305: несколько — «кат|поле;кат|поле»")
     ap.add_argument("--sheets", default="", help="свой список листов (файл в --ts); по умолчанию поле + сорт A")
     a = ap.parse_args()
     import multiprocessing as mp
