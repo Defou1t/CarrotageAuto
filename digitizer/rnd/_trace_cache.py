@@ -217,7 +217,10 @@ def cmd_replay():
     stat = {nm: [0, 0] for nm, _ in modes}
     conf_missing = {nm: 0 for nm, _ in modes}
     # ⛔ 27.09 (разбор, 2-й круг): прежний маркер снимается сразу — прерванный повтор не оставит «готово» от прошлого
-    (Path(a.out) / "_replay_done.json").unlink(missing_ok=True)
+    try:
+        (Path(a.out) / "_replay_done.json").unlink(missing_ok=True)
+    except PermissionError:
+        pass                                              # ⛔ 17.10: шарды стартуют разом — соседний шард уже удаляет файл
     CONF = {}
     for cf in ([a.conf] if a.conf else []):
         # ⚠ 27.09 (разбор, 3-й круг): сначала ТОЧНЫЙ файл; шарды — только свои (`<stem>_<i>of<N>.pkl`): прежний шаблон
