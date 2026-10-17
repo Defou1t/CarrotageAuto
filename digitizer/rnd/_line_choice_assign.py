@@ -45,6 +45,7 @@ ap.add_argument("--feat", default="all", choices=["all", "nocur", "mix", "stack"
                      "stack — второй ярус: исходные признаки + P обеих моделей (вне фолда, вложенно) + конкуренция за кандидата между слотами")
 ap.add_argument("--pairwise", action="store_true", help="§6.302: + признак второго яруса — доля побед кандидата в парах внутри слота (парная модель по разностям признаков, вложенно вне фолда)")
 ap.add_argument("--prod-all", action="store_true", help="§6.302: модель на всём (line_choice_all) — ещё и на сорте A; только для прода")
+ap.add_argument("--eval-out", action="store_true", help="§6.308: листы вне поля — в фолды по скважинам вместе с полем и в замер (отдельной строкой «вне»)")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -89,6 +90,13 @@ if a.data_extra:                                          # §6.295: листы 
     _rx = [r for r in _rx if r["sheet"] not in FIELD and r["sheet"] not in HOLD]
     OUT = {r["sheet"] for r in _rx}
     RECS += _rx
+FIELD0 = set(FIELD); EVO = set()
+if a.eval_out:                                            # §6.308: листы вне поля (кроме скважин сорта A) — в фолды по скважинам и в замер
+    _hw = {well(x) for x in HOLD}
+    EVO = {x for x in OUT if well(x) not in _hw}
+    FIELD = FIELD | EVO
+    OUT = OUT - EVO
+    print(f"--eval-out: листов вне поля в фолдах и замере {len(EVO)}; поле теперь {len(FIELD)}")
 TRF = {}
 if a.trace:
     for f in sorted(Path(a.data).glob("*.pkl")):
@@ -488,7 +496,7 @@ for g in a.grid:
         for k_, v_ in M.most_common():
             print(f"   {v_:5d}  {' | '.join(k_)}")
         print(f"   ранг честной по P среди кластеров слота: {dict(sorted(RK.items()))} (4 = 4 и ниже)")
-    for sn, S in (("поле", FIELD), ("сорт A", HOLD)):
+    for sn, S in ((("поле", FIELD0), ("вне", EVO), ("поле+вне", FIELD), ("сорт A", HOLD)) if a.eval_out else (("поле", FIELD), ("сорт A", HOLD))):
         d = np.array([D.get(x, 0) for x in S]); nzv = d[d != 0]
         p = float(np.mean(np.abs((rng.choice([-1, 1], size=(20000, len(nzv))) * nzv).sum(1)) >= abs(d.sum()))) if len(nzv) else 1.0
         sw = [x for x in SW if x["sheet"] in S]

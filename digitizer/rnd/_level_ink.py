@@ -402,6 +402,47 @@ def main_train(a):
         t_vrun = torch.from_numpy(cat("vrun")).to(dev)
         t_chr = torch.from_numpy(np.concatenate([c["chroma"].reshape(len(c["P"]), -1) for c in D])).to(dev)
         t_tch = torch.from_numpy(cat("tchroma")).to(dev)
+    if a.sib:                                            # §6.307: канал соседей по позициям (только кривые основного кэша)
+        RESF = {"GZ", "OGZ", "PZ", "BK", "MBK", "IK", "IKA", "IKR", "MGZ", "MPZ", "BMK"}
+        def _segl(segs, rows):
+            o = np.zeros(len(rows), np.int16)
+            for y0_, y1_, l_ in segs or []:
+                if l_:
+                    o[(rows >= y0_) & (rows <= y1_)] = l_
+            return o
+        OV = {}
+        for ci_, cv in enumerate(CUR):
+            if re.sub(r"^BKZ_", "", cv["root"]) in RESF and len(cv["ty"]) and cv["chain"]:
+                ch_ = cv["chain"]; lw_ = np.minimum(_segl(cv["lw"], cv["ty"]), len(ch_) - 1)
+                v_ = np.array([val(ch_[l_], x_) for l_, x_ in zip(lw_, cv["tx"].astype(float))])
+                OV.setdefault(cv["sheet"], []).append((ci_, cv["ty"].astype(np.int64), v_))
+        SIBS = []
+        for i_, c in enumerate(D):
+            S = np.zeros((len(c["P"]), KMAX + 1), np.float32)
+            cv = CUR[c["ci"]] if i_ < n_main and c["ci"] < len(CUR) else None
+            if cv is not None and cv["sheet"] == c["sheet"] and cv["name"] == c["name"] and cv["chain"]:
+                ch_ = cv["chain"]; Pp = c["P"].astype(np.int64)
+                tyc, txc = cv["ty"].astype(np.int64), cv["tx"].astype(float)
+                if len(tyc):
+                    xi = np.interp(Pp, tyc, txc)
+                    refs = []
+                    for ci_, ys_, vs_ in OV.get(cv["sheet"], []):
+                        if ci_ == c["ci"]:
+                            continue
+                        j_ = np.searchsorted(ys_, Pp); j_ = np.clip(j_, 0, len(ys_) - 1)
+                        ok_ = np.abs(ys_[j_] - Pp) <= 8
+                        refs.append(np.where(ok_ & (vs_[j_] > 0), vs_[j_], np.nan))
+                    if refs:
+                        med = np.nanmedian(np.vstack(refs), axis=0)
+                        has_ = np.isfinite(med)
+                        for k_ in range(min(KMAX, len(ch_))):
+                            vk = val(ch_[k_], xi)
+                            d_ = np.abs(np.log10(np.clip(vk, 1e-6, None)) - np.log10(np.where(has_, med, 1.0)))
+                            S[:, k_] = np.where(has_ & (vk > 0), np.clip(d_, 0, 3) / 3, 0)
+                        S[:, KMAX] = has_.astype(np.float32)
+            SIBS.append(S)
+        t_sib = torch.from_numpy(np.concatenate(SIBS)).to(dev)
+        print(f"канал соседей: позиций с соседями {float(np.concatenate(SIBS)[:, KMAX].mean()):.2f}")
     t_lw = torch.from_numpy(np.minimum(cat("lw"), KMAX - 1).astype(np.int64)).to(dev)
     t_lab = torch.from_numpy(cat("lab").astype(np.int64)).to(dev)
     cid = np.repeat(np.arange(len(D)), np.diff(off))
@@ -414,7 +455,7 @@ def main_train(a):
           f"скважин поля {len(field_wells)}; устройство {dev}")
     OFS = torch.arange(-nb // 2, nb // 2, device=dev)
     DIL = tuple(int(x) for x in a.dil.split(",")) * 2               # ★ §6.269: расширения (дважды); по умолчанию 1…32 — как v2
-    CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1] + ((nb * 2 + nb * 2 + 2) if V4 else 0)
+    CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1] + ((nb * 2 + nb * 2 + 2) if V4 else 0) + ((KMAX + 1) if a.sib else 0)
 
     def feats(gi, valid):
         """gi [B, L] глобальные индексы позиций, valid [B, L] → [B, CIN, L]"""
@@ -432,6 +473,8 @@ def main_train(a):
             vr = t_vrun[gi].float() / 255.0 * valid[..., None]
             rvr = torch.gather(vr, 2, rel) * rv
             sc += [vr, rvr, t_chr[gi].float() / 127.0 * valid[..., None], t_tch[gi].float() / 127.0 * hv[..., None]]
+        if a.sib:
+            sc += [t_sib[gi] * valid[..., None]]
         x = torch.cat([ink * valid[..., None], occ * valid[..., None], oh, rink, rocc] + sc, dim=2)
         return x.transpose(1, 2).contiguous()
 
@@ -618,6 +661,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--dil", default="1,2,4,8,16,32", help="расширения одного прохода (стек повторяется дважды)")
     ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле и карту лист → фолд")
+    ap.add_argument("--sib", action="store_true", help="§6.307: + канал соседей — |log10 v_k − log10 медиана соседних резистивных кривых листа| по k и флаг")
     ap.add_argument("--data-extra", default="", help="(train) §6.296: скан кривых ВНЕ поля и сорта A (каталог `scan --out`) — только в обучение: скважины сорта A исключены, скважины поля — по фолдам")
     ap.add_argument("--v4", action="store_true", help="§6.271: скан — длина вертикальных ранов и цвет туши; обучение — эти каналы")
     ap.add_argument("--vthr", type=int, default=100)
