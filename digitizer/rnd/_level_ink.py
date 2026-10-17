@@ -364,6 +364,9 @@ def main_train(a):
     torch.manual_seed(0); np.random.seed(0)
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     CUR = pickle.load(open(a.cache, "rb"))
+    n_cur = len(CUR)
+    if a.cache_extra:                                    # §6.309: кривые вне поля — в конец кэша (мера по ним)
+        CUR = CUR + [dict(cv, set="вне") for cv in pickle.load(open(a.cache_extra, "rb"))]
     SRC = {q.name: q for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx")}
     well = lambda sh: SRC[sh].parent.parent.name if sh in SRC else sh
     D = []
@@ -377,11 +380,14 @@ def main_train(a):
         for f in sorted(Path(a.data_extra).glob("*.pkl")):
             for c in pickle.load(open(f, "rb"))["curves"]:
                 if c is not None and c["sheet"] not in _sh:
-                    D.append(dict(c, set="вне"))
-    field_wells = sorted({well(c["sheet"]) for c in D if c["set"] == "поле"})
-    FOLD = {wl: i % a.folds for i, wl in enumerate(field_wells)}
+                    D.append(dict(c, set="вне", ci=c["ci"] + n_cur) if a.cache_extra else dict(c, set="вне"))
     HOLD_W = {well(c["sheet"]) for c in D if c["set"] == "сорт A"}
     ox = [i for i, c in enumerate(D) if c["set"] == "вне" and well(c["sheet"]) not in HOLD_W]
+    EVO = list(ox) if a.eval_out else []                 # §6.309: кривые вне поля — в фолдах и замере
+    field_wells = sorted({well(c["sheet"]) for c in D if c["set"] == "поле"} | {well(D[i]["sheet"]) for i in EVO})
+    FOLD = {wl: i % a.folds for i, wl in enumerate(field_wells)}
+    if a.eval_out:
+        ox = []
     out_train = lambda k=None: [i for i in ox if k is None or FOLD.get(well(D[i]["sheet"])) != k]
     print(f"кривых вне поля в обучении: {len(ox)} из {len(D) - n_main}")
     nb = D[0]["ink"].shape[1]; NT = D[0]["tw"].shape[1]
@@ -574,7 +580,9 @@ def main_train(a):
         return out
 
     PROB = {}
-    fi = [i for i, c in enumerate(D) if c["set"] == "поле"]
+    fi0 = [i for i, c in enumerate(D) if c["set"] == "поле"]
+    fi = fi0 + EVO                                       # §6.309: проверяемые вне фолда
+    trp = fi0 if a.no_train_out else fi                  # §6.309: из них — в обучение (контроль — только поле)
     T0 = time.time()
     META = dict(cin=CIN, nb=nb, kmax=KMAX, nt=NT, stride=a.stride, ch=64, dil=list(DIL), k=5, tol=a.tol, v4=V4, vthr=a.vthr,
                 min_run=a.min_run, steps=a.steps, seeds=a.seeds)
@@ -585,13 +593,13 @@ def main_train(a):
         (SD / "level_ink_folds.json").write_text(_json.dumps(
             {D[i]["sheet"]: FOLD[well(D[i]["sheet"])] for i in fi}, ensure_ascii=False, indent=0), encoding="utf-8")
     for k in range(a.folds):
-        tr = [i for i in fi if FOLD[well(D[i]["sheet"])] != k] + out_train(k); te = [i for i in fi if FOLD[well(D[i]["sheet"])] == k]
+        tr = [i for i in trp if FOLD[well(D[i]["sheet"])] != k] + out_train(k); te = [i for i in fi if FOLD[well(D[i]["sheet"])] == k]
         nets = [fit(tr, f"фолд {k}, зерно {s_}", seed=1000 * k + s_) for s_ in range(a.seeds)]
         if SD:
             torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=k), SD / f"level_ink_f{k}.pt")
         PROB.update(predict(nets, te))
         print(f"  фолд {k}: обучение {len(tr)} кривых, проверка {len(te)}, моделей {len(nets)}; {time.time() - T0:.0f} с")
-    nets = [fit(fi + out_train(), f"всё поле, зерно {s_}", seed=9000 + s_) for s_ in range(a.seeds)]
+    nets = [fit(trp + out_train(), f"всё поле, зерно {s_}", seed=9000 + s_) for s_ in range(a.seeds)]
     torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=None), a.model_out)
     if SD:
         torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=None), SD / "level_ink_all.pt")
@@ -599,7 +607,7 @@ def main_train(a):
     print(f"  всё поле: моделей {len(nets)}; {time.time() - T0:.0f} с")
     PRED = {i: pr.argmax(0).astype(np.int16) for i, pr in PROB.items()}
     # точность по меткам
-    for sn in ("поле", "сорт A"):
+    for sn in ("поле", "вне", "сорт A"):
         ok = tot = 0; okp = 0
         for i, c in enumerate(D):
             if c["set"] != sn or i not in PRED:
@@ -632,7 +640,7 @@ def main_train(a):
     pickle.dump(dict(pred={D[i]["ci"]: (D[i]["P"], PRED[i]) for i in PRED}, levels=LV,
                      prob={D[i]["ci"]: PROB[i].astype(np.float16) for i in PROB}), open(a.dump, "wb"))
     rng = np.random.default_rng(0)
-    for sn in ("поле", "сорт A"):
+    for sn in ("поле", "вне", "сорт A"):
         d = np.array([v1 - v0 for (s, _), (v0, v1) in PER.items() if s == sn]); nz = d[d != 0]
         p = float(np.mean(np.abs((rng.choice([-1, 1], size=(20000, len(nz))) * nz).sum(1)) >= abs(d.sum()))) if len(nz) else 1.0
         print(f"★ {sn}: именных честных в значениях — прод {C[(sn, 0)]}, модель {C[(sn, 1)]} (Δ {C[(sn, 1)] - C[(sn, 0)]:+d}, "
@@ -662,6 +670,9 @@ def main():
     ap.add_argument("--dil", default="1,2,4,8,16,32", help="расширения одного прохода (стек повторяется дважды)")
     ap.add_argument("--save-dir", default="", help="сохранить модели фолдов, модель на всём поле и карту лист → фолд")
     ap.add_argument("--sib", action="store_true", help="§6.307: + канал соседей — |log10 v_k − log10 медиана соседних резистивных кривых листа| по k и флаг")
+    ap.add_argument("--cache-extra", default="", help="§6.309: кэш `_level_bench` кривых вне поля (мера по ним; ci скана --data-extra сдвигаются)")
+    ap.add_argument("--eval-out", action="store_true", help="§6.309: кривые вне поля (не скважин сорта A) — в фолды по скважинам вместе с полем и в замер")
+    ap.add_argument("--no-train-out", action="store_true", help="§6.309: контроль — учить только на поле, кривые вне поля только мерить")
     ap.add_argument("--data-extra", default="", help="(train) §6.296: скан кривых ВНЕ поля и сорта A (каталог `scan --out`) — только в обучение: скважины сорта A исключены, скважины поля — по фолдам")
     ap.add_argument("--v4", action="store_true", help="§6.271: скан — длина вертикальных ранов и цвет туши; обучение — эти каналы")
     ap.add_argument("--vthr", type=int, default=100)
