@@ -599,7 +599,9 @@ def main_train(a):
             torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=k), SD / f"level_ink_f{k}.pt")
         PROB.update(predict(nets, te))
         print(f"  фолд {k}: обучение {len(tr)} кривых, проверка {len(te)}, моделей {len(nets)}; {time.time() - T0:.0f} с")
-    nets = [fit(trp + out_train(), f"всё поле, зерно {s_}", seed=9000 + s_) for s_ in range(a.seeds)]
+    _pa = ([i for i, c in enumerate(D) if c["set"] == "сорт A"] + [i for i, c in enumerate(D) if c["set"] == "вне" and i not in set(EVO)]
+           if a.prod_all else [])                        # §6.309: модель ТОЛЬКО для прода — ещё и сорт A (его цифры ниже — не вне выборки)
+    nets = [fit(trp + out_train() + _pa, f"всё поле, зерно {s_}", seed=9000 + s_) for s_ in range(a.seeds)]
     torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=None), a.model_out)
     if SD:
         torch.save(dict(META, sds=[n_.state_dict() for n_ in nets], fold=None), SD / "level_ink_all.pt")
@@ -672,6 +674,7 @@ def main():
     ap.add_argument("--sib", action="store_true", help="§6.307: + канал соседей — |log10 v_k − log10 медиана соседних резистивных кривых листа| по k и флаг")
     ap.add_argument("--cache-extra", default="", help="§6.309: кэш `_level_bench` кривых вне поля (мера по ним; ci скана --data-extra сдвигаются)")
     ap.add_argument("--eval-out", action="store_true", help="§6.309: кривые вне поля (не скважин сорта A) — в фолды по скважинам вместе с полем и в замер")
+    ap.add_argument("--prod-all", action="store_true", help="§6.309: модель на всём — ещё и на сорте A (только для прода)")
     ap.add_argument("--no-train-out", action="store_true", help="§6.309: контроль — учить только на поле, кривые вне поля только мерить")
     ap.add_argument("--data-extra", default="", help="(train) §6.296: скан кривых ВНЕ поля и сорта A (каталог `scan --out`) — только в обучение: скважины сорта A исключены, скважины поля — по фолдам")
     ap.add_argument("--v4", action="store_true", help="§6.271: скан — длина вертикальных ранов и цвет туши; обучение — эти каналы")
