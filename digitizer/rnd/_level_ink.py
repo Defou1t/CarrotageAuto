@@ -449,6 +449,25 @@ def main_train(a):
             SIBS.append(S)
         t_sib = torch.from_numpy(np.concatenate(SIBS)).to(dev)
         print(f"канал соседей: позиций с соседями {float(np.concatenate(SIBS)[:, KMAX].mean()):.2f}")
+    if a.vprior:                                         # §6.312: правдоподобие значения при уровне k против приора семейства
+        PRI = pickle.load(open(a.vprior, "rb"))["prior"]
+        VPS = []
+        for c in D:
+            S = np.zeros((len(c["P"]), KMAX + 1), np.float32)
+            cv = CUR[c["ci"]] if c["ci"] < len(CUR) else None
+            pr_ = PRI.get(re.sub(r"^BKZ_", "", c["root"]))
+            if cv is not None and cv["sheet"] == c["sheet"] and cv["name"] == c["name"] and cv["chain"] and pr_ and pr_[0] > 0 \
+                    and len(cv["ty"]):
+                ch_ = cv["chain"]; Pp = c["P"].astype(np.int64)
+                xi = np.interp(Pp, cv["ty"].astype(np.int64), cv["tx"].astype(float))
+                lm = np.log10(pr_[0])
+                for k_ in range(min(KMAX, len(ch_))):
+                    vk = val(ch_[k_], xi)
+                    S[:, k_] = np.where(vk > 0, np.clip(np.abs(np.log10(np.clip(vk, 1e-6, None)) - lm), 0, 3) / 3, 1.0)
+                S[:, KMAX] = 1.0
+            VPS.append(S)
+        t_vp = torch.from_numpy(np.concatenate(VPS)).to(dev)
+        print(f"канал приора: позиций с приором {float(np.concatenate(VPS)[:, KMAX].mean()):.2f}")
     t_lw = torch.from_numpy(np.minimum(cat("lw"), KMAX - 1).astype(np.int64)).to(dev)
     t_lab = torch.from_numpy(cat("lab").astype(np.int64)).to(dev)
     cid = np.repeat(np.arange(len(D)), np.diff(off))
@@ -461,7 +480,7 @@ def main_train(a):
           f"скважин поля {len(field_wells)}; устройство {dev}")
     OFS = torch.arange(-nb // 2, nb // 2, device=dev)
     DIL = tuple(int(x) for x in a.dil.split(",")) * 2               # ★ §6.269: расширения (дважды); по умолчанию 1…32 — как v2
-    CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1] + ((nb * 2 + nb * 2 + 2) if V4 else 0) + ((KMAX + 1) if a.sib else 0)
+    CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1] + ((nb * 2 + nb * 2 + 2) if V4 else 0) + ((KMAX + 1) if a.sib else 0) + ((KMAX + 1) if a.vprior else 0)
 
     def feats(gi, valid):
         """gi [B, L] глобальные индексы позиций, valid [B, L] → [B, CIN, L]"""
@@ -481,6 +500,8 @@ def main_train(a):
             sc += [vr, rvr, t_chr[gi].float() / 127.0 * valid[..., None], t_tch[gi].float() / 127.0 * hv[..., None]]
         if a.sib:
             sc += [t_sib[gi] * valid[..., None]]
+        if a.vprior:
+            sc += [t_vp[gi] * valid[..., None]]
         x = torch.cat([ink * valid[..., None], occ * valid[..., None], oh, rink, rocc] + sc, dim=2)
         return x.transpose(1, 2).contiguous()
 
@@ -674,6 +695,7 @@ def main():
     ap.add_argument("--sib", action="store_true", help="§6.307: + канал соседей — |log10 v_k − log10 медиана соседних резистивных кривых листа| по k и флаг")
     ap.add_argument("--cache-extra", default="", help="§6.309: кэш `_level_bench` кривых вне поля (мера по ним; ci скана --data-extra сдвигаются)")
     ap.add_argument("--eval-out", action="store_true", help="§6.309: кривые вне поля (не скважин сорта A) — в фолды по скважинам вместе с полем и в замер")
+    ap.add_argument("--vprior", default="", help="§6.312: `slot_scale.pkl` — канал правдоподобия значения при уровне k против приора семейства")
     ap.add_argument("--prod-all", action="store_true", help="§6.309: модель на всём — ещё и на сорте A (только для прода)")
     ap.add_argument("--no-train-out", action="store_true", help="§6.309: контроль — учить только на поле, кривые вне поля только мерить")
     ap.add_argument("--data-extra", default="", help="(train) §6.296: скан кривых ВНЕ поля и сорта A (каталог `scan --out`) — только в обучение: скважины сорта A исключены, скважины поля — по фолдам")
