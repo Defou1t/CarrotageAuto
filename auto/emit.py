@@ -403,7 +403,7 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
                           rough=LC.rough_robust(xs)))
     if not cands:
         return
-    slots, written = [], []
+    slots, written, scales = [], [], {}
     for c in model.get("curves", []):
         name = c["name"]
         if meta_mod.mnem_root(name) == "DA":
@@ -416,10 +416,11 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
         if fam:
             xl = min(min(s["x_left"], s["x_right"]) for s in fam); xr = max(max(s["x_left"], s["x_right"]) for s in fam)
             slots.append((name, c["top_y"], c["n_rows"], (xl, xr)))
+            scales[name] = (float(fam[0]["v_left"]), float(fam[0]["v_right"]))   # §6.311: базовая шкала слота
     path = LC.resolve(spec, sheet=sheet_name)
     if path is None:
         return
-    rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root)
+    rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root, scales=scales)
     for name, (k, p) in rep_.items():
         if k is None:                                   # §6.283: трассу слота забрал другой слот, своей нет — слот пуст
             mapping.pop(name, None)

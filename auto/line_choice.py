@@ -146,7 +146,7 @@ def _clusters(CS):
     return lab
 
 
-def _choose_stack(ck, sheet, slots, CS, used, root_of):
+def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
     """§6.283: два яруса + назначение 1:1 по листу (как `digitizer/rnd/_line_choice_assign.py --feat stack --extra`).
     → {имя слота: индекс кандидата или None (слот опустел: его трассу забрал другой слот)}."""
     from scipy.optimize import linear_sum_assignment
@@ -186,6 +186,13 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of):
                 nr = max(1, n_rows)
                 f += [nzv(st.get("width_h")), nzv(st.get("used")), DU[r["k"]][1], DU[r["k"]][0],
                       (c["y0"] - top_y) / nr, (top_y + nr - 1 - c["y1"]) / nr, c["n"] / nr]
+            if ck.get("vfeat"):                           # §6.311: значения кандидата при шкале слота против приора семейства
+                _sc = (scales or {}).get(name); _pr = ck["prior"].get(root)
+                if _sc and _pr:
+                    _vq = [_sc[0] + uq * (_sc[1] - _sc[0]) for uq in r["u"]]
+                    f += [float(np.clip((v_ - _pr[0]) / _pr[1], -10, 10)) for v_ in _vq] +                          [float(np.clip((_vq[1] - _pr[2]) / max(_pr[3] - _pr[2], 1e-6), -5, 5))]
+                else:
+                    f += [np.nan] * 4
             ROWS.append((si, r["k"], f, r["here"], r["elsewhere"]))
     if not ROWS:
         return {}
@@ -253,7 +260,7 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of):
     return out
 
 
-def choose(sheet, slots, cands, written, path, root_of):
+def choose(sheet, slots, cands, written, path, root_of, scales=None):
     """slots — [(имя, top_y, n_rows, (xl, xr))] в порядке рамки (только слоты с цепочкой шкал);
     cands — [dict(src, tr — исходная трасса, dense, style, rough)];
     written — [(имя, плотная записанная трасса)] в порядке рамки (что стоит в слотах сейчас).
@@ -274,7 +281,7 @@ def choose(sheet, slots, cands, written, path, root_of):
             ys = np.array(sorted(c["dense"])); xs = np.array([c["dense"][y] for y in ys])
             CS.append(dict(src=c["src"], n=len(c["dense"]), y0=int(ys[0]), y1=int(ys[-1]), xs_q=np.percentile(xs, [10, 50, 90]),
                            style=c["style"], rough=c["rough"]))
-        return _choose_stack(ck, sheet, slots, CS, used, root_of)
+        return _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales)
     model, fams, tau, dlt = ck["model"], dict(ck["fams"]), ck["tau"], ck["delta"]
     # занятость: кандидат стоит в слоте, если x совпадает в 1 px на ≥ 90% общих строк (как в стенде по файлам выдачи)
     used = {}
