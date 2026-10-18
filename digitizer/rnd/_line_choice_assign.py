@@ -46,6 +46,7 @@ ap.add_argument("--feat", default="all", choices=["all", "nocur", "mix", "stack"
 ap.add_argument("--pairwise", action="store_true", help="§6.302: + признак второго яруса — доля побед кандидата в парах внутри слота (парная модель по разностям признаков, вложенно вне фолда)")
 ap.add_argument("--prod-all", action="store_true", help="§6.302: модель на всём (line_choice_all) — ещё и на сорте A; только для прода")
 ap.add_argument("--eval-out", action="store_true", help="§6.308: листы вне поля — в фолды по скважинам вместе с полем и в замер (отдельной строкой «вне»)")
+ap.add_argument("--vfeat", default="", help="§6.311: `_slot_scale.py` — + правдоподобие значения кандидата при базовой шкале слота (квантили, нормированные на приор семейства)")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -97,6 +98,7 @@ if a.eval_out:                                            # §6.308: листы 
     FIELD = FIELD | EVO
     OUT = OUT - EVO
     print(f"--eval-out: листов вне поля в фолдах и замере {len(EVO)}; поле теперь {len(FIELD)}")
+VSC = pickle.load(open(a.vfeat, "rb")) if a.vfeat else None
 TRF = {}
 if a.trace:
     for f in sorted(Path(a.data).glob("*.pkl")):
@@ -135,6 +137,13 @@ for rec in RECS:
                 nr = max(1, s["n_rows"])
                 f += [nz(st.get("width_h")), nz(st.get("used")), DU[r["k"]][1], DU[r["k"]][0],
                       (c["y0"] - s["top_y"]) / nr, (s["top_y"] + nr - 1 - c["y1"]) / nr, c["n"] / nr]
+            if a.vfeat:                                  # §6.311: значения кандидата при шкале слота против приора семейства
+                _sc = VSC["scale"].get(sh, {}).get(s["name"]); _pr = VSC["prior"].get(re.sub(r"^BKZ_", "", s["root"]))
+                if _sc and _pr:
+                    _vq = [_sc[0] + uq * (_sc[1] - _sc[0]) for uq in r["u"]]
+                    f += [float(np.clip((v_ - _pr[0]) / _pr[1], -10, 10)) for v_ in _vq] +                          [float(np.clip((_vq[1] - _pr[2]) / max(_pr[3] - _pr[2], 1e-6), -5, 5))]
+                else:
+                    f += [np.nan] * 4
             if a.trace:
                 f += [TRF[sh][r["k"]][x] for x in SHAPE]
             if a.norm:
