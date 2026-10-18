@@ -24,8 +24,8 @@ def one(q):
     try:
         mt = extract(str(q))
     except Exception:
-        return q.name, {}, {}
-    sc, vals = {}, defaultdict(list)
+        return q.name, {}, {}, {}
+    sc, vals, ch_ = {}, defaultdict(list), {}
     for c in mt["curves"]:
         root = M.mnem_root(c["name"])
         if root == "DA":
@@ -34,12 +34,13 @@ def one(q):
         if not fam:
             continue
         sc[c["name"]] = (float(fam[0]["v_left"]), float(fam[0]["v_right"]))
+        ch_[c["name"]] = [(float(f_["v_left"]), float(f_["v_right"])) for f_ in fam]      # §6.315: вся цепочка
         lv = DL.gt_levels(c)
         xs = [(c["top_y"] + i, x) for i, x in enumerate(c["xs"]) if x != NULL][::25]
         if len(xs) >= 10:
             maps = [DL.scale_map(s) for s in fam]
             vals[re.sub(r"^BKZ_", "", root)] += [maps[min(lv.get(y, 0), len(fam) - 1)](x) for y, x in xs]
-    return q.name, sc, dict(vals)
+    return q.name, sc, dict(vals), ch_
 
 
 def main():
@@ -51,13 +52,13 @@ def main():
     TS = Path(r"F:/nds/output/taskS")
     HOLD = {l.strip() for l in (TS / "holdoutA_sheets.txt").read_text(encoding="utf-8").splitlines() if l.strip()}
     qs = sorted(Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx"))
-    SC, V = {}, defaultdict(list)
+    SC, V, CH = {}, defaultdict(list), {}
     WELL = {q.name: q.parent.parent.name for q in qs}
     reg = lambda w: (re.sub(r"[_\s\-]*\d.*$", "", w) or w).lower()
     VW = defaultdict(list)                                  # §6.311б: (семейство, скважина) → значения
     with mp.Pool(a.workers) as pool:
-        for n, sc, vals in pool.imap_unordered(one, qs, chunksize=8):
-            SC[n] = sc
+        for n, sc, vals, chs in pool.imap_unordered(one, qs, chunksize=8):
+            SC[n] = sc; CH[n] = chs
             if n not in HOLD:
                 for f, v in vals.items():
                     V[f] += v
@@ -83,7 +84,7 @@ def main():
             if len(other) >= 2 and sum(len(v) for v in other) >= 200:
                 out[f] = st(np.concatenate(other))
         PREG[n] = out
-    pickle.dump(dict(scale=SC, prior=PR, prior_reg=PREG, reg_table=REGT, reg_of={n: reg(WELL[n]) for n in SC}), open(a.out, "wb"))
+    pickle.dump(dict(scale=SC, chain=CH, prior=PR, prior_reg=PREG, reg_table=REGT, reg_of={n: reg(WELL[n]) for n in SC}), open(a.out, "wb"))
     print(f"приор района (без своей скважины): листов с ним {sum(1 for v in PREG.values() if v)}, районов в таблице {len(REGT)}")
     print(f"листов {len(SC)}, семейств с приором {len(PR)}")
     for f in ("GZ", "OGZ", "SP", "PS", "GK", "NGK", "BK", "IK", "TM", "ZAT", "TAU"):

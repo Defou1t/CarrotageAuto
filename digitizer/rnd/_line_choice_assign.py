@@ -48,6 +48,7 @@ ap.add_argument("--prod-all", action="store_true", help="§6.302: модель �
 ap.add_argument("--eval-out", action="store_true", help="§6.308: листы вне поля — в фолды по скважинам вместе с полем и в замер (отдельной строкой «вне»)")
 ap.add_argument("--vfeat", default="", help="§6.311: `_slot_scale.py` — + правдоподобие значения кандидата при базовой шкале слота (квантили, нормированные на приор семейства)")
 ap.add_argument("--vreg", action="store_true", help="§6.313: (с --vfeat) + те же признаки по приору района (без своей скважины)")
+ap.add_argument("--vchain", action="store_true", help="§6.315: (с --vfeat) + значение при каждом уровне цепочки шкал слота: min |z|, его уровень, z при уровне 1")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -145,6 +146,14 @@ for rec in RECS:
                     f += [float(np.clip((v_ - _pr[0]) / _pr[1], -10, 10)) for v_ in _vq] +                          [float(np.clip((_vq[1] - _pr[2]) / max(_pr[3] - _pr[2], 1e-6), -5, 5))]
                 else:
                     f += [np.nan] * 4
+                if a.vchain:                             # §6.315: значение при каждом уровне цепочки шкал слота
+                    _chn = VSC["chain"].get(sh, {}).get(s["name"])
+                    if _chn and _pr and len(_chn) >= 2:
+                        zs = [abs((vl_ + r["u"][1] * (vr_ - vl_) - _pr[0]) / _pr[1]) for vl_, vr_ in _chn]
+                        z1 = (_chn[1][0] + r["u"][1] * (_chn[1][1] - _chn[1][0]) - _pr[0]) / _pr[1]
+                        f += [float(min(min(zs), 10)), float(int(np.argmin(zs))), float(np.clip(z1, -10, 10))]
+                    else:
+                        f += [np.nan] * 3
                 if a.vreg:                               # §6.313: приор района (без своей скважины)
                     _rp = VSC["prior_reg"].get(sh, {}).get(re.sub(r"^BKZ_", "", s["root"]))
                     if _sc and _rp:
