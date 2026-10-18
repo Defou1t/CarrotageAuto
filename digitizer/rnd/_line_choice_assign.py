@@ -49,6 +49,7 @@ ap.add_argument("--eval-out", action="store_true", help="§6.308: листы в�
 ap.add_argument("--vfeat", default="", help="§6.311: `_slot_scale.py` — + правдоподобие значения кандидата при базовой шкале слота (квантили, нормированные на приор семейства)")
 ap.add_argument("--vreg", action="store_true", help="§6.313: (с --vfeat) + те же признаки по приору района (без своей скважины)")
 ap.add_argument("--vchain", action="store_true", help="§6.315: (с --vfeat) + значение при каждом уровне цепочки шкал слота: min |z|, его уровень, z при уровне 1")
+ap.add_argument("--ovl", default="", help="§6.316: каталог `_cand_overlap.py` — + перекрытие кандидата с другими (лучший, второй, число частичных, покрытие)")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -101,6 +102,14 @@ if a.eval_out:                                            # §6.308: листы 
     OUT = OUT - EVO
     print(f"--eval-out: листов вне поля в фолдах и замере {len(EVO)}; поле теперь {len(FIELD)}")
 VSC = pickle.load(open(a.vfeat, "rb")) if a.vfeat else None
+OVL = {}
+if a.ovl:                                                 # §6.316
+    import hashlib as _hl
+    for _r in RECS:
+        _f = Path(a.ovl) / (_hl.md5(_r["sheet"].encode("utf-8")).hexdigest()[:16] + ".pkl")
+        if _f.exists():
+            OVL[_r["sheet"]] = pickle.load(open(_f, "rb"))
+    print(f"перекрытия кандидатов: листов {len(OVL)} из {len(RECS)}")
 TRF = {}
 if a.trace:
     for f in sorted(Path(a.data).glob("*.pkl")):
@@ -146,6 +155,11 @@ for rec in RECS:
                     f += [float(np.clip((v_ - _pr[0]) / _pr[1], -10, 10)) for v_ in _vq] +                          [float(np.clip((_vq[1] - _pr[2]) / max(_pr[3] - _pr[2], 1e-6), -5, 5))]
                 else:
                     f += [np.nan] * 4
+                pass
+            if a.ovl:                                    # §6.316: перекрытие кандидата с другими — признак трассы-смеси
+                _ov = OVL.get(sh)
+                f += (_ov[r["k"]].tolist() if _ov is not None and r["k"] < len(_ov) else [np.nan] * 4)
+            if a.vfeat:
                 if a.vchain:                             # §6.315: значение при каждом уровне цепочки шкал слота
                     _chn = VSC["chain"].get(sh, {}).get(s["name"])
                     if _chn and _pr and len(_chn) >= 2:
@@ -484,7 +498,7 @@ for g in a.grid:
             SW.append(dict(sheet=sh, slot=s["name"], before=bool(before), after=bool(after), empty=c is None))
     RES[g] = SW; ALLCH[g] = AC
     if a.miss:                                            # §6.301: почему честный кандидат не встал
-        M = Counter(); RK = Counter()
+        M = Counter(); RK = Counter(); MISS_EX = []
         for sh, by in BY.items():
             if sh in OUT or sh not in FIELD:
                 continue
@@ -513,6 +527,11 @@ for g in a.grid:
                 else:
                     cat = "стоит трасса, ни для кого не честная"
                 M[(cat, "честную забрал другой слот" if took else "честная свободна", "P честной < τ" if ph < tau else "P честной ≥ τ")] += 1
+                if cat.endswith("ни для кого не честная") and not took and ph >= tau:     # §6.316: примеры «мусор вместо честной»
+                    _kc = max((i for i in idx if cl[ROWS[i][2]] == c), key=lambda i: P[i])
+                    _kh = max((i for i in idx if ROWS[i][4]), key=lambda i: P[i])
+                    MISS_EX.append(dict(sheet=sh, slot=rec["slots"][si]["name"], k_chosen=ROWS[_kc][2], p_chosen=float(P[_kc]),
+                                        k_honest=ROWS[_kh][2], p_honest=float(P[_kh])))
                 # взаимный обмен: честная этого слота стоит в слоте s2, а в этом слоте — честная для s2
                 for c_h in hon[si]:
                     for s2 in owner.get(c_h, []):
@@ -522,6 +541,7 @@ for g in a.grid:
         for k_, v_ in M.most_common():
             print(f"   {v_:5d}  {' | '.join(k_)}")
         print(f"   ранг честной по P среди кластеров слота: {dict(sorted(RK.items()))} (4 = 4 и ниже)")
+        pickle.dump(MISS_EX, open(str(a.dump).replace(".pkl", "_missex.pkl"), "wb"))
     for sn, S in ((("поле", FIELD0), ("вне", EVO), ("поле+вне", FIELD), ("сорт A", HOLD)) if a.eval_out else (("поле", FIELD), ("сорт A", HOLD))):
         d = np.array([D.get(x, 0) for x in S]); nzv = d[d != 0]
         p = float(np.mean(np.abs((rng.choice([-1, 1], size=(20000, len(nzv))) * nzv).sum(1)) >= abs(d.sum()))) if len(nzv) else 1.0
