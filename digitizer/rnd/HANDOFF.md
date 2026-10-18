@@ -24,6 +24,9 @@
 levelshift=1,namestyle=oof:F:/nds/output/taskS/name_style_v1,linechoice=oof:F:/nds/output/taskS/line_choice_v4` + `--extra-cache tcache_pk3`
 (режим NSLX4 в `rp_lvl`, сравнения — `rp_lvl_NS_NSLX4.pkl`; повтор `_trace_cache.py` по умолчанию эти ручки выключает).
 
+**★★ 18.10 §6.311 ✅ В ПРОДЕ: выбор трассы v8p — + правдоподобие значения кандидата при шкале слота: поле+вне 2409 → 2541
+(+132), сорт A 344 → 367. База A/B — NSE8 (`linechoice=oof:…line_choice_v8e`, склейка `merge_ab3.py`).**
+
 **★ 17.10 §6.308 ✅ В ПРОДЕ: пути декодера с инерцией (`rowdec_extra_inert = "0.6:0,0.3:2"`) + выбор трассы `line_choice_v7p`.**
 Замер теперь на поле + 939 листах вне поля (протокол `_line_choice_assign.py --eval-out`, фолды по скважинам вместе): именных
 2334 → 2409 (+75, p = 0.0002), сорт A 340 → 344. База A/B — NSE7 (см. ROADMAP §6.308).
