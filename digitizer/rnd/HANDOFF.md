@@ -24,6 +24,9 @@
 levelshift=1,namestyle=oof:F:/nds/output/taskS/name_style_v1,linechoice=oof:F:/nds/output/taskS/line_choice_v4` + `--extra-cache tcache_pk3`
 (режим NSLX4 в `rp_lvl`, сравнения — `rp_lvl_NS_NSLX4.pkl`; повтор `_trace_cache.py` по умолчанию эти ручки выключает).
 
+**★★ 18.10 §6.314 ✅ порог v8 τ 0.07 / δ 0.03 (`line_choice_v8pt.pkl`): поле+вне 2584 именных, сорт A 371. База A/B — NSE8T
+(`linechoice=oof:…line_choice_v8et`).**
+
 **★★ 18.10 §6.311 ✅ В ПРОДЕ: выбор трассы v8p — + правдоподобие значения кандидата при шкале слота: поле+вне 2409 → 2541
 (+132), сорт A 344 → 367. База A/B — NSE8 (`linechoice=oof:…line_choice_v8e`, склейка `merge_ab3.py`).**
 
