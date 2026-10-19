@@ -21,11 +21,13 @@ import numpy as np
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--peaks", default=r"F:/nds/output/taskS/peaks_dev")
-ap.add_argument("--variant", default="base", choices=["base", "inert"])
+ap.add_argument("--variant", default="base", choices=["base", "inert", "learn"])
 ap.add_argument("--thr", type=float, default=0.6, help="порог пиков (доля max строки), как `rowdec_peak_thr`")
 ap.add_argument("--wacc", type=float, default=0.5, help="inert: вес |Δx/dy − v|")
 ap.add_argument("--alpha", type=float, default=0.3, help="inert: EMA наклона (вес нового шага)")
 ap.add_argument("--kplus", type=int, default=0, help="путей на трек больше k (§6.305)")
+ap.add_argument("--link", default=r"F:/nds/output/taskS/link_model.pkl", help="learn: `_link_train.py` (модель фолда, не видевшего лист)")
+ap.add_argument("--wl", type=float, default=1.0, help="learn: вес −log p перехода")
 ap.add_argument("--out", default="")
 ap.add_argument("--parity", default="", help="кэш redec (tcache_pkdev): сверить base с его `alt`")
 ap.add_argument("--workers", type=int, default=4)
@@ -43,9 +45,45 @@ def peaks_at(D, thr):
     return out
 
 
+_LM = None
+
+
+def link_costs(D, P):
+    """§6.318: −log p «та же кривая» для переходов строка i-1 → i (все пики строк; ±60 px), признаки как `_link_data.py`"""
+    global _LM
+    if _LM is None:
+        _LM = pickle.load(open(a.link, "rb"))
+    m = _LM[_LM["folds"].get(D["stem"], 0)]
+    C = [None] * len(P)
+    for i in range(1, len(P)):
+        ia, pa_, ea = P[i - 1]; ib, pb_, eb = P[i]
+        if not len(ia) or not len(ib):
+            continue
+        mxa = float(D["rows"][i - 1][0]) or 1.0; mxb = float(D["rows"][i][0]) or 1.0
+        pidx = P[i - 2][0] if i >= 2 else np.zeros(0, int)
+        rk = np.argsort(np.argsort(-pb_)).astype(float)
+        F = []; idx_ = []
+        for a_ in range(len(ia)):
+            xa = float(ia[a_]); v = (xa - float(pidx[int(np.argmin(np.abs(pidx - xa)))])) if len(pidx) else 0.0
+            dx = ib.astype(float) - xa; mw = np.abs(dx) <= 60
+            nw = float(mw.sum())
+            for b_ in np.flatnonzero(mw):
+                ed = float(np.sqrt(((ea[a_].astype(np.float32) - eb[b_].astype(np.float32)) ** 2).sum())) if (ea is not None and eb is not None) else np.nan
+                F.append([dx[b_], abs(dx[b_]), abs(dx[b_] - v), v, float(pa_[a_]) / mxa, float(pb_[b_]) / mxb, rk[b_], nw, ed, 1.0, float(D["k"])])
+                idx_.append((b_, a_))
+        M_ = np.full((len(ib), len(ia)), 30.0)
+        if F:
+            pr = m.predict_proba(np.array(F, np.float32))[:, 1]
+            for (b_, a_), p_ in zip(idx_, pr):
+                M_[b_, a_] = -np.log(max(float(p_), 1e-6))
+        C[i] = M_
+    return C
+
+
 def paths(D, variant):
     k, y0, x0, wjump, wemb = D["k"], D["y0"], D["x0"], D["wjump"], D["wemb"]
     P = peaks_at(D, a.thr)
+    LC_ = link_costs(D, P) if variant == "learn" else None
     kp = k + a.kplus                                       # прототипы личности — по k (как прод), путей — k + kplus
     use_emb = k >= D["emb_min_k"]; mu = None
     if use_emb:
@@ -64,12 +102,13 @@ def paths(D, variant):
     out = []
     taken = [set() for _ in range(len(P))]
     for j in range(kp):
-        rows, cands, locs = [], [], []
+        rows, cands, locs, kept = [], [], [], []
         for i, (ii, pp, ee) in enumerate(P):
             keep = np.array([q for q in range(len(ii)) if not any(abs(int(ii[q]) - t) <= 3 for t in taken[i])], int)
             if not len(keep):
                 continue
             loc = -np.log(np.clip(pp[keep].astype(np.float64), 1e-6, 1.0))
+            kept.append(keep)
             if use_emb and mu is not None and j < k:
                 loc = loc + wemb * np.sqrt(((ee[keep].astype(np.float32) - mu[j]) ** 2).sum(-1))
             rows.append(i); cands.append(ii[keep].astype(float)); locs.append(loc)
@@ -83,6 +122,8 @@ def paths(D, variant):
             tot = dp[t - 1][None, :] + wjump * np.abs(step)
             if variant == "inert":
                 tot = tot + a.wacc * np.abs(step - V[None, :])
+            if variant == "learn" and dy == 1 and LC_[rows[t]] is not None:      # §6.318: выученная цена соседних строк
+                tot = dp[t - 1][None, :] + a.wl * LC_[rows[t]][np.ix_(kept[t], kept[t - 1])]
             arg = tot.argmin(1)
             dp.append(locs[t] + tot[np.arange(len(cands[t])), arg]); bp.append(arg)
             if variant == "inert":
