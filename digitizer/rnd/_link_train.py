@@ -33,6 +33,9 @@ for k in range(5):
     print(f"  фолд {k}: обучение {len(tr)}, AUC {roc_auc_score(y[sub], P[sub]):.4f}, |Δx| {roc_auc_score(y[sub], -X[sub, 1]):.4f}")
 ok = np.isfinite(P)
 print(f"★ AUC вне фолда {roc_auc_score(y[ok], P[ok]):.4f}; по |Δx|/d {roc_auc_score(y[ok], -X[ok, 1]):.4f}; по |Δx/d − v| {roc_auc_score(y[ok], -X[ok, 2]):.4f}")
+tr = np.arange(len(y)) if len(y) <= a.n else rng.choice(len(y), a.n, replace=False)
+mA = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.1, max_leaf_nodes=63, min_samples_leaf=100, random_state=0)
+mA.fit(X[tr], y[tr]); M["all"] = mA                      # для листов вне выборки обучения (прод, листы не из peaks_dev)
 M["folds"] = FOLD
 M["feats"] = ["dx", "adx", "dacc", "v", "pa", "pb", "rank_b", "n_win", "emb_d", "d", "k"]
 pickle.dump(M, open(a.out, "wb"))

@@ -225,7 +225,7 @@ def ink_color(rgb, p, tr, step=8, halfw=3, min_rows=8):
 
 
 def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.0, conf_out=None, extra_thr=None,
-                extra_out=None, extra_inert=None):
+                extra_out=None, extra_inert=None, extra_learn=None):
     """→ list[{row: x}] длиной k: траектории кривых трека в координатах ЛИСТА.
     §6.287: `extra_thr` — второй порог пиков по той же карте (сеть не пересчитывается); его k траекторий — в `extra_out`."""
     import torch
@@ -305,7 +305,7 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     pthr = 0.6 if _v is None else float(_v)      # ⚠ не `or 0.6`: 0.0 («все пики») превращался бы в 0.6
     wemb = float(getattr(p, "rowdec_emb_w", wemb) if getattr(p, "rowdec_emb_w", None) is not None else wemb)
 
-    def _paths(pthr, inert=False, kplus=0):
+    def _paths(pthr, inert=False, kplus=0, learn=False):
         """§6.305: inert — состояние несёт сглаженный наклон пути v (EMA `rowdec_inert_alpha`), переход + `rowdec_inert_w`·|Δx/dy − v|;
         kplus — путей больше k (прототипы личности — по k). Оба выкл = прежний путь бит-в-бит."""
         peaks = []
@@ -353,13 +353,20 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
         hold = float(getattr(p, "rowdec_hold", 0.0) or 0.0)
         gmax = int(getattr(p, "rowdec_hold_gmax", 29) or 29)
         w_in = float(getattr(p, "rowdec_inert_w", 1.0) or 1.0); a_in = float(getattr(p, "rowdec_inert_alpha", 0.3) or 0.3)
+        LC_ = None
+        if learn:                                           # §6.318: выученная цена соседних строк (матрицы — один раз на трек)
+            _pe = [(np.asarray(peaks[i], np.int64), prob[i, peaks[i]].astype(np.float32),
+                    embs[:, i, peaks[i]].T.astype(np.float32) if k >= emb_min_k else None) for i in range(prob.shape[0])]
+            LC_ = link_costs([float(prob[i].max()) for i in range(prob.shape[0])], _pe, k,
+                             _link_model(str(getattr(p, "rowdec_link_model", "") or "link_model.pkl"), _DUMP_CTX[0]))
         for j in range(k + kplus):
-            rows, cands, locs = [], [], []
+            rows, cands, locs, kept = [], [], [], []
             for i in range(prob.shape[0]):
-                idx = np.array([x for x in peaks[i]
-                                if not any(abs(x - t) <= 3 for t in taken[i])], int)
+                _kp = np.array([q for q, x in enumerate(peaks[i]) if not any(abs(x - t) <= 3 for t in taken[i])], int)
+                idx = np.asarray(peaks[i], int)[_kp] if len(_kp) else np.zeros(0, int)
                 if not len(idx):
                     continue
+                kept.append(_kp)
                 loc = -np.log(np.clip(prob[i, idx], 1e-6, 1.0))
                 if use_emb and mu is not None and j < k:
                     E = np.stack([embs[:, i, x] for x in idx])
@@ -379,6 +386,8 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                 else:
                     jump = np.abs(cands[t][:, None] - cands[t - 1][None, :]) / dy
                     tot = dp[t - 1][None, :] + wjump * jump
+                if learn and dy == 1 and LC_[rows[t]] is not None:   # §6.318: выученная цена соседних строк
+                    tot = dp[t - 1][None, :] + LC_[rows[t]][np.ix_(kept[t], kept[t - 1])]
                 arg = tot.argmin(1)
                 dp.append(locs[t] + tot[np.arange(len(cands[t])), arg]); bp.append(arg)
                 if inert:
@@ -415,6 +424,9 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     if extra_inert and extra_out is not None:              # §6.305: пути с инерцией (порог, доп. пути) — после доп. порогов
         for _t, _kp in extra_inert:
             extra_out.append(_paths(float(_t), inert=True, kplus=int(_kp)))
+    if extra_learn and extra_out is not None:              # §6.318: пути с выученной ценой перехода — после инерции
+        for _t, _kp in extra_learn:
+            extra_out.append(_paths(float(_t), kplus=int(_kp), learn=True))
     # ★ §6.240: уверенность траектории — медиана вероятности карты вдоль неё (для вето в `emit`); ключ — id словаря.
     #   ⛔ 27.09 (разбор): не модульный словарь — UI многопоточный, и параллельный прогон стирал чужие записи (вето молча
     #   выключалось). Словарь даёт вызывающий (`trace_auto`), живёт один вызов.
@@ -425,6 +437,59 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                 xs = np.fromiter(tr.values(), np.float64, len(tr)).astype(np.int64) - x0
                 conf_out[id(tr)] = float(np.median(prob[ys, xs]))
     return out
+
+
+_LINK = {}
+
+
+def _link_model(path, stem):
+    """§6.318: модель перехода «пик → пик той же кривой» (`_link_train.py`): модель фолда, если лист был в выборке, иначе «all»"""
+    from pathlib import Path as _P
+    if path not in _LINK:
+        import pickle as _pk
+        p_ = _P(path)
+        if not p_.is_absolute():
+            p_ = _P(__file__).parent / "models" / path
+        _LINK[path] = _pk.load(open(p_, "rb"))
+    M_ = _LINK[path]
+    k_ = M_.get("folds", {}).get(stem)
+    return M_[k_] if k_ is not None and k_ in M_ else M_["all"]
+
+
+def link_costs(rows_mx, P, k, m):
+    """§6.318: −log p «та же кривая» для переходов строка i-1 → i (±60 px); признаки — как `digitizer/rnd/_link_data.py`.
+    rows_mx — max карты по строкам, P — [(x пиков, p пиков, эмбеддинги или None)] → список матриц [n_i × n_{i-1}] (None — нет пиков)"""
+    feats, slices = [], []
+    for i in range(1, len(P)):
+        ia, pa_, ea = P[i - 1]; ib, pb_, eb = P[i]
+        if not len(ia) or not len(ib):
+            slices.append(None); continue
+        mxa = float(rows_mx[i - 1]) or 1.0; mxb = float(rows_mx[i]) or 1.0
+        pidx = P[i - 2][0].astype(float) if i >= 2 else np.zeros(0)
+        xa = ia.astype(float)
+        v = (xa - pidx[np.abs(pidx[None, :] - xa[:, None]).argmin(1)]) if len(pidx) else np.zeros(len(xa))
+        DX = ib.astype(float)[:, None] - xa[None, :]
+        W = np.abs(DX) <= 60
+        nw = W.sum(0).astype(float)
+        rk = np.argsort(np.argsort(-pb_)).astype(float)
+        bb, aa = np.nonzero(W)
+        if ea is not None and eb is not None:
+            ed = np.sqrt(((ea[aa].astype(np.float32) - eb[bb].astype(np.float32)) ** 2).sum(1))
+        else:
+            ed = np.full(len(aa), np.nan)
+        F = np.column_stack([DX[bb, aa], np.abs(DX[bb, aa]), np.abs(DX[bb, aa] - v[aa]), v[aa], pa_[aa].astype(float) / mxa,
+                             pb_[bb].astype(float) / mxb, rk[bb], nw[aa], ed, np.ones(len(aa)), np.full(len(aa), float(k))])
+        feats.append(F); slices.append((i, len(ib), len(ia), bb, aa))
+    allF = np.concatenate(feats).astype(np.float32) if feats else np.zeros((0, 11), np.float32)
+    pr = m.predict_proba(allF)[:, 1] if len(allF) else np.zeros(0)
+    C = [None] * len(P); o = 0
+    for sl in slices:
+        if sl is None:
+            continue
+        i, nb, na, bb, aa = sl
+        M_ = np.full((nb, na), 30.0); M_[bb, aa] = -np.log(np.clip(pr[o:o + len(bb)], 1e-6, 1)); o += len(bb)
+        C[i] = M_
+    return C
 
 
 _DUMP_CTX = ("", 0)            # §6.305: (лист, трек) для `rowdec_peak_dump`
@@ -615,7 +680,9 @@ def trace_auto(rgb, sheet, p):
     # §6.305: пути с инерцией наклона — `cv.rowdec_extra_inert` = «порог:доп.пути,…» (напр. «0.6:0,0.3:2»; "" = выкл)
     _xi = str(getattr(p, "rowdec_extra_inert", "") or "")
     xin = [(float(t_.split(":")[0]), int(t_.split(":")[1]) if ":" in t_ else 0) for t_ in _xi.replace(";", ",").split(",") if t_.strip()] or None
-    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []))]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
+    _xl = str(getattr(p, "rowdec_extra_learn", "") or "")         # §6.318: «порог:доп.пути,…» — пути с выученной ценой перехода
+    xle = [(float(t_.split(":")[0]), int(t_.split(":")[1]) if ":" in t_ else 0) for t_ in _xl.replace(";", ",").split(",") if t_.strip()] or None
+    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []) + len(xle or []))]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
         if lines:
@@ -628,16 +695,16 @@ def trace_auto(rgb, sheet, p):
         # ★ §6.239: K + `rowdec_k_plus` путей (0 = прод бит-в-бит). §6.237: из невзятых удержанием 71 из 196 ведутся по
         #   ДРУГОЙ нарисованной линии (> 50 px) — лишняя линия трека, которой нет в эталоне, забирает путь.
         K += int(getattr(p, "rowdec_k_plus", 0) or 0)
-        ext = [] if (xthr or xin) else None
+        ext = [] if (xthr or xin or xle) else None
         global _DUMP_CTX
         _DUMP_CTX = (getattr(getattr(sheet, "meta", None), "raw_stem", "") or "", ti)      # §6.305: подпись выгрузки пиков
-        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext, extra_inert=xin)
+        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext, extra_inert=xin, extra_learn=xle)
         out.extend(_pair(trs, lines, ti))
         for _j, _e in enumerate(ext or []):       # §6.287: пути доп. порогов — та же привязка к линиям
             extra_by[_j].extend(_pair(_e, lines, ti))
     res = _Trs(out)
     res.conf = [(conf.get(id(t)),) for _, t in out]
-    res.extra = _Trs([pr for lst_ in extra_by for pr in lst_]) if (xthr or xin) else None   # §6.287: порог-за-порогом
+    res.extra = _Trs([pr for lst_ in extra_by for pr in lst_]) if (xthr or xin or xle) else None   # §6.287: порог-за-порогом
     return res
 
 
