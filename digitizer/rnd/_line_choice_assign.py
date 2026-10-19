@@ -50,6 +50,8 @@ ap.add_argument("--vfeat", default="", help="§6.311: `_slot_scale.py` — + п�
 ap.add_argument("--vreg", action="store_true", help="§6.313: (с --vfeat) + те же признаки по приору района (без своей скважины)")
 ap.add_argument("--vchain", action="store_true", help="§6.315: (с --vfeat) + значение при каждом уровне цепочки шкал слота: min |z|, его уровень, z при уровне 1")
 ap.add_argument("--ovl", default="", help="§6.316: каталог `_cand_overlap.py` — + перекрытие кандидата с другими (лучший, второй, число частичных, покрытие)")
+ap.add_argument("--wellcons", action="store_true", help="§6.320: (stack) второй ярус + согласие с соседними листами той же скважины "
+                "(без меток): разница положения, стиля, значения кандидата с консенсусом лучших по P трасс того же слота на других листах")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -372,6 +374,46 @@ def pw_oof(sheets, nf):
     return out
 
 
+WC_COLS = [4, 6, 7, 8, 9]                                 # u50, толщина, c1, c2, темнота
+
+
+def wellcons(p, sheets):
+    """§6.320: на других листах той же скважины — лучший по P кандидат слота с тем же именем; консенсус = среднее его признаков,
+    взвешенное P. Для строки: разница её признаков с консенсусом, |разница| u50 и z50, число листов, средний P консенсуса.
+    Метки не нужны: P вне фолда (обучение) / моделью обучения (проверка); скважины обучения и проверки не пересекаются."""
+    cols = WC_COLS + ([31] if a.vfeat else [])
+    best = defaultdict(list)
+    names = {}
+    for sh in sheets:
+        by = defaultdict(list)
+        for i in ROWS_OF.get(sh, []):
+            by[ROWS[i][1]].append(i)
+        for si, idxs in by.items():
+            b = max(idxs, key=lambda i: p[i])
+            nm = RECD[sh]["slots"][si]["name"]; names[(sh, si)] = nm
+            best[(well(sh), nm)].append((sh, float(p[b]), X_ALL[b, cols]))
+    F = np.full((len(ROWS), len(cols) + 4), np.nan)
+    for sh in sheets:
+        w = well(sh); cons = {}
+        for i in ROWS_OF.get(sh, []):
+            si = ROWS[i][1]
+            if si not in cons:
+                L = [(pp, ff) for s2, pp, ff in best.get((w, names[(sh, si)]), []) if s2 != sh]
+                if L:
+                    W_ = np.array([pp for pp, _ in L]); FF = np.array([ff for _, ff in L], float)
+                    ok = np.isfinite(FF)
+                    den = (ok * W_[:, None]).sum(0)
+                    cons[si] = (np.where(den > 0, np.nansum(FF * W_[:, None], 0) / np.maximum(den, 1e-9), np.nan), len(L), W_.mean())
+                else:
+                    cons[si] = None
+            if cons[si] is None:
+                continue
+            c_, n_, pm_ = cons[si]
+            d = X_ALL[i, cols] - c_
+            F[i] = list(d) + [abs(d[0]), abs(d[-1]) if a.vfeat else np.nan, n_, pm_]
+    return F
+
+
 def stage2(train_sheets, test_sheets, nf_inner):
     pa = s1_oof(train_sheets, ALLC, nf_inner); pn = s1_oof(train_sheets, NOCUR, nf_inner)
     trl = rows_in(train_sheets, True); te = rows_in(test_sheets)
@@ -380,6 +422,8 @@ def stage2(train_sheets, test_sheets, nf_inner):
     pn[te] = mn.predict_proba(X_ALL[te][:, NOCUR])[:, 1]
     Fx = cross(0.5 * (pa + pn), list(train_sheets) + list(test_sheets))
     X2 = np.hstack([X_ALL, pa[:, None], pn[:, None], Fx])
+    if a.wellcons:                                       # §6.320: согласие с листами той же скважины
+        X2 = np.hstack([X2, wellcons(0.5 * (pa + pn), list(train_sheets) + list(test_sheets))])
     if a.pairwise:                                       # §6.302: вложенно — обучение по внутренним фолдам, проверка моделью на всём обучении
         pw = pw_oof(train_sheets, nf_inner)
         pw_score(pw_fit(train_sheets, PWC), test_sheets, PWC, pw)
