@@ -498,7 +498,7 @@ for g in a.grid:
             SW.append(dict(sheet=sh, slot=s["name"], before=bool(before), after=bool(after), empty=c is None))
     RES[g] = SW; ALLCH[g] = AC
     if a.miss:                                            # §6.301: почему честный кандидат не встал
-        M = Counter(); RK = Counter(); MISS_EX = []
+        M = Counter(); RK = Counter(); MISS_EX = []; FM = Counter(); FT = Counter(); FO = Counter()
         for sh, by in BY.items():
             if sh in OUT or sh not in FIELD:
                 continue
@@ -513,6 +513,10 @@ for g in a.grid:
                 if c is not None:
                     owner[c].append(si)
             for si, idx in by.items():
+                if rec["slots"][si]["has_truth"]:
+                    FT[re.sub(r"^BKZ_", "", rec["slots"][si]["root"])] += 1
+                    if hon[si] and fin[si] in hon[si]:
+                        FO[re.sub(r"^BKZ_", "", rec["slots"][si]["root"])] += 1
                 if not rec["slots"][si]["has_truth"] or not hon[si] or fin[si] in hon[si]:
                     continue
                 ph = max(P[i] for i in idx if ROWS[i][4]); pb = max(P[i] for i in idx)
@@ -527,6 +531,7 @@ for g in a.grid:
                 else:
                     cat = "стоит трасса, ни для кого не честная"
                 M[(cat, "честную забрал другой слот" if took else "честная свободна", "P честной < τ" if ph < tau else "P честной ≥ τ")] += 1
+                FM[re.sub(r"^BKZ_", "", rec["slots"][si]["root"])] += 1
                 if cat.endswith("ни для кого не честная") and not took and ph >= tau:     # §6.316: примеры «мусор вместо честной»
                     _kc = max((i for i in idx if cl[ROWS[i][2]] == c), key=lambda i: P[i])
                     _kh = max((i for i in idx if ROWS[i][4]), key=lambda i: P[i])
@@ -542,6 +547,8 @@ for g in a.grid:
             print(f"   {v_:5d}  {' | '.join(k_)}")
         print(f"   ранг честной по P среди кластеров слота: {dict(sorted(RK.items()))} (4 = 4 и ниже)")
         pickle.dump(MISS_EX, open(str(a.dump).replace(".pkl", "_missex.pkl"), "wb"))
+        print("   по семействам (слотов с эталоном / честных после назначения / промахов при честном кандидате): " +
+              "; ".join(f"{f_} {FT[f_]}/{FO[f_]}/{FM[f_]}" for f_, _ in FT.most_common(16)))
     for sn, S in ((("поле", FIELD0), ("вне", EVO), ("поле+вне", FIELD), ("сорт A", HOLD)) if a.eval_out else (("поле", FIELD), ("сорт A", HOLD))):
         d = np.array([D.get(x, 0) for x in S]); nzv = d[d != 0]
         p = float(np.mean(np.abs((rng.choice([-1, 1], size=(20000, len(nzv))) * nzv).sum(1)) >= abs(d.sum()))) if len(nzv) else 1.0
