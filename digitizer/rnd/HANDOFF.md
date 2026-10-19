@@ -24,6 +24,9 @@
 levelshift=1,namestyle=oof:F:/nds/output/taskS/name_style_v1,linechoice=oof:F:/nds/output/taskS/line_choice_v4` + `--extra-cache tcache_pk3`
 (режим NSLX4 в `rp_lvl`, сравнения — `rp_lvl_NS_NSLX4.pkl`; повтор `_trace_cache.py` по умолчанию эти ручки выключает).
 
+**★ 20.10 §6.319 ⛔: пути с выученной ценой перехода (`rowdec_extra_learn`, выкл.) + v9 — A/B +22 (p = 0.19), сорт A −5; прод не
+менялся (v8pt). Идёт §6.320 — согласие выбора трассы с соседними листами той же скважины (стенд `--wellcons`, `_wc_run.ps1`).**
+
 **★★ 18.10 §6.314 ✅ порог v8 τ 0.07 / δ 0.03 (`line_choice_v8pt.pkl`): поле+вне 2584 именных, сорт A 371. База A/B — NSE8T
 (`linechoice=oof:…line_choice_v8et`).**
 
