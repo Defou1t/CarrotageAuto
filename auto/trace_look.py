@@ -34,7 +34,7 @@ def patches(gray, paper, d, np_=NP, s_=S):
     return P
 
 
-def build_net():
+def build_net(k_out=1):
     import torch.nn as nn
 
     class Net(nn.Module):
@@ -43,13 +43,14 @@ def build_net():
             c = lambda i, o: nn.Sequential(nn.Conv2d(i, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU())
             s.f = nn.Sequential(c(2, 32), c(32, 32), nn.MaxPool2d(2), c(32, 64), c(64, 64), nn.MaxPool2d(2), c(64, 96),
                                 nn.AdaptiveAvgPool2d(1), nn.Flatten())
-            s.h = nn.Sequential(nn.Linear(192, 64), nn.ReLU(), nn.Linear(64, 1))
+            s.h = nn.Sequential(nn.Linear(192, 64), nn.ReLU(), nn.Linear(64, k_out))
 
         def forward(s, x):                              # x [B, NP, 2, S, S]
             import torch
             B, n = x.shape[:2]
             e = s.f(x.flatten(0, 1)).view(B, n, -1)
-            return s.h(torch.cat([e.mean(1), e.max(1).values], 1))[:, 0]
+            o = s.h(torch.cat([e.mean(1), e.max(1).values], 1))
+            return o[:, 0] if k_out == 1 else o
     return Net()
 
 

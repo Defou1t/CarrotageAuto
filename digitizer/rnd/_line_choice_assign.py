@@ -55,6 +55,7 @@ ap.add_argument("--wellcons", action="store_true", help="§6.320: (stack) вто
 ap.add_argument("--swap", action="store_true", help="§6.324: после назначения — модель обмена трасс двух слотов (пары слотов, где обе трассы — "
                 "кандидаты обоих слотов): P четырёх сочетаний, разности стиля трасс, значения при шкалах обоих слотов; вне фолда по скважинам")
 ap.add_argument("--cnn", default="", help="§6.325: `_trace_cnn.py` — + оценка сети «настоящая ли трасса» по кусочкам скана (вне фолда)")
+ap.add_argument("--cnnfam", default="", help="§6.327: `_trace_cnn.py --fam` — + P(семейство слота) и P(мусор) по виду трассы")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -116,6 +117,8 @@ if a.ovl:                                                 # §6.316
             OVL[_r["sheet"]] = pickle.load(open(_f, "rb"))
     print(f"перекрытия кандидатов: листов {len(OVL)} из {len(RECS)}")
 CNN = pickle.load(open(a.cnn, "rb")) if a.cnn else {}
+CFAM = pickle.load(open(a.cnnfam, "rb")) if a.cnnfam else {}
+CFI = {f_: i for i, f_ in enumerate(CFAM.get("__classes__", [])) if i > 0 and f_ != "прочее"}   # прочее — последний класс
 TRF = {}
 if a.trace:
     for f in sorted(Path(a.data).glob("*.pkl")):
@@ -183,6 +186,9 @@ for rec in RECS:
                         f += [np.nan] * 4
             if a.cnn:                                    # §6.325
                 f += [CNN.get((sh, r["k"]), np.nan)]
+            if a.cnnfam:                                 # §6.327
+                _v = CFAM.get((sh, r["k"]))
+                f += ([float(_v[CFI.get(s["root"], len(_v) - 1)]), float(_v[0])] if _v is not None else [np.nan, np.nan])
             if a.trace:
                 f += [TRF[sh][r["k"]][x] for x in SHAPE]
             if a.norm:
