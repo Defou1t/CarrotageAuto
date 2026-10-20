@@ -3499,6 +3499,10 @@ p = 0.19) и §6.309 (модель уровня v5e с листами вне п�
 Если «да»: `auto/models/line_choice_v9p.pkl` (из `taskS/line_choice_v9p/line_choice_all.pkl`), `cv.line_choice = "line_choice_v9p.pkl"`,
 `cv.rowdec_extra_learn = "0.6:0,0.3:2"`, `cv.level_ink = "level_ink_v5p_model.pt"` (из `taskS`), прогон-проверка прода; откат —
 v8pt / "" / v2.
+**Готово к включению (20.10, конфиг НЕ менялся):** `auto/models/line_choice_v9p.pkl` (τ 0.07 / δ 0.03, vfeat) и
+`auto/models/level_ink_v5p.pt` (cin 668, как v2) в репозитории; прогон прода на 2 листах (`scratchpad/smoke323.py`) с
+`line_choice = "line_choice_v9p.pkl"`, `rowdec_extra_learn = "0.6:0,0.3:2"`, `level_ink = "level_ink_v5p.pt"` — без ошибок, выдача
+отличается от базы, время листа +1…+11 с (модель перехода). Включение — эти три строки в `auto/config.py`.
 
 ### 6.322 ⛔ ПРАВКИ УРОВНЕЙ ПОВЕРХ МОДЕЛИ: «ГРАНИЦА ТОЛЬКО ПРИ СКАЧКЕ x» И СЛИЯНИЕ КОРОТКИХ СЕГМЕНТОВ — НОЛЬ ИЛИ МИНУС (20.10)
 
