@@ -21,6 +21,8 @@ ap.add_argument("--epochs", type=int, default=6)
 ap.add_argument("--bs", type=int, default=256)
 ap.add_argument("--out", default=r"F:/nds/output/taskS/trace_cnn.pkl")
 ap.add_argument("--folds", type=int, default=5)
+ap.add_argument("--save-dir", default="", help="веса: trace_cnn_f{k}.pt (фолды), trace_cnn_all.pt (на поле) — рядом с моделями выбора трассы")
+ap.add_argument("--prod-out", default="", help="веса для прода: учится на ВСЁМ с меткой, включая сорт A")
 a = ap.parse_args()
 import torch, torch.nn as nn
 
@@ -52,32 +54,25 @@ FLD = (FIELD & SHEETS) | EVO
 wells = sorted({well(x) for x in FLD}); FOLD = {w: i % a.folds for i, w in enumerate(wells)}
 
 # кусочки
-X, Y, KEY = [], [], []
-for sh in sorted(SHEETS):
-    pf = Path(a.patch) / (hashlib.md5(sh.encode("utf-8")).hexdigest()[:16] + ".npz")
-    if not pf.exists():
-        continue
-    z = np.load(pf)
-    for j, k in enumerate(z["k"].tolist()):
-        X.append(z["X"][j]); Y.append(-1 if LAB[sh].get(k) is None else LAB[sh][k]); KEY.append((sh, k))
-X = np.stack(X); Y = np.array(Y)
+PF = [(sh, Path(a.patch) / (hashlib.md5(sh.encode("utf-8")).hexdigest()[:16] + ".npz")) for sh in sorted(SHEETS)]
+PF = [(sh, pf) for sh, pf in PF if pf.exists()]
+N = sum(len(np.load(pf)["k"]) for _, pf in PF)
+X = None; Y, KEY = [], []; o = 0
+for sh, pf in PF:
+    z = np.load(pf); xs = z["X"]                         # ⚠ z["X"] распаковывает весь массив при КАЖДОМ обращении — читать один раз
+    if X is None:
+        X = np.zeros((N,) + xs.shape[1:], np.uint8)
+    X[o:o + len(xs)] = xs; o += len(xs)
+    for k in z["k"].tolist():
+        Y.append(-1 if LAB[sh].get(k) is None else LAB[sh][k]); KEY.append((sh, k))
+Y = np.array(Y)
 GRP = np.array([("A" if sh in HOLD else (FOLD[well(sh)] if sh in FLD else "out")) for sh, _ in KEY], object)
 print(f"кандидатов {len(Y)} (с меткой {int((Y >= 0).sum())}, честных {int((Y == 1).sum())}), листов {len(SHEETS)}")
 dev = "cuda"
 
 
-class Net(nn.Module):
-    def __init__(s):
-        super().__init__()
-        c = lambda i, o: nn.Sequential(nn.Conv2d(i, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU())
-        s.f = nn.Sequential(c(2, 32), c(32, 32), nn.MaxPool2d(2), c(32, 64), c(64, 64), nn.MaxPool2d(2), c(64, 96),
-                            nn.AdaptiveAvgPool2d(1), nn.Flatten())
-        s.h = nn.Sequential(nn.Linear(192, 64), nn.ReLU(), nn.Linear(64, 1))
-
-    def forward(s, x):                                  # x [B, NP, 2, S, S]
-        B, NP = x.shape[:2]
-        e = s.f(x.flatten(0, 1)).view(B, NP, -1)
-        return s.h(torch.cat([e.mean(1), e.max(1).values], 1))[:, 0]
+sys.path.insert(0, "F:/nds/Auto")
+from auto.trace_look import build_net                    # сеть — та же, что в проде
 
 
 def batches(idx, shuffle, rng):
@@ -94,7 +89,7 @@ def batches(idx, shuffle, rng):
 
 def train(tr):
     rng = np.random.default_rng(0); torch.manual_seed(0)
-    net = Net().to(dev); opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
+    net = build_net().to(dev); opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
     steps = a.epochs * (-(-len(tr) // a.bs)); sch = torch.optim.lr_scheduler.OneCycleLR(opt, 2e-3, total_steps=steps)
     pw = torch.tensor(float((Y[tr] == 0).sum()) / max(1, (Y[tr] == 1).sum()), device=dev)
     for ep in range(a.epochs):
@@ -122,11 +117,18 @@ S = np.full(len(Y), np.nan, np.float32); t0 = time.time()
 for k in range(a.folds):
     tr = np.flatnonzero((Y >= 0) & np.isin(GRP, [f_ for f_ in range(a.folds) if f_ != k]))   # листы скважин сорта A — никогда
     te = np.flatnonzero(GRP == k)
-    S[te] = score(train(tr), te)
+    net = train(tr); S[te] = score(net, te)
+    if a.save_dir:
+        Path(a.save_dir).mkdir(parents=True, exist_ok=True); torch.save(net.state_dict(), Path(a.save_dir) / f"trace_cnn_f{k}.pt")
     m = te[Y[te] >= 0]
     print(f"  фолд {k}: обучение {len(tr)}, AUC {roc_auc_score(Y[m], S[m]):.4f}, {time.time() - t0:.0f} с")
 tr = np.flatnonzero((Y >= 0) & np.isin(GRP, list(range(a.folds)))); te = np.flatnonzero((GRP == "A") | (GRP == "out"))
-S[te] = score(train(tr), te)
+net = train(tr); S[te] = score(net, te)
+if a.save_dir:
+    torch.save(net.state_dict(), Path(a.save_dir) / "trace_cnn_all.pt")
+if a.prod_out:
+    torch.save(train(np.flatnonzero(Y >= 0)).state_dict(), a.prod_out)
+    print(f"★ веса для прода (всё с меткой, с сортом A): {a.prod_out}")
 for nm, sel in (("поле+вне", np.isin(GRP, list(range(a.folds)))), ("сорт A", GRP == "A")):
     m = sel & (Y >= 0)
     print(f"★ {nm}: AUC вне фолда {roc_auc_score(Y[m], S[m]):.4f} ({int(m.sum())} кандидатов)")

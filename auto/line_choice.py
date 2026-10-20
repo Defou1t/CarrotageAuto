@@ -193,6 +193,8 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
                     f += [float(np.clip((v_ - _pr[0]) / _pr[1], -10, 10)) for v_ in _vq] +                          [float(np.clip((_vq[1] - _pr[2]) / max(_pr[3] - _pr[2], 1e-6), -5, 5))]
                 else:
                     f += [np.nan] * 4
+            if ck.get("cnn"):                             # §6.325 — после значений, как в стенде
+                f += [c.get("cnn", np.nan)]
             ROWS.append((si, r["k"], f, r["here"], r["elsewhere"]))
     if not ROWS:
         return {}
@@ -260,7 +262,7 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
     return out
 
 
-def choose(sheet, slots, cands, written, path, root_of, scales=None):
+def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None):
     """slots — [(имя, top_y, n_rows, (xl, xr))] в порядке рамки (только слоты с цепочкой шкал);
     cands — [dict(src, tr — исходная трасса, dense, style, rough)];
     written — [(имя, плотная записанная трасса)] в порядке рамки (что стоит в слотах сейчас).
@@ -281,6 +283,12 @@ def choose(sheet, slots, cands, written, path, root_of, scales=None):
             ys = np.array(sorted(c["dense"])); xs = np.array([c["dense"][y] for y in ys])
             CS.append(dict(src=c["src"], n=len(c["dense"]), y0=int(ys[0]), y1=int(ys[-1]), xs_q=np.percentile(xs, [10, 50, 90]),
                            style=c["style"], rough=c["rough"]))
+        if ck.get("cnn"):                                 # §6.325: оценка сети по кусочкам скана (веса рядом с моделью выбора)
+            from . import trace_look as TL
+            sc_ = (TL.scores(look[0], look[1], [c["dense"] for c in cands], TL.cnn_path(path)) if look is not None
+                   else np.full(len(cands), np.nan))
+            for c_, v_ in zip(CS, sc_):
+                c_["cnn"] = float(v_)
         return _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales)
     model, fams, tau, dlt = ck["model"], dict(ck["fams"]), ck["tau"], ck["delta"]
     # занятость: кандидат стоит в слоте, если x совпадает в 1 px на ≥ 90% общих строк (как в стенде по файлам выдачи)

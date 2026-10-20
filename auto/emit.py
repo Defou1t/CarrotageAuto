@@ -420,7 +420,7 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
     path = LC.resolve(spec, sheet=sheet_name)
     if path is None:
         return
-    rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root, scales=scales)
+    rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root, scales=scales, look=(gray, paper))
     for name, (k, p) in rep_.items():
         if k is None:                                   # §6.283: трассу слота забрал другой слот, своей нет — слот пуст
             mapping.pop(name, None)
