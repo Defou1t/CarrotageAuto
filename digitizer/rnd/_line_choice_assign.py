@@ -54,6 +54,7 @@ ap.add_argument("--wellcons", action="store_true", help="§6.320: (stack) вто
                 "(без меток): разница положения, стиля, значения кандидата с консенсусом лучших по P трасс того же слота на других листах")
 ap.add_argument("--swap", action="store_true", help="§6.324: после назначения — модель обмена трасс двух слотов (пары слотов, где обе трассы — "
                 "кандидаты обоих слотов): P четырёх сочетаний, разности стиля трасс, значения при шкалах обоих слотов; вне фолда по скважинам")
+ap.add_argument("--cnn", default="", help="§6.325: `_trace_cnn.py` — + оценка сети «настоящая ли трасса» по кусочкам скана (вне фолда)")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -114,6 +115,7 @@ if a.ovl:                                                 # §6.316
         if _f.exists():
             OVL[_r["sheet"]] = pickle.load(open(_f, "rb"))
     print(f"перекрытия кандидатов: листов {len(OVL)} из {len(RECS)}")
+CNN = pickle.load(open(a.cnn, "rb")) if a.cnn else {}
 TRF = {}
 if a.trace:
     for f in sorted(Path(a.data).glob("*.pkl")):
@@ -179,6 +181,8 @@ for rec in RECS:
                         f += [float(np.clip((v_ - _rp[0]) / _rp[1], -10, 10)) for v_ in _vq] +                              [float(np.clip((_vq[1] - _rp[2]) / max(_rp[3] - _rp[2], 1e-6), -5, 5))]
                     else:
                         f += [np.nan] * 4
+            if a.cnn:                                    # §6.325
+                f += [CNN.get((sh, r["k"]), np.nan)]
             if a.trace:
                 f += [TRF[sh][r["k"]][x] for x in SHAPE]
             if a.norm:
