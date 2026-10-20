@@ -10,7 +10,8 @@ from extract_nlgx import extract, NULL
 from _multi_replica_probe import dense
 from auto import meta as M, level_ink as LI
 import decode_levels as DL
-exec(open(r"C:/Users/Defou1t/AppData/Local/Temp/claude/F--nds/d003c128-f676-40a0-aa41-55f0e2f5257c/scratchpad/lvl_common.py", encoding="utf-8").read())
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lvl_common import err, lv_rows, relevel, HON                # мера plane2 и пересчёт уровней — как `_name_cost_prod.py`
 
 MD = Path(sys.argv[1]); JF = float(sys.argv[3]) if len(sys.argv) > 3 else 0.3; WIN = int(sys.argv[4]) if len(sys.argv) > 4 else 8
 MINRUN = int(sys.argv[5]) if len(sys.argv) > 5 else 0

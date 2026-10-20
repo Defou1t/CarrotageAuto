@@ -1,3 +1,4 @@
+import numpy as np
 from scipy.spatial import cKDTree
 def tree(tr):
     ys = np.array(sorted(tr), float); xs = np.array([tr[int(y)] for y in ys], float)
