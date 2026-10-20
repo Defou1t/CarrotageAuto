@@ -52,6 +52,8 @@ ap.add_argument("--vchain", action="store_true", help="§6.315: (с --vfeat) + �
 ap.add_argument("--ovl", default="", help="§6.316: каталог `_cand_overlap.py` — + перекрытие кандидата с другими (лучший, второй, число частичных, покрытие)")
 ap.add_argument("--wellcons", action="store_true", help="§6.320: (stack) второй ярус + согласие с соседними листами той же скважины "
                 "(без меток): разница положения, стиля, значения кандидата с консенсусом лучших по P трасс того же слота на других листах")
+ap.add_argument("--swap", action="store_true", help="§6.324: после назначения — модель обмена трасс двух слотов (пары слотов, где обе трассы — "
+                "кандидаты обоих слотов): P четырёх сочетаний, разности стиля трасс, значения при шкалах обоих слотов; вне фолда по скважинам")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -517,6 +519,86 @@ for i, r in enumerate(ROWS):
     BY[r[0]][r[1]].append(i)
 RECD = {rec["sheet"]: rec for rec in RECS}
 rng = np.random.default_rng(0)
+def _swap_pairs(mode, tau, dlt):
+    """→ [(лист, si, sj, признаки, выигрыш)]: пары слотов листа после назначения, где трасса каждого — кандидат и другого слота.
+    Выигрыш — честных после обмена минус до (по меткам, только слоты с эталоном). Признаки в порядке (si, sj)."""
+    out = []
+    zc = 31 if a.vfeat else None
+    for sh, by in BY.items():
+        if sh in OUT:
+            continue
+        rec = RECD[sh]; cl = clusters(rec["cands"]); ch = solve(rec, by, mode, tau, dlt)
+        best, fin = {}, {}
+        for si, idx in by.items():
+            for i in idx:
+                c = cl[ROWS[i][2]]
+                if (si, c) not in best or P[i] > P[best[(si, c)]]:
+                    best[(si, c)] = i
+            cur_ = next((cl[ROWS[i][2]] for i in idx if ROWS[i][5]), None)
+            fin[si] = ch.get(si, cur_)
+        ss = sorted(si for si in by if fin[si] is not None)
+        hon = lambda i: int(ROWS[i][4] or 0)
+        for x in range(len(ss)):
+            for y in range(x + 1, len(ss)):
+                si, sj = ss[x], ss[y]; ci, cj = fin[si], fin[sj]
+                if ci == cj:
+                    continue
+                q = [best.get((si, ci)), best.get((sj, cj)), best.get((si, cj)), best.get((sj, ci))]
+                if any(v is None for v in q):
+                    continue
+                gain = hon(q[2]) + hon(q[3]) - hon(q[0]) - hon(q[1])
+                for o in ((0, 1, 2, 3), (1, 0, 3, 2)):             # обе ориентации пары
+                    v = [q[t] for t in o]
+                    pp = [float(P[t]) for t in v]
+                    f = pp + [pp[2] + pp[3] - pp[0] - pp[1], pp[2] - pp[0], pp[3] - pp[1]]
+                    f += [X_ALL[t, 4] for t in v] + ([X_ALL[t, zc] for t in v] if zc else [])
+                    f += [X_ALL[v[0], c_] - X_ALL[v[1], c_] for c_ in (1, 6, 7, 8, 9, 10, 11)]
+                    f += [X_ALL[v[0], 12], X_ALL[v[1], 12], X_ALL[v[0], 13], X_ALL[v[1], 13], X_ALL[v[0], 19], X_ALL[v[1], 19],
+                          X_ALL[v[0], 2], X_ALL[v[1], 2]]
+                    out.append((sh, (si, sj) if o[0] == 0 else (sj, si), f, gain))
+    return out
+
+
+def _swap_eval(mode, tau, dlt, g):
+    PR = _swap_pairs(mode, tau, dlt)
+    Xs = np.array([r[2] for r in PR], float); Ys = np.array([r[3] for r in PR]); SH = [r[0] for r in PR]
+    ps = np.full(len(PR), np.nan)
+    trn = lambda sel: [i for i in range(len(PR)) if sel(SH[i]) and Ys[i] != 0]
+    mk = lambda: HistGradientBoostingClassifier(max_iter=300, learning_rate=0.06, max_leaf_nodes=31, l2_regularization=1.0,
+                                                min_samples_leaf=40, random_state=0)
+    for k in range(a.folds):
+        tr = trn(lambda x: x in FIELD and FOLD[well(x)] != k)
+        te = [i for i in range(len(PR)) if SH[i] in FIELD and FOLD[well(SH[i])] == k]
+        if tr and te:
+            ps[te] = mk().fit(Xs[tr], Ys[tr] > 0).predict_proba(Xs[te])[:, 1]
+    tr = trn(lambda x: x in FIELD); te = [i for i in range(len(PR)) if SH[i] in HOLD]
+    if tr and te:
+        ps[te] = mk().fit(Xs[tr], Ys[tr] > 0).predict_proba(Xs[te])[:, 1]
+    pos = int((Ys > 0).sum() // 2); neg = int((Ys < 0).sum() // 2)
+    print(f"\n★ {g}: обмен — пар {len(PR) // 2}, обмен помог бы {pos}, навредил бы {neg} (потолок оракула +{pos})")
+    PAIR = defaultdict(list)                              # (лист, {si, sj}) → средняя P по двум ориентациям
+    for i, r in enumerate(PR):
+        PAIR[(r[0], frozenset(r[1]))].append(i)
+    for th in (0.5, 0.6, 0.7, 0.8, 0.9):
+        D = Counter(); n_sw = Counter()
+        by_sh = defaultdict(list)
+        for (sh, ss_), idx in PAIR.items():
+            pm = float(np.nanmean(ps[idx]))
+            if np.isfinite(pm) and pm >= th:
+                by_sh[sh].append((pm, ss_, int(Ys[idx[0]])))
+        for sh, L in by_sh.items():
+            used = set()
+            for pm, ss_, gn in sorted(L, key=lambda t: -t[0]):
+                if used & ss_:
+                    continue
+                used |= ss_; D[sh] += gn; n_sw[sh] += 1
+        for sn, S in (("поле", FIELD0), ("вне", EVO), ("поле+вне", FIELD), ("сорт A", HOLD)):
+            d = np.array([D.get(x, 0) for x in S]); nzv = d[d != 0]
+            pv = float(np.mean(np.abs((rng.choice([-1, 1], size=(20000, len(nzv))) * nzv).sum(1)) >= abs(d.sum()))) if len(nzv) else 1.0
+            print(f"★ обмен P ≥ {th:.1f} {sn:8s}: обменов {sum(n_sw.get(x, 0) for x in S):4d}; Δ {int(d.sum()):+4d} "
+                  f"(листов ↑{int((d > 0).sum())}/↓{int((d < 0).sum())}, p = {pv:.4f})")
+
+
 RES = {}
 ALLCH = {}                                                # все замены (и в слотах без эталона) — для сверки с продом
 for g in a.grid:
@@ -541,6 +623,8 @@ for g in a.grid:
             D[sh] += after - before
             SW.append(dict(sheet=sh, slot=s["name"], before=bool(before), after=bool(after), empty=c is None))
     RES[g] = SW; ALLCH[g] = AC
+    if a.swap:                                            # §6.324: обмен трасс двух слотов после назначения
+        _swap_eval(mode, tau, dlt, g)
     if a.miss:                                            # §6.301: почему честный кандидат не встал
         M = Counter(); RK = Counter(); MISS_EX = []; FM = Counter(); FT = Counter(); FO = Counter()
         for sh, by in BY.items():
