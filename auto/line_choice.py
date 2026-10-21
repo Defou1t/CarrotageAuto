@@ -285,8 +285,12 @@ def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None):
                            style=c["style"], rough=c["rough"]))
         if ck.get("cnn"):                                 # §6.325: оценка сети по кусочкам скана (веса рядом с моделью выбора)
             from . import trace_look as TL
-            sc_ = (TL.scores(look[0], look[1], [c["dense"] for c in cands], TL.cnn_path(path)) if look is not None
-                   else np.full(len(cands), np.nan))
+            try:
+                sc_ = (TL.scores(look[0], look[1], [c["dense"] for c in cands], TL.cnn_path(path)) if look is not None
+                       else np.full(len(cands), np.nan))
+            except Exception as e_:                       # нет torch / весов — признак пуст, выбор работает без него
+                _announce(f"⚠ оценка трассы по кусочкам скана (§6.325) НЕ включена: {type(e_).__name__}: {e_} — признак пуст")
+                sc_ = np.full(len(cands), np.nan)
             for c_, v_ in zip(CS, sc_):
                 c_["cnn"] = float(v_)
         return _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales)
