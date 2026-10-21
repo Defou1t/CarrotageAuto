@@ -19,7 +19,7 @@ def one(job):
     Image.MAX_IMAGE_PIXELS = None
     from _cand_ceiling import dense_tr
     from auto import level_ink as LI
-    rec_f, cache, extra, out, NP, S = job
+    rec_f, cache, extra, out, NP, S, CROSS = job
     rec = pickle.load(open(rec_f, "rb")); sh = rec["sheet"]
     of = Path(out) / (hashlib.md5(sh.encode("utf-8")).hexdigest()[:16] + ".npz")
     if of.exists():
@@ -46,6 +46,7 @@ def one(job):
     paper = LI.paper_of(gray).astype(np.int16)
     H, W = gray.shape; h = S // 2
     K, X = [], []
+    DD = []
     for k, cs in enumerate(rec["cands"]):
         if cs["src"] == "prod":
             t = c["traces"][cs["idx"]][1]
@@ -53,11 +54,35 @@ def one(job):
             t = c["alt"][cs["idx"]][1]
         else:
             t = xsrc[cs["idx"] - 1000][1]
-        d = dense_tr(un(t))
+        DD.append(dense_tr(un(t)))
+    if CROSS:                                            # §6.330: строки всех кандидатов на общей сетке (шаг 2)
+        T = H // 2 + 1
+        MX = np.full((len(DD), T), np.nan, np.float32)
+        for k, d in enumerate(DD):
+            if d:
+                yy = np.array(sorted(d)); MX[k, yy // 2] = [d[y] for y in yy]
+    for k, d in enumerate(DD):
         ys = np.array(sorted(d))
         if len(ys) < 50:
             continue
         pts = ys[np.linspace(0, len(ys) - 1, NP + 2).round().astype(int)[1:-1]]
+        if CROSS:                                        # центры участков, где кандидат сходится с другим (не дублем) ≤ 3 px
+            dx = np.abs(MX - MX[k][None, :])
+            close = dx <= 3
+            com = np.isfinite(dx).sum(1)
+            dup = close.sum(1) >= 0.8 * np.maximum(com, 1)
+            dup[k] = True
+            cr = close[~dup].any(0)
+            runs, i_ = [], 0
+            idx_ = np.flatnonzero(cr)
+            if len(idx_):
+                br = np.flatnonzero(np.diff(idx_) > 3)
+                st = np.r_[0, br + 1]; en = np.r_[br, len(idx_) - 1]
+                runs = [int(idx_[(a_ + b_) // 2]) * 2 for a_, b_ in zip(st, en)]
+            runs = [y for y in runs if y in d]
+            if len(runs) > NP:
+                runs = [runs[i] for i in np.linspace(0, len(runs) - 1, NP).round().astype(int)]
+            pts = np.array(sorted(runs) + list(pts[:NP - len(runs)]))
         P = np.zeros((NP, 2, S, S), np.uint8)
         for j, y in enumerate(pts):
             x = int(round(d[int(y)])); y = int(y)
@@ -89,9 +114,10 @@ def main():
     ap.add_argument("--np", type=int, default=8)
     ap.add_argument("--size", type=int, default=40)
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--cross", action="store_true", help="§6.330: точки — центры сближений с другими кандидатами (не дублями), остаток — равномерно")
     a = ap.parse_args()
     Path(a.out).mkdir(parents=True, exist_ok=True)
-    jobs = [(str(f), a.cache, a.extra, a.out, a.np, a.size) for f in sorted(Path(a.data).glob("*.pkl"))]
+    jobs = [(str(f), a.cache, a.extra, a.out, a.np, a.size, a.cross) for f in sorted(Path(a.data).glob("*.pkl"))]
     import multiprocessing as mp
     t0 = time.time(); n = 0
     with mp.Pool(a.workers) as pool:

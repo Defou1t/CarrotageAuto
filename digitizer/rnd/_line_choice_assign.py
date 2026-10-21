@@ -56,6 +56,7 @@ ap.add_argument("--swap", action="store_true", help="§6.324: после наз�
                 "кандидаты обоих слотов): P четырёх сочетаний, разности стиля трасс, значения при шкалах обоих слотов; вне фолда по скважинам")
 ap.add_argument("--cnn", default="", help="§6.325: `_trace_cnn.py` — + оценка сети «настоящая ли трасса» по кусочкам скана (вне фолда)")
 ap.add_argument("--cnnfam", default="", help="§6.327: `_trace_cnn.py --fam` — + P(семейство слота) и P(мусор) по виду трассы")
+ap.add_argument("--cnnx", default="", help="§6.330: вторая оценка сети — кусочки в точках сближения с другими кандидатами (`_trace_patch.py --cross`)")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -118,6 +119,7 @@ if a.ovl:                                                 # §6.316
     print(f"перекрытия кандидатов: листов {len(OVL)} из {len(RECS)}")
 CNN = pickle.load(open(a.cnn, "rb")) if a.cnn else {}
 CFAM = pickle.load(open(a.cnnfam, "rb")) if a.cnnfam else {}
+CNNX = pickle.load(open(a.cnnx, "rb")) if a.cnnx else {}
 CFI = {f_: i for i, f_ in enumerate(CFAM.get("__classes__", [])) if i > 0 and f_ != "прочее"}   # прочее — последний класс
 TRF = {}
 if a.trace:
@@ -186,6 +188,8 @@ for rec in RECS:
                         f += [np.nan] * 4
             if a.cnn:                                    # §6.325
                 f += [CNN.get((sh, r["k"]), np.nan)]
+            if a.cnnx:                                   # §6.330
+                f += [CNNX.get((sh, r["k"]), np.nan)]
             if a.cnnfam:                                 # §6.327
                 _v = CFAM.get((sh, r["k"]))
                 f += ([float(_v[CFI.get(s["root"], len(_v) - 1)]), float(_v[0])] if _v is not None else [np.nan, np.nan])
