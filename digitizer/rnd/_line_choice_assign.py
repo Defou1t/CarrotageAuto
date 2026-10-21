@@ -57,6 +57,9 @@ ap.add_argument("--swap", action="store_true", help="§6.324: после наз�
 ap.add_argument("--cnn", default="", help="§6.325: `_trace_cnn.py` — + оценка сети «настоящая ли трасса» по кусочкам скана (вне фолда)")
 ap.add_argument("--cnnfam", default="", help="§6.327: `_trace_cnn.py --fam` — + P(семейство слота) и P(мусор) по виду трассы")
 ap.add_argument("--cnnx", default="", help="§6.330: вторая оценка сети — кусочки в точках сближения с другими кандидатами (`_trace_patch.py --cross`)")
+ap.add_argument("--pairs", default="", help="§6.333: каталог `_cand_pairs.py` — при назначении кандидаты, взаимно покрывающие друг друга "
+                "(min(H[i,j], H[j,i]) ≥ --pairth), — один столбец (две копии одной кривой не встанут в два слота)")
+ap.add_argument("--pairth", type=float, default=0.7)
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -282,6 +285,41 @@ def clusters(CS):
     return lab
 
 
+_SCL = {}
+
+
+def sclusters(rec):
+    """§6.333: кластеры НАЗНАЧЕНИЯ — дубли `clusters` + объединение кандидатов, взаимно покрывающих друг друга (`--pairs`)"""
+    sh = rec["sheet"]
+    if sh in _SCL:
+        return _SCL[sh]
+    lab = clusters(rec["cands"])
+    if a.pairs:
+        import hashlib as _hl
+        f_ = None
+        for d_ in (a.data, a.data_extra):
+            if d_ and (Path(a.pairs) / (_hl.md5(sh.encode("utf-8")).hexdigest()[:16] + ".pkl")).exists():
+                f_ = Path(a.pairs) / (_hl.md5(sh.encode("utf-8")).hexdigest()[:16] + ".pkl")
+        if f_ is not None:
+            H = pickle.load(open(f_, "rb")).astype(np.float32)
+            if H.shape[0] == len(lab):
+                par = list(range(len(lab)))
+                def fd(x):
+                    while par[x] != x:
+                        par[x] = par[par[x]]; x = par[x]
+                    return x
+                for i in range(len(lab)):
+                    fd_i = fd(lab[i]); par[fd(i)] = fd_i
+                M_ = np.minimum(H, H.T) >= a.pairth
+                for i, j in zip(*np.nonzero(np.triu(M_, 1))):
+                    ri, rj = fd(int(i)), fd(int(j))
+                    if ri != rj:
+                        par[max(ri, rj)] = min(ri, rj)
+                lab = [fd(i) for i in range(len(lab))]
+    _SCL[sh] = lab
+    return lab
+
+
 ALLC = list(range(X_ALL.shape[1]))
 Y = np.array([-1 if r[4] is None else r[4] for r in ROWS])
 
@@ -476,7 +514,7 @@ print(f"листов {len(RECS)}, пар {len(ROWS)}; P посчитаны вн�
 
 def solve(rec, idx_by_slot, mode, tau, dlt):
     """→ {si: k или None} для слотов, где назначение меняется"""
-    CS = rec["cands"]; cl = clusters(CS)
+    CS = rec["cands"]; cl = sclusters(rec)
     slots = sorted(idx_by_slot)
     cur = {}
     for si in slots:
@@ -541,7 +579,7 @@ def _swap_pairs(mode, tau, dlt):
     for sh, by in BY.items():
         if sh in OUT:
             continue
-        rec = RECD[sh]; cl = clusters(rec["cands"]); ch = solve(rec, by, mode, tau, dlt)
+        rec = RECD[sh]; cl = sclusters(rec); ch = solve(rec, by, mode, tau, dlt)
         best, fin = {}, {}
         for si, idx in by.items():
             for i in idx:
@@ -621,7 +659,7 @@ for g in a.grid:
     for sh, by in BY.items():
         if sh in OUT:
             continue                                      # листы вне поля — только обучение
-        rec = RECD[sh]; cl = clusters(rec["cands"])
+        rec = RECD[sh]; cl = sclusters(rec)
         ch = solve(rec, by, mode, tau, dlt)
         for si, c in ch.items():
             s = rec["slots"][si]
@@ -644,7 +682,7 @@ for g in a.grid:
         for sh, by in BY.items():
             if sh in OUT or sh not in FIELD:
                 continue
-            rec = RECD[sh]; cl = clusters(rec["cands"]); ch = solve(rec, by, mode, tau, dlt)
+            rec = RECD[sh]; cl = sclusters(rec); ch = solve(rec, by, mode, tau, dlt)
             fin = {}
             for si, idx in by.items():
                 cur_ = next((cl[ROWS[i][2]] for i in idx if ROWS[i][5]), None)
@@ -670,6 +708,10 @@ for g in a.grid:
                     cat = "слот пуст"
                 elif any(c in hon[s2] for s2 in by if s2 != si):
                     cat = "стоит трасса, честная для ДРУГОГО слота"
+                    # §6.333: тот другой слот сам честен (держит другую копию той же кривой) или нет
+                    _s2 = [s2 for s2 in by if s2 != si and c in hon[s2]]
+                    M[("  ↳ (другой слот сам честен: " + ("да" if any(fin.get(s2) in hon[s2] for s2 in _s2) else "нет") + ")",
+                       "честную забрал другой слот" if took else "честная свободна", "")] += 1
                 else:
                     cat = "стоит трасса, ни для кого не честная"
                 M[(cat, "честную забрал другой слот" if took else "честная свободна", "P честной < τ" if ph < tau else "P честной ≥ τ")] += 1
