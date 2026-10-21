@@ -21,6 +21,7 @@ ap.add_argument("--epochs", type=int, default=6)
 ap.add_argument("--bs", type=int, default=256)
 ap.add_argument("--out", default=r"F:/nds/output/taskS/trace_cnn.pkl")
 ap.add_argument("--folds", type=int, default=5)
+ap.add_argument("--seeds", type=int, default=1, help="§6.334: ансамбль из N сетей (зёрна 0…N−1), оценка — среднее; веса — список state_dict")
 ap.add_argument("--fam", action="store_true", help="§6.327: вместо «честна ли» — семейство слота, где трасса честна (частые семейства, «прочее», 0 = мусор); "
                 "пишет вектор вероятностей и список классов (ключ '__classes__')")
 ap.add_argument("--save-dir", default="", help="веса: trace_cnn_f{k}.pt (фолды), trace_cnn_all.pt (на поле) — рядом с моделями выбора трассы")
@@ -105,8 +106,8 @@ def batches(idx, shuffle, rng):
         yield b, xb
 
 
-def train(tr):
-    rng = np.random.default_rng(0); torch.manual_seed(0)
+def train(tr, seed=0):
+    rng = np.random.default_rng(seed); torch.manual_seed(seed)
     net = build_net(len(CLS) if a.fam else 1).to(dev); opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
     steps = a.epochs * (-(-len(tr) // a.bs)); sch = torch.optim.lr_scheduler.OneCycleLR(opt, 2e-3, total_steps=steps)
     pw = torch.tensor(float((Y[tr] == 0).sum()) / max(1, (Y[tr] == 1).sum()), device=dev)
@@ -135,6 +136,17 @@ def score(net, te):
 
 
 from sklearn.metrics import roc_auc_score
+class Ens:
+    def __init__(s, nets):
+        s.nets = nets
+
+    def state(s):
+        return s.nets[0].state_dict() if len(s.nets) == 1 else {"sds": [n.state_dict() for n in s.nets]}
+
+
+_train1, _score1 = train, score
+train = lambda tr: Ens([_train1(tr, sd) for sd in range(a.seeds)])
+score = lambda ens, te: np.mean([_score1(n, te) for n in ens.nets], 0)
 S = np.full((len(Y), len(CLS)) if a.fam else len(Y), np.nan, np.float32); t0 = time.time()
 AUCY = (Y > 0).astype(int)                                # мера: «честна хоть для одного» (при --fam — 1 − P(мусор))
 _auc = lambda m: roc_auc_score(AUCY[m], (1 - S[m, 0]) if a.fam else S[m])
@@ -143,15 +155,15 @@ for k in range(a.folds):
     te = np.flatnonzero(GRP == k)
     net = train(tr); S[te] = score(net, te)
     if a.save_dir:
-        Path(a.save_dir).mkdir(parents=True, exist_ok=True); torch.save(net.state_dict(), Path(a.save_dir) / f"trace_cnn_f{k}.pt")
+        Path(a.save_dir).mkdir(parents=True, exist_ok=True); torch.save(net.state(), Path(a.save_dir) / f"trace_cnn_f{k}.pt")
     m = te[Y[te] >= 0]
     print(f"  фолд {k}: обучение {len(tr)}, AUC {_auc(m):.4f}, {time.time() - t0:.0f} с")
 tr = np.flatnonzero((Y >= 0) & np.isin(GRP, list(range(a.folds)))); te = np.flatnonzero((GRP == "A") | (GRP == "out"))
 net = train(tr); S[te] = score(net, te)
 if a.save_dir:
-    torch.save(net.state_dict(), Path(a.save_dir) / "trace_cnn_all.pt")
+    torch.save(net.state(), Path(a.save_dir) / "trace_cnn_all.pt")
 if a.prod_out:
-    torch.save(train(np.flatnonzero(Y >= 0)).state_dict(), a.prod_out)
+    torch.save(train(np.flatnonzero(Y >= 0)).state(), a.prod_out)
     print(f"★ веса для прода (всё с меткой, с сортом A): {a.prod_out}")
 for nm, sel in (("поле+вне", np.isin(GRP, list(range(a.folds)))), ("сорт A", GRP == "A")):
     m = sel & (Y >= 0)

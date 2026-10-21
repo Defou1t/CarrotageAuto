@@ -65,15 +65,18 @@ def _load(path):
     if key not in _NET:
         import torch
         dev = "cuda" if torch.cuda.is_available() and torch.cuda.device_count() else "cpu"
-        net = build_net(); net.load_state_dict(torch.load(key, map_location="cpu")); net.eval()
-        _NET[key] = (net.to(dev), dev)
+        sd = torch.load(key, map_location="cpu")
+        nets = []
+        for sd_ in (sd["sds"] if isinstance(sd, dict) and "sds" in sd else [sd]):   # §6.334: ансамбль — список весов
+            net = build_net(); net.load_state_dict(sd_); net.eval(); nets.append(net.to(dev))
+        _NET[key] = (nets, dev)
     return _NET[key]
 
 
 def scores(gray, paper, dense_list, path, bs=256):
     """→ np.array оценок (nan — короткая трасса)"""
     import torch
-    net, dev = _load(path)
+    nets, dev = _load(path)
     Ps = [patches(gray, paper, d) for d in dense_list]
     out = np.full(len(Ps), np.nan, np.float32)
     idx = [i for i, p in enumerate(Ps) if p is not None]
@@ -82,5 +85,5 @@ def scores(gray, paper, dense_list, path, bs=256):
             b = idx[i:i + bs]
             xb = torch.from_numpy(np.stack([Ps[j] for j in b])).to(dev).float() / 255.0
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-                out[b] = torch.sigmoid(net(xb).float()).cpu().numpy()
+                out[b] = np.mean([torch.sigmoid(n_(xb).float()).cpu().numpy() for n_ in nets], 0)
     return out
