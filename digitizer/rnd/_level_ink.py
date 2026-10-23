@@ -468,6 +468,18 @@ def main_train(a):
             VPS.append(S)
         t_vp = torch.from_numpy(np.concatenate(VPS)).to(dev)
         print(f"канал приора: позиций с приором {float(np.concatenate(VPS)[:, KMAX].mean()):.2f}")
+    if a.cutch:                                          # §6.339: вероятность обруба у края (сеть по кусочку у края, вне фолда)
+        CUTD = pickle.load(open(a.cutch, "rb"))
+        CS_ = []
+        for c in D:
+            pr_ = CUTD.get((c["sheet"], c["name"]))
+            S = np.zeros((len(c["P"]), 2), np.float32)
+            if pr_ is not None and len(pr_) == len(c["P"]):
+                v_ = pr_.astype(np.float32); ok_ = np.isfinite(v_)
+                S[:, 0] = np.where(ok_, v_, 0); S[:, 1] = ok_
+            CS_.append(S)
+        t_cut = torch.from_numpy(np.concatenate(CS_)).to(dev)
+        print(f"канал обруба: позиций с оценкой {float(np.concatenate(CS_)[:, 1].mean()):.2f}")
     t_lw = torch.from_numpy(np.minimum(cat("lw"), KMAX - 1).astype(np.int64)).to(dev)
     t_lab = torch.from_numpy(cat("lab").astype(np.int64)).to(dev)
     cid = np.repeat(np.arange(len(D)), np.diff(off))
@@ -480,7 +492,7 @@ def main_train(a):
           f"скважин поля {len(field_wells)}; устройство {dev}")
     OFS = torch.arange(-nb // 2, nb // 2, device=dev)
     DIL = tuple(int(x) for x in a.dil.split(",")) * 2               # ★ §6.269: расширения (дважды); по умолчанию 1…32 — как v2
-    CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1] + ((nb * 2 + nb * 2 + 2) if V4 else 0) + ((KMAX + 1) if a.sib else 0) + ((KMAX + 1) if a.vprior else 0)
+    CIN = nb * 5 + 2 + 2 * NT + KMAX + CONST.shape[1] + ((nb * 2 + nb * 2 + 2) if V4 else 0) + ((KMAX + 1) if a.sib else 0) + ((KMAX + 1) if a.vprior else 0) + (2 if a.cutch else 0)
 
     def feats(gi, valid):
         """gi [B, L] глобальные индексы позиций, valid [B, L] → [B, CIN, L]"""
@@ -502,6 +514,8 @@ def main_train(a):
             sc += [t_sib[gi] * valid[..., None]]
         if a.vprior:
             sc += [t_vp[gi] * valid[..., None]]
+        if a.cutch:
+            sc += [t_cut[gi] * valid[..., None]]
         x = torch.cat([ink * valid[..., None], occ * valid[..., None], oh, rink, rocc] + sc, dim=2)
         return x.transpose(1, 2).contiguous()
 
@@ -696,6 +710,7 @@ def main():
     ap.add_argument("--cache-extra", default="", help="§6.309: кэш `_level_bench` кривых вне поля (мера по ним; ci скана --data-extra сдвигаются)")
     ap.add_argument("--eval-out", action="store_true", help="§6.309: кривые вне поля (не скважин сорта A) — в фолды по скважинам вместе с полем и в замер")
     ap.add_argument("--vprior", default="", help="§6.312: `slot_scale.pkl` — канал правдоподобия значения при уровне k против приора семейства")
+    ap.add_argument("--cutch", default="", help="§6.339: `_cut_channel.py` — канал вероятности «обруба» у края шкалы 1× (сеть у края) и флаг")
     ap.add_argument("--prod-all", action="store_true", help="§6.309: модель на всём — ещё и на сорте A (только для прода)")
     ap.add_argument("--no-train-out", action="store_true", help="§6.309: контроль — учить только на поле, кривые вне поля только мерить")
     ap.add_argument("--data-extra", default="", help="(train) §6.296: скан кривых ВНЕ поля и сорта A (каталог `scan --out`) — только в обучение: скважины сорта A исключены, скважины поля — по фолдам")

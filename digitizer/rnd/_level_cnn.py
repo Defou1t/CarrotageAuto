@@ -18,6 +18,7 @@ ap.add_argument("--data", default="F:/nds/output/taskS/lpatch.npz")
 ap.add_argument("--epochs", type=int, default=8)
 ap.add_argument("--bs", type=int, default=512)
 ap.add_argument("--out", default="F:/nds/output/taskS/level_cnn.pkl")
+ap.add_argument("--save-dir", default="", help="§6.338: веса фолдов f{k}.pt, модели на поле all.pt и карта лист → фолд folds.json")
 a = ap.parse_args()
 import torch, torch.nn as nn
 from sklearn.metrics import roc_auc_score
@@ -79,10 +80,15 @@ def score(net, te):
 S = np.full(len(Y), np.nan, np.float32); t0 = time.time()
 for k in range(5):
     tr = np.flatnonzero(np.isin(G, [f for f in range(5) if f != k])); te = np.flatnonzero(G == k)
-    S[te] = score(train(tr), te)
+    net = train(tr); S[te] = score(net, te)
+    if a.save_dir:
+        Path(a.save_dir).mkdir(parents=True, exist_ok=True); torch.save(net.state_dict(), Path(a.save_dir) / f"f{k}.pt")
     print(f"  фолд {k}: обучение {len(tr)}, AUC {roc_auc_score(Y[te], S[te]):.4f}, {time.time() - t0:.0f} с")
 tr = np.flatnonzero(np.isin(G, list(range(5)))); te = np.flatnonzero(G == "A")
-S[te] = score(train(tr), te)
+net = train(tr); S[te] = score(net, te)
+if a.save_dir:
+    torch.save(net.state_dict(), Path(a.save_dir) / "all.pt")
+    (Path(a.save_dir) / "folds.json").write_text(json.dumps({s_: FOLD[well(s_)] for s_ in FLD}, ensure_ascii=False), encoding="utf-8")
 for nm, sel in (("поле+вне", np.isin(G, list(range(5)))), ("сорт A", G == "A")):
     print(f"★ {nm}: AUC вне фолда по кускам {roc_auc_score(Y[sel], S[sel]):.4f} ({int(sel.sum())})")
 import pickle
