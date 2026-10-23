@@ -17,10 +17,11 @@ sys.path.insert(0, "F:/nds/Auto"); sys.path.insert(0, "F:/nds/Auto/digitizer"); 
 from pathlib import Path
 import numpy as np
 
-W = 6
+W = 8
+INK = 70                                   # порог туши (бумага − серый)
 
 
-def signal(gray, paper, y0, y1, xe, sgn, wl=8, wr=40):
+def signal(gray, paper, y0, y1, xe, sgn, wl=40, wr=25):
     """сигнал обруба по строкам [y0, y1) у края xe (sgn — направление наружу)"""
     H, Wd = gray.shape
     xs = np.arange(int(round(xe)) - sgn * wl, int(round(xe)) + sgn * wr, sgn)
@@ -28,11 +29,13 @@ def signal(gray, paper, y0, y1, xe, sgn, wl=8, wr=40):
     if len(xs) < 5:
         return None
     ya, yb = max(0, y0), min(H, y1)
-    D = np.clip(paper[ya:yb, None].astype(np.int16) - gray[ya:yb][:, xs].astype(np.int16), 0, 255).astype(np.float32)
-    E = D - np.median(D, axis=0)[None, :]
-    from scipy.ndimage import minimum_filter1d
-    Ev = minimum_filter1d(E, size=2 * W + 1, axis=0, mode="nearest")
-    return ya, Ev.max(1)
+    D = np.clip(paper[ya:yb, None].astype(np.int16) - gray[ya:yb][:, xs].astype(np.int16), 0, 255)
+    # обруб лежит на печатной линии трека или рядом: колонка становится заметно темнее своего обычного уровня; сглаживание
+    # по вертикали (±W) гасит зерно скана и горизонтальные пересечения других кривых
+    from scipy.ndimage import uniform_filter1d
+    Dm = uniform_filter1d(D.astype(np.float32), size=2 * W + 1, axis=0, mode="nearest")
+    E = Dm - np.median(Dm, axis=0)[None, :]
+    return ya, E.max(1)
 
 
 def one(job):
