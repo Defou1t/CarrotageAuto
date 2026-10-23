@@ -21,7 +21,7 @@ def one(job):
     from extract_nlgx import extract, NULL
     from auto import level_ink as LI, meta as M
     import decode_levels as DL
-    sh, q, tc, per = job
+    sh, q, tc, per, IN, OUT = job
     try:
         mt = extract(str(q)); gray = np.asarray(Image.open(pickle.load(open(tc, "rb"))["image"]).convert("L"))
     except Exception:
@@ -50,7 +50,7 @@ def one(job):
             y = int(y); ya, yb = y - S // 2, y + S // 2
             if ya < 0 or yb > H:
                 continue
-            P = np.zeros((1, 2, S, S), np.uint8)
+            P = np.zeros((1, 2, S, IN + OUT), np.uint8)
             g = gray[ya:yb][:, np.clip(xs, 0, W - 1)].astype(np.int16)
             P[0, 0] = np.where(okx[None, :], np.clip(paper[ya:yb, None] - g, 0, 255), 0).astype(np.uint8)
             P[0, 1, :, IN] = 255
@@ -62,6 +62,8 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("--per", type=int, default=60)
+    ap.add_argument("--inn", type=int, default=IN, help="§6.340: px внутрь полосы")
+    ap.add_argument("--outw", type=int, default=OUT, help="§6.340: px наружу")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--out", default="F:/nds/output/taskS/cpatch.npz")
     a = ap.parse_args()
@@ -77,7 +79,7 @@ def main():
             key = f"{q.stem[:40]}_{hashlib.md5(q.stem.encode('utf-8')).hexdigest()[:8]}"
             tc = TS / cache / (key + ".pkl")
             if tc.exists():
-                jobs.append((sh, q, tc, a.per))
+                jobs.append((sh, q, tc, a.per, a.inn, a.outw))
     import multiprocessing as mp
     X, L, SH, C = [], [], [], []; t0 = time.time()
     with mp.Pool(a.workers) as pool:
