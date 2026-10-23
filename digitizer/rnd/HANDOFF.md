@@ -24,6 +24,11 @@
 levelshift=1,namestyle=oof:F:/nds/output/taskS/name_style_v1,linechoice=oof:F:/nds/output/taskS/line_choice_v4` + `--extra-cache tcache_pk3`
 (режим NSLX4 в `rp_lvl`, сравнения — `rp_lvl_NS_NSLX4.pkl`; повтор `_trace_cache.py` по умолчанию эти ручки выключает).
 
+**★★★ 24.10 §6.340 ✅ В ПРОДЕ — правило заказчика «масштаб меняется у обруба»:** модель уровня v7p + канал «обруб у края» (сеть по
+кусочку 96 × 160 у правой границы шкалы 1×, `auto.level_ink.cut_fn`, `cv.level_cut = "cut_cnn_v7.pt"`): «поле + вне» 2642 → **2715**
+именных (+73, p < 0.0001), безымянных 2929 → 3004, сорт A 381 → **394**. Откат — `level_ink_v2.pt`, `level_cut = ""`. База A/B —
+NSE15 (`levelink=oof:…level_ink_v7e,levelcut=oof:…cut_cnn_w2,linechoice=oof:…line_choice_v11et`).
+
 **★★ 21.10 §6.331 ✅ В ПРОДЕ: выбор трассы v11pt — + сеть «настоящая ли трасса» по 8 кусочкам скана (`auto/trace_look.py`) и порог
 τ 0.05 / δ 0.01: «поле + вне» 2584 → 2642 именных (+58, p = 0.0034), безымянных 2871 → 2929, сорт A 371 → 381. Откат —
 `line_choice_v8pt.pkl`. База A/B — NSE11T (`line_choice_v11et`). Вопрос про §6.323 / §6.328 снят этим: сеть прошла сама; связка
