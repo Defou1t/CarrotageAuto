@@ -620,7 +620,7 @@ def main_train(a):
     trp = fi0 if a.no_train_out else fi                  # §6.309: из них — в обучение (контроль — только поле)
     T0 = time.time()
     META = dict(cin=CIN, nb=nb, kmax=KMAX, nt=NT, stride=a.stride, ch=64, dil=list(DIL), k=5, tol=a.tol, v4=V4, vthr=a.vthr,
-                min_run=a.min_run, steps=a.steps, seeds=a.seeds)
+                min_run=a.min_run, steps=a.steps, seeds=a.seeds, cutch=bool(a.cutch))
     SD = Path(a.save_dir) if a.save_dir else None
     if SD:
         SD.mkdir(parents=True, exist_ok=True)

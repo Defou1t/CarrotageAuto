@@ -96,7 +96,7 @@ def paper_of(gray):
     return paper
 
 
-def features(gray, paper, chain, name, root, ty, tx, lw_segs, others, stride=8, nb=128):
+def features(gray, paper, chain, name, root, ty, tx, lw_segs, others, stride=8, nb=128, cut=None):
     """признаки одной кривой — ТО ЖЕ, что `_level_ink.scan_curve` без меток. others — [(имя, строки, x)] трасс выдачи
     листа (всех, кроме DA пустых; своя исключается по имени). → dict или None (короткая кривая / узкая полоса)."""
     H, W = gray.shape
@@ -156,7 +156,11 @@ def features(gray, paper, chain, name, root, ty, tx, lw_segs, others, stride=8, 
     u = np.where(has, (xo - bx0) / ncol, np.nan).astype(np.float32)
     const = np.array([float(K == 2), float(K == 3), float(K >= 4), np.log(max(1e-3, f)), shift]
                      + [float(group(root) == g_) for g_ in range(5)], np.float32)
-    return dict(K=K, P=Pp, ink=ink, occ=occ, u=u, has=has, tw=tw, twin=twin, lw=lw.astype(np.int8), const=const)
+    f = dict(K=K, P=Pp, ink=ink, occ=occ, u=u, has=has, tw=tw, twin=twin, lw=lw.astype(np.int8), const=const)
+    if cut is not None:                                  # §6.339: канал «обруб у края» — (вероятность, есть ли) по позициям
+        pr = cut(Pp)
+        f["cut"] = np.stack([np.nan_to_num(pr, nan=0.0), np.isfinite(pr).astype(np.float32)], 1).astype(np.float32)
+    return f
 
 
 def _build_net(meta):
@@ -235,7 +239,7 @@ def _load(path):
     return _NET[key]
 
 
-def _input(f, Lb, nb, dev):
+def _input(f, Lb, nb, dev, cutch=False):
     """вход сети [1, CIN, Lb] — ТО ЖЕ, что `_level_ink.feats` (края: позиции за концом кривой берут признаки последней,
     маскированные valid; тушь близнецов — без маски, как при обучении)"""
     import torch
@@ -257,6 +261,9 @@ def _input(f, Lb, nb, dev):
     cst = torch.from_numpy(f["const"]).to(dev)[None, None, :].expand(1, Lb, -1)
     sc = [u[..., None] * hv[..., None], hv[..., None], T(f["tw"]).float() / 255.0, T(f["twin"]).float(),
           F.one_hot(lw, KMAX).float() * valid[..., None], cst * valid[..., None]]
+    if cutch:                                            # §6.339 — последним, как `_level_ink.py --cutch`
+        cu = f.get("cut")
+        sc.append((T(cu).float() if cu is not None else torch.zeros(1, Lb, 2, device=dev)) * valid[..., None])
     x = torch.cat([ink * valid[..., None], occ * valid[..., None], oh, rink, rocc] + sc, dim=2)
     return x.transpose(1, 2).contiguous()
 
@@ -268,7 +275,7 @@ def predict(f, path):
     n = len(f["P"])
     Lb = -(-n // 1024) * 1024
     with torch.no_grad():
-        x = _input(f, Lb, meta["nb"], dev)
+        x = _input(f, Lb, meta["nb"], dev, cutch=bool(meta.get("cutch")))
         kc = min(f["K"], KMAX)
         pr = 0
         for net in nets:
@@ -279,6 +286,77 @@ def predict(f, path):
             pr = pr + torch.softmax(lo, dim=1)
         pr = (pr / len(nets))[0, :, :n].cpu().numpy()
     return pr.argmax(0).astype(np.int16)
+
+
+def needs_cut(path):
+    """§6.339: ждут ли веса модели уровня канал обруба"""
+    try:
+        return bool(_load(path)[1].get("cutch"))
+    except Exception:
+        return False
+
+
+_CUT = {}
+
+
+def cut_fn(spec, sheet, gray, paper, chain):
+    """§6.340: функция P → вероятность «обруба у края» сетью у края (`_cut_patch.py` / `_level_cnn.py`): кусок S × (inn + outw) у края
+    шкалы уровня 0 со стороны v_right (внутрь → наружу), канал края. spec — файл в `auto/models` ({sd, S, inn, outw}) или
+    "oof:<каталог>" (f{k}.pt / all.pt + folds.json + geom.json). None — нет torch / весов."""
+    try:
+        import torch
+        from .trace_look import build_net
+    except Exception:
+        return None
+    if not spec or len(chain) < 2:
+        return None
+    if spec.startswith("oof:"):
+        d = Path(spec[4:])
+        fk = "folds:" + str(d)
+        if fk not in _CUT:
+            _CUT[fk] = (json.loads((d / "folds.json").read_text(encoding="utf-8")), json.loads((d / "geom.json").read_text(encoding="utf-8")))
+        fo, geom = _CUT[fk]
+        k = fo.get(sheet)
+        wpath = d / (f"f{k}.pt" if k is not None else "all.pt")
+    else:
+        wpath = Path(spec) if Path(spec).is_absolute() else _MODELS / spec
+        geom = None
+    if not wpath.is_file():
+        return None
+    key = str(wpath)
+    if key not in _CUT:
+        obj = torch.load(key, map_location="cpu")
+        sd = obj["sd"] if isinstance(obj, dict) and "sd" in obj else obj
+        g_ = {k_: obj[k_] for k_ in ("S", "inn", "outw")} if isinstance(obj, dict) and "sd" in obj else geom
+        dev = "cuda" if torch.cuda.is_available() and torch.cuda.device_count() else "cpu"
+        net = build_net(); net.load_state_dict(sd); net.eval()
+        _CUT[key] = (net.to(dev), dev, g_)
+    net, dev, g_ = _CUT[key]
+    S, IN, OUT = int(g_["S"]), int(g_["inn"]), int(g_["outw"])
+    s0 = chain[0]; xe = int(round(s0["x_right"])); sgn = 1 if s0["x_right"] >= s0["x_left"] else -1
+    H, W = gray.shape
+    xs = xe + sgn * np.arange(-IN, OUT); okx = (xs >= 0) & (xs < W); xc = np.clip(xs, 0, W - 1)
+    pap = paper.astype(np.int16)
+
+    def fn(P):
+        out = np.full(len(P), np.nan, np.float32)
+        Xb, ib = [], []
+        for i, y in enumerate(np.asarray(P, np.int64)):
+            ya, yb = int(y) - S // 2, int(y) + S // 2
+            if ya < 0 or yb > H:
+                continue
+            X = np.zeros((1, 2, S, IN + OUT), np.uint8)
+            g = gray[ya:yb][:, xc].astype(np.int16)
+            X[0, 0] = np.where(okx[None, :], np.clip(pap[ya:yb, None] - g, 0, 255), 0).astype(np.uint8)
+            X[0, 1, :, IN] = 255
+            Xb.append(X); ib.append(i)
+        with torch.no_grad():
+            for j in range(0, len(Xb), 512):
+                xb = torch.from_numpy(np.stack(Xb[j:j + 512])).to(dev).float() / 255.0
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                    out[ib[j:j + 512]] = torch.sigmoid(net(xb).float()).cpu().numpy()
+        return out
+    return fn
 
 
 def min_run_runs(starts, levels, ends, min_run):

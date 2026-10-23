@@ -435,7 +435,7 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
             pass
 
 
-def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False):
+def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False, cut_spec=""):
     """§6.266: переразложить уровни масштаба кривых с цепочкой моделью по скану (auto/level_ink.py). Чужие трассы — как в
     готовом файле: записанные нами + DA (прочие слоты рамки вычищены).
     §6.267 (`shift`): у СДВИГОВЫХ цепочек (термометрия) — уровень по гладким участкам трассы, без скана и без torch;
@@ -482,7 +482,8 @@ def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, 
     path = LI.resolve(spec, sheet=sheet_name)
     for c, k, new_xs, lw_segs, fam in jobs:
         ty, tx = LI.dense_rows(c["top_y"], new_xs, NULL)
-        f = LI.features(gray, paper, fam, c["name"], meta_mod.mnem_root(c["name"]), ty, tx, lw_segs, others)
+        _cf = LI.cut_fn(cut_spec, sheet_name, gray, paper, fam) if (cut_spec and LI.needs_cut(path)) else None   # §6.340
+        f = LI.features(gray, paper, fam, c["name"], meta_mod.mnem_root(c["name"]), ty, tx, lw_segs, others, cut=_cf)
         if f is None:
             continue
         lv = LI.predict(f, path)
@@ -870,7 +871,8 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     _li = getattr(_cvp, "level_ink", "") or ""
     _ls = bool(getattr(_cvp, "level_shift", False))
     if (_li or _ls) and ink_jobs:
-        _level_ink_pass(_li, model, ifds, ink_jobs, _get_gray, set_tag, Path(frame_nlgx).name, shift=_ls)
+        _level_ink_pass(_li, model, ifds, ink_jobs, _get_gray, set_tag, Path(frame_nlgx).name, shift=_ls,
+                        cut_spec=getattr(_cvp, "level_cut", "") or "")
 
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
