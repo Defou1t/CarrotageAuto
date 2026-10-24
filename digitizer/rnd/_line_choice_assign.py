@@ -513,7 +513,7 @@ else:
     P[te] = p2
 print(f"листов {len(RECS)}, пар {len(ROWS)}; P посчитаны вне фолда")
 if a.setmodel:                                            # §6.344: обзор листа поверх P второго яруса
-    from _line_choice_set import refine as _refine
+    sys.path.insert(0, str(Path(__file__).resolve().parent)); from _line_choice_set import refine as _refine
     _ep, _sd, _w, _bl = [int(v) for v in a.setmodel.split(",")]
     _cl = {}
     for _rec in RECS:
