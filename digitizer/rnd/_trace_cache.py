@@ -41,6 +41,9 @@ ap.add_argument("--max-hours", type=float, default=0.0)
 ap.add_argument("--fast", action="store_true", help="сборка с ускоренным селектором `_seq_fast` (выдача побайтно та же, §6.218)")
 ap.add_argument("--seq", default="", help="чекпойнт селектора для сборки (пусто = прод `seq_model`); путь с каталогом — как есть (§6.220)")
 ap.add_argument("--wlg-roots", nargs="+", default=[r"F:\nds\projects\Archive"])
+ap.add_argument("--seg-mask", default="", help="§6.345 (redec): «веса.pt:m» — карта декодера × (m + (1 − m)·сеть туши `auto.ink_seg`)")
+ap.add_argument("--oracle-mask", type=float, default=0.0, help="§6.345 (redec): ОРАКУЛ — карта декодера × (m + (1 − m)·[≤ 4 px от кривой "
+                "эталона листа]), m — значение ключа; только замер потолка сегментации туши")
 ap.add_argument("--conf", default="", help="§6.240: сайдкар уверенности декодера (`_dec_conf.py`) — в повторе даётся emit как `traces.alt_conf`")
 ap.add_argument("--knob", action="append", default=[], help="§6.236: ручка ВЕДЕНИЯ для сборки, `имя=значение` (пишется в кэш)")
 ap.add_argument("--extra-cache", nargs="*", default=[], help="§6.287: кэши другого декода — их пути даются выбору трассы "
@@ -404,10 +407,35 @@ def cmd_redec():
             setattr(cfg.cv, k, v)
         p = cfg.cv
         sheet = SimpleNamespace(lines=c["lines"], frame=c["frame"], meta=c["meta"], k_slots=c["k_slots"])
+        if a.oracle_mask > 0:                            # §6.345: оракул — пики декодера только у туши кривых эталона
+            from extract_nlgx import extract as _ex
+            from _multi_replica_probe import dense as _dn
+            _G = [_dn(cv_) for cv_ in _ex(str(c["frame_nlgx"]))["curves"]]
+
+            def _mask(prob, y0_, x0_, _G=_G, m_=a.oracle_mask):
+                M = np.zeros(prob.shape, np.float32)
+                H_, W_ = prob.shape
+                for g_ in _G:
+                    for y_, x_ in g_.items():
+                        r_ = int(y_) - y0_; c_ = int(round(x_)) - x0_
+                        if 0 <= r_ < H_ and -4 <= c_ < W_ + 4:
+                            M[r_, max(0, c_ - 4):max(0, min(W_, c_ + 5))] = 1.0
+                return prob * (m_ + (1.0 - m_) * M)
+            p.rowdec_prob_mask = _mask
         try:
             rgb = im.load_rgb(c["image"])
             if getattr(c["frame"], "row_shift", None) is not None:
                 rgb = FR.apply_row_shift(rgb, c["frame"].row_shift)
+            if a.seg_mask:                               # §6.345: сеть туши оцифрованных кривых гасит карту декодера
+                from auto import ink_seg as _IS
+                _sp, _, _sm = a.seg_mask.rpartition(":")
+
+                def _smask(prob, y0_, x0_, _rgb=rgb, _sp=_sp, _m=float(_sm)):
+                    sg = _IS.prob_map(_rgb, y0_, y0_ + prob.shape[0], x0_, x0_ + prob.shape[1], _sp)
+                    if sg.shape != prob.shape:
+                        sg2 = np.zeros(prob.shape, np.float32); sg2[:sg.shape[0], :sg.shape[1]] = sg; sg = sg2
+                    return prob * (_m + (1.0 - _m) * sg)
+                p.rowdec_prob_mask = _smask
             slot_len = float(getattr(p, "rowdec_slot_len", 0.0) or 0.0)
             gated = T2._pregate_ok(sheet, p)
             alt = None

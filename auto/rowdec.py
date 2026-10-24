@@ -297,6 +297,9 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             embs[:, v0 - y0:v1 - y0, wx0:wx1] = ee[:, v0 - gy:v1 - gy, wx0 - cx0:wx1 - cx0]
     if embs is None:
         return [{} for _ in range(k)]
+    _pm = getattr(p, "rowdec_prob_mask", None)          # §6.345: только замер (оракул сегментации туши); None = прод бит-в-бит
+    if callable(_pm):
+        prob = _pm(prob, y0, x0)
 
     # ★ §6.207: порог пиков — ручка `cv.rowdec_peak_thr` (умолчание 0.6 = прежний прод бит-в-бит).
     #   На пуловом пути 0.3 даёт +49 из 1441 (+3.4 п.п., 4 фолда из 5 вверх): бледная кривая рядом
