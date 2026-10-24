@@ -60,6 +60,8 @@ ap.add_argument("--cnnx", default="", help="§6.330: вторая оценка �
 ap.add_argument("--pairs", default="", help="§6.333: каталог `_cand_pairs.py` — при назначении кандидаты, взаимно покрывающие друг друга "
                 "(min(H[i,j], H[j,i]) ≥ --pairth), — один столбец (две копии одной кривой не встанут в два слота)")
 ap.add_argument("--pairth", type=float, default=0.7)
+ap.add_argument("--setmodel", default="", help="§6.344: поправка P второго яруса моделью с обзором листа (`_line_choice_set.py`): "
+                "«эпох,зёрен,ширина,блоков»; P пишется в --dump как и прежде")
 ap.add_argument("--miss", action="store_true", help="§6.301: разбор слотов, где честный кандидат есть, а после назначения слот нечестен")
 ap.add_argument("--dump", default=r"F:/nds/output/taskS/line_choice_assign.pkl")
 a = ap.parse_args()
@@ -510,6 +512,28 @@ else:
         p2, te, MODELS[None] = stage2(fs + sorted(out_train()), [x for x in ROWS_OF if x in HOLD], a.folds)
     P[te] = p2
 print(f"листов {len(RECS)}, пар {len(ROWS)}; P посчитаны вне фолда")
+if a.setmodel:                                            # §6.344: обзор листа поверх P второго яруса
+    from _line_choice_set import refine as _refine
+    _ep, _sd, _w, _bl = [int(v) for v in a.setmodel.split(",")]
+    _cl = {}
+    for _rec in RECS:
+        _c = sclusters(_rec)
+        for _k, _v in enumerate(_c) if isinstance(_c, list) else _c.items():
+            _cl[(_rec["sheet"], _k)] = _v
+
+    def _fold_of(sh):
+        if sh in HOLD or well(sh) in HOLD_W:
+            return -1
+        return FOLD.get(well(sh))
+    _lab = np.array([-1 if r[4] is None else int(bool(r[4])) for r in ROWS])
+    _P0 = P.copy()
+    P = _refine(P, X_ALL, [r[0] for r in ROWS], [r[1] for r in ROWS], [_cl.get((r[0], r[2]), -1 - r[2]) for r in ROWS], _lab,
+                _fold_of, {x for x in ROWS_OF if x in HOLD}, a.folds, epochs=_ep, seeds=_sd, d=_w, blocks=_bl)
+    _ok = np.isfinite(_P0) & (_lab >= 0)
+    from sklearn.metrics import roc_auc_score as _auc
+    for _nm, _S in (("поле+вне", FIELD), ("сорт A", HOLD)):
+        _m = _ok & np.array([r[0] in _S for r in ROWS])
+        print(f"★ обзор листа {_nm}: AUC пар {_auc(_lab[_m], _P0[_m]):.4f} → {_auc(_lab[_m], P[_m]):.4f}")
 
 
 def solve(rec, idx_by_slot, mode, tau, dlt):
