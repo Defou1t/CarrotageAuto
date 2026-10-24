@@ -527,17 +527,24 @@ def main_train(a):
             return s.ln(x.transpose(1, 2)).transpose(1, 2)
 
     class Net(nn.Module):
-        def __init__(s, cin, ch=64, dil=(1, 2, 4, 8, 16, 32) * 2, k=5):
+        def __init__(s, cin, ch=64, dil=(1, 2, 4, 8, 16, 32) * 2, k=5, gru=0):
             super().__init__()
             s.inp = nn.Conv1d(cin, ch, 1)
             s.blocks = nn.ModuleList([nn.Sequential(CNorm(ch), nn.GELU(), nn.Conv1d(ch, ch, k, dilation=d, padding=d * (k // 2)))
                                       for d in dil])
+            s.gru = None
+            if gru:                                      # §6.342: двунаправленная GRU поверх свёрток — состояние на всю кривую
+                s.gn = nn.LayerNorm(ch); s.gru = nn.GRU(ch, gru, batch_first=True, bidirectional=True); s.gp = nn.Linear(2 * gru, ch)
             s.out = nn.Sequential(CNorm(ch), nn.GELU(), nn.Conv1d(ch, KMAX, 1))
 
         def forward(s, x):
             h = s.inp(x)
             for b in s.blocks:
                 h = h + b(h)
+            if s.gru is not None:
+                with torch.autocast("cuda", enabled=False):
+                    z, _ = s.gru(s.gn(h.float().transpose(1, 2)))
+                    h = h.float() + s.gp(z).transpose(1, 2)
             return s.out(h)
 
     def mask_logits(lo, kc):
@@ -550,7 +557,7 @@ def main_train(a):
         tr_idx = [i for i in tr_idx if (D[i]["lab"] >= 0).any()]
         ln = np.array([len(D[i]["P"]) for i in tr_idx], np.float64)
         pr = ln / ln.sum()
-        net = Net(CIN, dil=DIL).to(dev)
+        net = Net(CIN, dil=DIL, gru=a.gru).to(dev)
         opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
         sch = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.steps, pct_start=0.05)
         L = a.crop; ar = torch.arange(L, device=dev)
@@ -620,7 +627,7 @@ def main_train(a):
     trp = fi0 if a.no_train_out else fi                  # §6.309: из них — в обучение (контроль — только поле)
     T0 = time.time()
     META = dict(cin=CIN, nb=nb, kmax=KMAX, nt=NT, stride=a.stride, ch=64, dil=list(DIL), k=5, tol=a.tol, v4=V4, vthr=a.vthr,
-                min_run=a.min_run, steps=a.steps, seeds=a.seeds, cutch=bool(a.cutch))
+                min_run=a.min_run, steps=a.steps, seeds=a.seeds, cutch=bool(a.cutch), gru=a.gru)
     SD = Path(a.save_dir) if a.save_dir else None
     if SD:
         SD.mkdir(parents=True, exist_ok=True)
@@ -702,6 +709,7 @@ def main():
     ap.add_argument("--steps", type=int, default=4000)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--crop", type=int, default=512)
+    ap.add_argument("--gru", type=int, default=0, help="§6.342: двунаправленная GRU (скрытых на сторону) поверх свёрток; 0 — нет")
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--dil", default="1,2,4,8,16,32", help="расширения одного прохода (стек повторяется дважды)")

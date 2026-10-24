@@ -164,6 +164,7 @@ def features(gray, paper, chain, name, root, ty, tx, lw_segs, others, stride=8, 
 
 
 def _build_net(meta):
+    import torch
     import torch.nn as nn
 
     class CNorm(nn.Module):
@@ -176,20 +177,27 @@ def _build_net(meta):
     class Net(nn.Module):
         """⚠ ПОВТОРЯЕТ `digitizer/rnd/_level_ink.py` Net в точности"""
 
-        def __init__(s, cin, ch=64, dil=(1, 2, 4, 8, 16, 32) * 2, k=5):
+        def __init__(s, cin, ch=64, dil=(1, 2, 4, 8, 16, 32) * 2, k=5, gru=0):
             super().__init__()
             s.inp = nn.Conv1d(cin, ch, 1)
             s.blocks = nn.ModuleList([nn.Sequential(CNorm(ch), nn.GELU(), nn.Conv1d(ch, ch, k, dilation=d, padding=d * (k // 2)))
                                       for d in dil])
+            s.gru = None
+            if gru:                                      # §6.342: двунаправленная GRU поверх свёрток — состояние на всю кривую
+                s.gn = nn.LayerNorm(ch); s.gru = nn.GRU(ch, gru, batch_first=True, bidirectional=True); s.gp = nn.Linear(2 * gru, ch)
             s.out = nn.Sequential(CNorm(ch), nn.GELU(), nn.Conv1d(ch, KMAX, 1))
 
         def forward(s, x):
             h = s.inp(x)
             for b in s.blocks:
                 h = h + b(h)
+            if s.gru is not None:
+                with torch.autocast("cuda", enabled=False):
+                    z, _ = s.gru(s.gn(h.float().transpose(1, 2)))
+                    h = h.float() + s.gp(z).transpose(1, 2)
             return s.out(h)
 
-    return Net(meta["cin"], meta["ch"], tuple(meta["dil"]), meta["k"])
+    return Net(meta["cin"], meta["ch"], tuple(meta["dil"]), meta["k"], int(meta.get("gru") or 0))
 
 
 def resolve(spec, sheet=None):
