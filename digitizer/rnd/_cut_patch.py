@@ -21,7 +21,7 @@ def one(job):
     from extract_nlgx import extract, NULL
     from auto import level_ink as LI, meta as M
     import decode_levels as DL
-    sh, q, tc, per, IN, OUT = job
+    sh, q, tc, per, IN, OUT, S = job
     try:
         mt = extract(str(q)); gray = np.asarray(Image.open(pickle.load(open(tc, "rb"))["image"]).convert("L"))
     except Exception:
@@ -63,6 +63,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--per", type=int, default=60)
     ap.add_argument("--inn", type=int, default=IN, help="§6.340: px внутрь полосы")
+    ap.add_argument("--height", type=int, default=S, help="§6.341: строк в куске")
     ap.add_argument("--outw", type=int, default=OUT, help="§6.340: px наружу")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--out", default="F:/nds/output/taskS/cpatch.npz")
@@ -79,7 +80,7 @@ def main():
             key = f"{q.stem[:40]}_{hashlib.md5(q.stem.encode('utf-8')).hexdigest()[:8]}"
             tc = TS / cache / (key + ".pkl")
             if tc.exists():
-                jobs.append((sh, q, tc, a.per, a.inn, a.outw))
+                jobs.append((sh, q, tc, a.per, a.inn, a.outw, a.height))
     import multiprocessing as mp
     X, L, SH, C = [], [], [], []; t0 = time.time()
     with mp.Pool(a.workers) as pool:

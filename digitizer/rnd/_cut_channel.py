@@ -18,6 +18,7 @@ ap.add_argument("--scans", nargs="+", default=["F:/nds/output/taskS/level_ink_ns
 ap.add_argument("--model", default="F:/nds/output/taskS/cut_cnn_w")
 ap.add_argument("--out", default="F:/nds/output/taskS/cut_channel.pkl")
 ap.add_argument("--inn", type=int, default=64)
+ap.add_argument("--height", type=int, default=96)
 ap.add_argument("--outw", type=int, default=32)
 a = ap.parse_args()
 import torch
@@ -27,7 +28,7 @@ from extract_nlgx import extract
 from auto import level_ink as LI
 from auto.trace_look import build_net
 import decode_levels as DL
-from _cut_patch import S
+S = a.height
 IN, OUT = a.inn, a.outw
 
 TS = Path("F:/nds/output/taskS")
