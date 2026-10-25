@@ -1,7 +1,7 @@
 """§6.345: потолок сегментации туши — слоты без честного кандидата (`line_choice_i`) на листах `orc_sheets.txt`: есть ли честный
 (plane2 ≤ 3 px, покрытие ≥ 0.9, в пикселях) среди путей декодера (alt + extra) кэша с оракульной маской (`tcache_orc`) против тех же
 путей без маски (`tcache_inert`). Слоты с честным кандидатом — сохраняется ли он среди путей оракула.
-orc_ceiling.py [кэш оракула]"""
+orc_ceiling.py [кэш оракула[+кэш…]]"""
 import sys, pickle, glob, hashlib
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, r"F:\nds\Auto"); sys.path.insert(0, r"F:\nds\Auto\digitizer"); sys.path.insert(0, r"F:\nds\Auto\digitizer\rnd")
@@ -16,7 +16,7 @@ src = open(Path(__file__).with_name("lvl_loss.py"), encoding="utf-8").read()
 exec(src[src.index("def tree"):src.index("def lv_rows")])           # tree, err
 HON = lambda e: e[0] <= 3.0 and e[1] >= 0.9
 TS = Path("F:/nds/output/taskS")
-ORC = Path(sys.argv[1]) if len(sys.argv) > 1 else TS / "tcache_orc"
+ORCS = [Path(x) for x in sys.argv[1].split("+")] if len(sys.argv) > 1 else [TS / "tcache_orc"]   # «a+b» — пути вместе
 SH = {l.strip() for l in (TS / "orc_sheets.txt").read_text(encoding="utf-8").splitlines() if l.strip()}
 SRC = {q.name: q for q in Path("F:/nds/projects/Archive").glob("*/wlg/*.nlgx")}
 un = lambda t: dict(zip(t[0].tolist(), t[1].tolist()))
@@ -27,14 +27,16 @@ for f in sorted(glob.glob(str(TS / "line_choice_i" / "*.pkl"))):
         continue
     q = SRC[sh]
     key = f"{q.stem[:40]}_{hashlib.md5(q.stem.encode('utf-8')).hexdigest()[:8]}"
-    po, pb = ORC / (key + ".pkl"), TS / "tcache_inert" / (key + ".pkl")
-    if not po.exists():
+    pos, pb = [o / (key + ".pkl") for o in ORCS], TS / "tcache_inert" / (key + ".pkl")
+    if not all(po.exists() for po in pos):
         continue
     C["листов"] += 1
     paths = {}
-    for nm, pp in (("orc", po), ("base", pb)):
-        c = pickle.load(open(pp, "rb"))
-        paths[nm] = [dense_tr(un(t)) for L, t in (c.get("alt") or []) + (c.get("extra") or [])]
+    for nm, pps in (("orc", pos), ("base", [pb])):
+        paths[nm] = []
+        for pp in pps:
+            c = pickle.load(open(pp, "rb"))
+            paths[nm] += [dense_tr(un(t)) for L, t in (c.get("alt") or []) + (c.get("extra") or [])]
     gts = {cc["name"]: cc for cc in extract(str(q))["curves"]}
     for s in rec["slots"]:
         if not s["has_truth"] or s["name"] not in gts:
