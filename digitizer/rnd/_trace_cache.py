@@ -429,6 +429,10 @@ def cmd_redec():
             if a.seg_mask:                               # §6.345: сеть туши оцифрованных кривых гасит карту декодера
                 from auto import ink_seg as _IS
                 _sp, _, _sm = a.seg_mask.rpartition(":")
+                if Path(_sp).is_dir():                   # вне фолда: сеть, не видевшая скважину листа; иначе — на всех
+                    import json as _js
+                    _fo = _js.loads((Path(_sp) / "folds.json").read_text(encoding="utf-8")).get(n.parent.parent.name)
+                    _sp = str(Path(_sp) / (f"f{_fo}.pt" if _fo is not None else "all.pt"))
 
                 def _smask(prob, y0_, x0_, _rgb=rgb, _sp=_sp, _m=float(_sm)):
                     sg = _IS.prob_map(_rgb, y0_, y0_ + prob.shape[0], x0_, x0_ + prob.shape[1], _sp)
