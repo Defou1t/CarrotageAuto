@@ -24,6 +24,13 @@
 levelshift=1,namestyle=oof:F:/nds/output/taskS/name_style_v1,linechoice=oof:F:/nds/output/taskS/line_choice_v4` + `--extra-cache tcache_pk3`
 (режим NSLX4 в `rp_lvl`, сравнения — `rp_lvl_NS_NSLX4.pkl`; повтор `_trace_cache.py` по умолчанию эти ручки выключает).
 
+**★★★ 25.10 §6.345 ✅ В ПРОДЕ — сеть «тушь оцифрованных кривых» по цвету гасит карту декодера:** U-Net RGB (`auto/ink_seg.py`,
+`cv.rowdec_ink_seg = "ink_seg_v1.pt:0.05"`), пути по погашенной карте — доп. кандидаты выбора трассы; выбор трассы переучен
+(`cv.line_choice = "line_choice_v16p.pkl"` + `trace_cnn_v16p.pt`). «поле + вне» 2715 → **2792** именных (+77, p = 0.0002),
+безымянных 3004 → 3095, сорт A 394 → **398**. Откат — вместе: `line_choice_v11pt.pkl` и `rowdec_ink_seg = ""`. Прод +10–20 с на лист.
+**База A/B — NSE16:** NSE15 + `linechoice=oof:…line_choice_v16e` и доп. кэши `tcache_seg|alt;tcache_seg|extra` (вне —
+`tcache_out_seg|…`) после прежних; сравнения — `taskS/merge_ab3.py rp_lvl_NS_NSE16.pkl <новый дамп> NS NSE16 <режим>`.
+
 **★★★ 24.10 §6.340 ✅ В ПРОДЕ — правило заказчика «масштаб меняется у обруба»:** модель уровня v7p + канал «обруб у края» (сеть по
 кусочку 96 × 160 у правой границы шкалы 1×, `auto.level_ink.cut_fn`, `cv.level_cut = "cut_cnn_v7.pt"`): «поле + вне» 2642 → **2715**
 именных (+73, p < 0.0001), безымянных 2929 → 3004, сорт A 381 → **394**. Откат — `level_ink_v2.pt`, `level_cut = ""`. База A/B —
