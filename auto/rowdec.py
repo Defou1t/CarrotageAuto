@@ -225,7 +225,7 @@ def ink_color(rgb, p, tr, step=8, halfw=3, min_rows=8):
 
 
 def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.0, conf_out=None, extra_thr=None,
-                extra_out=None, extra_inert=None, extra_learn=None):
+                extra_out=None, extra_inert=None, extra_learn=None, seg=None):
     """→ list[{row: x}] длиной k: траектории кривых трека в координатах ЛИСТА.
     §6.287: `extra_thr` — второй порог пиков по той же карте (сеть не пересчитывается); его k траекторий — в `extra_out`."""
     import torch
@@ -439,6 +439,16 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                 ys = np.fromiter(tr.keys(), np.int64, len(tr)) - y0
                 xs = np.fromiter(tr.values(), np.float64, len(tr)).astype(np.int64) - x0
                 conf_out[id(tr)] = float(np.median(prob[ys, xs]))
+    if seg is not None and extra_out is not None:          # §6.345: карта × (m + (1 − m)·сеть туши) — те же пути: основной порог,
+        from . import ink_seg as _IS                       #   затем пути инерции; после всех прежних доп. путей
+        _sp, _m = seg
+        _sg = _IS.prob_map(rgb, y0, y0 + prob.shape[0], x0, x0 + prob.shape[1], _sp)
+        if _sg.shape != prob.shape:
+            _s2 = np.zeros(prob.shape, np.float32); _s2[:_sg.shape[0], :_sg.shape[1]] = _sg; _sg = _s2
+        prob = prob * (_m + (1.0 - _m) * _sg)
+        extra_out.append(_paths(pthr))
+        for _t, _kp in (extra_inert or []):
+            extra_out.append(_paths(float(_t), inert=True, kplus=int(_kp)))
     return out
 
 
@@ -685,7 +695,14 @@ def trace_auto(rgb, sheet, p):
     xin = [(float(t_.split(":")[0]), int(t_.split(":")[1]) if ":" in t_ else 0) for t_ in _xi.replace(";", ",").split(",") if t_.strip()] or None
     _xl = str(getattr(p, "rowdec_extra_learn", "") or "")         # §6.318: «порог:доп.пути,…» — пути с выученной ценой перехода
     xle = [(float(t_.split(":")[0]), int(t_.split(":")[1]) if ":" in t_ else 0) for t_ in _xl.replace(";", ",").split(",") if t_.strip()] or None
-    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []) + len(xle or []))]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
+    _sg = str(getattr(p, "rowdec_ink_seg", "") or "")       # §6.345: «веса:m» — пути по карте, погашенной сетью туши
+    seg = None
+    if _sg:
+        from pathlib import Path as _P
+        _sp, _, _sm = _sg.rpartition(":")
+        _sp = _sp if _P(_sp).is_absolute() else str(_P(__file__).parent / "models" / _sp)
+        seg = (_sp, float(_sm))
+    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []) + len(xle or []) + ((1 + len(xin or [])) if seg else 0))]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
         if lines:
@@ -698,16 +715,17 @@ def trace_auto(rgb, sheet, p):
         # ★ §6.239: K + `rowdec_k_plus` путей (0 = прод бит-в-бит). §6.237: из невзятых удержанием 71 из 196 ведутся по
         #   ДРУГОЙ нарисованной линии (> 50 px) — лишняя линия трека, которой нет в эталоне, забирает путь.
         K += int(getattr(p, "rowdec_k_plus", 0) or 0)
-        ext = [] if (xthr or xin or xle) else None
+        ext = [] if (xthr or xin or xle or seg) else None
         global _DUMP_CTX
         _DUMP_CTX = (getattr(getattr(sheet, "meta", None), "raw_stem", "") or "", ti)      # §6.305: подпись выгрузки пиков
-        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext, extra_inert=xin, extra_learn=xle)
+        trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext, extra_inert=xin, extra_learn=xle,
+                          seg=seg)
         out.extend(_pair(trs, lines, ti))
         for _j, _e in enumerate(ext or []):       # §6.287: пути доп. порогов — та же привязка к линиям
             extra_by[_j].extend(_pair(_e, lines, ti))
     res = _Trs(out)
     res.conf = [(conf.get(id(t)),) for _, t in out]
-    res.extra = _Trs([pr for lst_ in extra_by for pr in lst_]) if (xthr or xin or xle) else None   # §6.287: порог-за-порогом
+    res.extra = _Trs([pr for lst_ in extra_by for pr in lst_]) if (xthr or xin or xle or seg) else None   # §6.287: порог-за-порогом
     return res
 
 
