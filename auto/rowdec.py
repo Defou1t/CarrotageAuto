@@ -441,14 +441,16 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                 conf_out[id(tr)] = float(np.median(prob[ys, xs]))
     if seg is not None and extra_out is not None:          # §6.345: карта × (m + (1 − m)·сеть туши) — те же пути: основной порог,
         from . import ink_seg as _IS                       #   затем пути инерции; после всех прежних доп. путей
-        _sp, _m = seg
+        _sp, _ms = seg                                     # §6.347: по каждому m из списка — свой набор, по порядку
         _sg = _IS.prob_map(rgb, y0, y0 + prob.shape[0], x0, x0 + prob.shape[1], _sp)
         if _sg.shape != prob.shape:
             _s2 = np.zeros(prob.shape, np.float32); _s2[:_sg.shape[0], :_sg.shape[1]] = _sg; _sg = _s2
-        prob = prob * (_m + (1.0 - _m) * _sg)
-        extra_out.append(_paths(pthr))
-        for _t, _kp in (extra_inert or []):
-            extra_out.append(_paths(float(_t), inert=True, kplus=int(_kp)))
+        _p0 = prob
+        for _m in _ms:
+            prob = _p0 * (_m + (1.0 - _m) * _sg)
+            extra_out.append(_paths(pthr))
+            for _t, _kp in (extra_inert or []):
+                extra_out.append(_paths(float(_t), inert=True, kplus=int(_kp)))
     return out
 
 
@@ -695,14 +697,14 @@ def trace_auto(rgb, sheet, p):
     xin = [(float(t_.split(":")[0]), int(t_.split(":")[1]) if ":" in t_ else 0) for t_ in _xi.replace(";", ",").split(",") if t_.strip()] or None
     _xl = str(getattr(p, "rowdec_extra_learn", "") or "")         # §6.318: «порог:доп.пути,…» — пути с выученной ценой перехода
     xle = [(float(t_.split(":")[0]), int(t_.split(":")[1]) if ":" in t_ else 0) for t_ in _xl.replace(";", ",").split(",") if t_.strip()] or None
-    _sg = str(getattr(p, "rowdec_ink_seg", "") or "")       # §6.345: «веса:m» — пути по карте, погашенной сетью туши
+    _sg = str(getattr(p, "rowdec_ink_seg", "") or "")       # §6.345: «веса:m[,m…]» — пути по карте, погашенной сетью туши
     seg = None
     if _sg:
         from pathlib import Path as _P
         _sp, _, _sm = _sg.rpartition(":")
         _sp = _sp if _P(_sp).is_absolute() else str(_P(__file__).parent / "models" / _sp)
-        seg = (_sp, float(_sm))
-    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []) + len(xle or []) + ((1 + len(xin or [])) if seg else 0))]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
+        seg = (_sp, [float(m_) for m_ in _sm.split(",") if m_.strip()])
+    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []) + len(xle or []) + ((1 + len(xin or [])) * len(seg[1]) if seg else 0))]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
         if lines:
