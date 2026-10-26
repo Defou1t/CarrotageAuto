@@ -56,7 +56,8 @@ T0 = time.time()
 
 # ── конфигурация ВЕДЕНИЯ, под которую собирается кэш (прод + декодер на всех листах) ────────────
 WM = str(TS / "rowdec_wellmap.json").replace("\\", "/")
-TRACE_KNOBS = dict(row_decoder="auto5", rowdec_wellmap=WM, rowdec_slot_all=True, rowdec_slot_len=0.18)
+TRACE_KNOBS = dict(row_decoder="auto5", rowdec_wellmap=WM, rowdec_slot_all=True, rowdec_slot_len=0.18,
+                   rowdec_ink_seg="")       # ⚠ 26.10: прод-маска туши (§6.345) в кэш не идёт — маска стенда только `redec --seg-mask`
 if a.seq:                                  # ★ §6.220: кэш под ДРУГИМ селектором (ключ ведения, пишется в кэш)
     TRACE_KNOBS["seq_model"] = a.seq
 for _kv in a.knob:                         # ★ §6.236: прочие ручки ведения — тип по умолчанию в Config
@@ -403,7 +404,8 @@ def cmd_redec():
         knobs = dict(c["trace_knobs"]); knobs.update({k: v for k, v in TRACE_KNOBS.items() if k not in (
             "row_decoder", "rowdec_wellmap", "rowdec_slot_all", "rowdec_slot_len") or k not in knobs})
         cfg = Config()
-        for k, v in knobs.items():
+        cfg.cv.rowdec_ink_seg = ""                       # ⚠ 26.10: прод-маска туши (§6.345, сеть на всех скважинах) — не в redec;
+        for k, v in knobs.items():                       #   маска стенда — только --seg-mask (вне фолда)
             setattr(cfg.cv, k, v)
         p = cfg.cv
         sheet = SimpleNamespace(lines=c["lines"], frame=c["frame"], meta=c["meta"], k_slots=c["k_slots"])
