@@ -56,6 +56,7 @@ ap.add_argument("--swap", action="store_true", help="§6.324: после наз�
                 "кандидаты обоих слотов): P четырёх сочетаний, разности стиля трасс, значения при шкалах обоих слотов; вне фолда по скважинам")
 ap.add_argument("--cnn", default="", help="§6.325: `_trace_cnn.py` — + оценка сети «настоящая ли трасса» по кусочкам скана (вне фолда)")
 ap.add_argument("--cnnfam", default="", help="§6.327: `_trace_cnn.py --fam` — + P(семейство слота) и P(мусор) по виду трассы")
+ap.add_argument("--segf", default="", help="§6.348: `_seg_feat.py` — + сеть туши вдоль кандидата: среднее и доля строк > 0.5 (вне фолда); несколько pkl через «;»")
 ap.add_argument("--cnnx", default="", help="§6.330: вторая оценка сети — кусочки в точках сближения с другими кандидатами (`_trace_patch.py --cross`)")
 ap.add_argument("--pairs", default="", help="§6.333: каталог `_cand_pairs.py` — при назначении кандидаты, взаимно покрывающие друг друга "
                 "(min(H[i,j], H[j,i]) ≥ --pairth), — один столбец (две копии одной кривой не встанут в два слота)")
@@ -125,6 +126,9 @@ if a.ovl:                                                 # §6.316
 CNN = pickle.load(open(a.cnn, "rb")) if a.cnn else {}
 CFAM = pickle.load(open(a.cnnfam, "rb")) if a.cnnfam else {}
 CNNX = pickle.load(open(a.cnnx, "rb")) if a.cnnx else {}
+SEGF = {}
+for _sf in (a.segf.split(";") if a.segf else []):
+    SEGF.update(pickle.load(open(_sf, "rb")))
 CFI = {f_: i for i, f_ in enumerate(CFAM.get("__classes__", [])) if i > 0 and f_ != "прочее"}   # прочее — последний класс
 TRF = {}
 if a.trace:
@@ -195,6 +199,8 @@ for rec in RECS:
                 f += [CNN.get((sh, r["k"]), np.nan)]
             if a.cnnx:                                   # §6.330
                 f += [CNNX.get((sh, r["k"]), np.nan)]
+            if a.segf:                                   # §6.348
+                f += list(SEGF.get((sh, r["k"]), (np.nan, np.nan)))
             if a.cnnfam:                                 # §6.327
                 _v = CFAM.get((sh, r["k"]))
                 f += ([float(_v[CFI.get(s["root"], len(_v) - 1)]), float(_v[0])] if _v is not None else [np.nan, np.nan])
