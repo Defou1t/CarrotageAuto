@@ -447,7 +447,7 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             _s2 = np.zeros(prob.shape, np.float32); _s2[:_sg.shape[0], :_sg.shape[1]] = _sg; _sg = _s2
         _p0 = prob
         for _m in _ms:
-            prob = _p0 * (_m + (1.0 - _m) * _sg)
+            prob = _sg if _m < 0 else _p0 * (_m + (1.0 - _m) * _sg)     # §6.349: m < 0 — пути по карте сети вместо карты декодера
             extra_out.append(_paths(pthr))
             for _t, _kp in (extra_inert or []):
                 extra_out.append(_paths(float(_t), inert=True, kplus=int(_kp)))
