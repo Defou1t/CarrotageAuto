@@ -440,7 +440,7 @@ def cmd_redec():
                     sg = _IS.prob_map(_rgb, y0_, y0_ + prob.shape[0], x0_, x0_ + prob.shape[1], _sp)
                     if sg.shape != prob.shape:
                         sg2 = np.zeros(prob.shape, np.float32); sg2[:sg.shape[0], :sg.shape[1]] = sg; sg = sg2
-                    return prob * (_m + (1.0 - _m) * sg)
+                    return sg if _m < 0 else prob * (_m + (1.0 - _m) * sg)     # §6.349: m < 0 — пути по карте сети вместо карты декодера
                 p.rowdec_prob_mask = _smask
             slot_len = float(getattr(p, "rowdec_slot_len", 0.0) or 0.0)
             gated = T2._pregate_ok(sheet, p)
