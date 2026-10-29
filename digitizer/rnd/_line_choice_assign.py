@@ -778,7 +778,7 @@ if a.save_dir and a.feat == "stack":
     _, tau, dlt = g.split(":")
     meta = dict(kind="stack", fams=dict(FAMS), cat=CAT, nocur=NOCUR, extra=bool(a.extra), shape=bool(a.trace), tau=float(tau),
                 vfeat=bool(a.vfeat), prior=(VSC["prior"] if a.vfeat else None), cnn=bool(a.cnn),
-                delta=float(dlt))
+                segf=bool(a.segf), delta=float(dlt))
     for k, (ma, mn, m2) in MODELS.items():
         nm = "line_choice_all.pkl" if k is None else f"line_choice_f{k}.pkl"
         pickle.dump(dict(meta, m_all=ma, m_nocur=mn, m2=m2, fold=k), open(sd / nm, "wb"))

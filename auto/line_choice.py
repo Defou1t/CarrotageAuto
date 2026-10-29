@@ -80,6 +80,47 @@ def resolve(spec, sheet=None):
     return p if p.is_file() else None
 
 
+def seg_resolve(spec, frame_nlgx=None):
+    """§6.348: веса сети туши для признака выбора трассы: имя в auto/models, путь, или «oof:<каталог>» — сеть фолда скважины листа
+    (`folds.json` по имени скважины = каталог над wlg; иначе `all.pt`) — только для замера."""
+    if not spec:
+        return None
+    if spec.startswith("oof:"):
+        d = Path(spec[4:])
+        mp = d / "folds.json"
+        if str(mp) not in _CACHE:
+            _CACHE[str(mp)] = json.loads(mp.read_text(encoding="utf-8"))
+        k = _CACHE[str(mp)].get(Path(frame_nlgx).parent.parent.name) if frame_nlgx else None
+        return str(d / (f"f{k}.pt" if k is not None else "all.pt"))
+    p = Path(spec)
+    if not p.is_absolute():
+        p = _MODELS / spec
+    return str(p) if p.is_file() else None
+
+
+def seg_features(rgb, net, denses, step=2):
+    """§6.348 (как `_seg_feat.py`): карта сети туши по рамке всех кандидатов; по кандидату (строки через step) v = max карты в ±1 px
+    от x → (среднее v, доля строк с v > 0.5); меньше 10 строк — nan."""
+    from . import ink_seg as IS
+    ys_all = [y for d in denses for y in d]; xs_all = [x for d in denses for x in d.values()]
+    out = [(np.nan, np.nan)] * len(denses)
+    if not ys_all:
+        return out
+    H, W = rgb.shape[:2]
+    y0, y1 = max(0, int(min(ys_all))), min(H, int(max(ys_all)) + 1)
+    x0, x1 = max(0, int(min(xs_all)) - 4), min(W, int(max(xs_all)) + 5)
+    S = IS.prob_map(rgb, y0, y1, x0, x1, net)
+    for k, d in enumerate(denses):
+        ys = np.array(sorted(d))[::step]
+        ys = ys[(ys >= y0) & (ys < y1)]
+        if len(ys) < 10:
+            continue
+        xs = np.round([d[int(y)] for y in ys]).astype(int) - x0
+        v = np.max(np.stack([S[ys - y0, np.clip(xs + o, 0, S.shape[1] - 1)] for o in (-1, 0, 1)]), 0)
+        out[k] = (float(v.mean()), float((v > 0.5).mean()))
+    return out
+
+
 def available(spec):
     try:
         import sklearn                                          # noqa: F401
@@ -195,6 +236,8 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
                     f += [np.nan] * 4
             if ck.get("cnn"):                             # §6.325 — после значений, как в стенде
                 f += [c.get("cnn", np.nan)]
+            if ck.get("segf"):                            # §6.348 — после оценки сети трассы, как в стенде
+                f += list(c.get("segf", (np.nan, np.nan)))
             ROWS.append((si, r["k"], f, r["here"], r["elsewhere"]))
     if not ROWS:
         return {}
@@ -262,7 +305,7 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
     return out
 
 
-def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None):
+def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None):
     """slots — [(имя, top_y, n_rows, (xl, xr))] в порядке рамки (только слоты с цепочкой шкал);
     cands — [dict(src, tr — исходная трасса, dense, style, rough)];
     written — [(имя, плотная записанная трасса)] в порядке рамки (что стоит в слотах сейчас).
@@ -293,6 +336,16 @@ def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None):
                 sc_ = np.full(len(cands), np.nan)
             for c_, v_ in zip(CS, sc_):
                 c_["cnn"] = float(v_)
+        if ck.get("segf"):                                # §6.348: сеть туши вдоль кандидата (seg = (выпрямленный rgb, веса))
+            try:
+                sf_ = seg_features(seg[0], seg[1], [c["dense"] for c in cands]) if seg is not None else [(np.nan, np.nan)] * len(cands)
+            except Exception as e_:
+                _announce(f"⚠ признак сети туши (§6.348) НЕ включён: {type(e_).__name__}: {e_} — признак пуст")
+                sf_ = [(np.nan, np.nan)] * len(cands)
+            if seg is None:
+                _announce("⚠ модель выбора трассы ждёт признак сети туши (§6.348), а `line_choice_seg` не задан — признак пуст")
+            for c_, v_ in zip(CS, sf_):
+                c_["segf"] = v_
         return _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales)
     model, fams, tau, dlt = ck["model"], dict(ck["fams"]), ck["tau"], ck["delta"]
     # занятость: кандидат стоит в слоте, если x совпадает в 1 px на ≥ 90% общих строк (как в стенде по файлам выдачи)
