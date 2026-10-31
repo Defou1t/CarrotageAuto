@@ -85,6 +85,7 @@ def cmd_paths():
             setattr(cfg.cv, k, v)
         p = cfg.cv
         p.rowdec_ink_seg = ""; p.rowdec_extra_thr = 0.0; p.rowdec_extra_inert = ""; p.rowdec_extra_learn = ""   # только пути семейств
+        p.rowdec_ink_segfam = ""                                   # прод-ручка §6.351 (если отгрузят) в стенд не течёт
         sheet = SimpleNamespace(lines=c["lines"], frame=c["frame"], meta=c["meta"], k_slots=c["k_slots"])
         fo = folds.get(n.parent.parent.name)
         sp = str(Path(a.seg) / (f"f{fo}.pt" if fo is not None else "all.pt"))
