@@ -13,4 +13,11 @@ foreach ($p in @('*.nlgx', '*.bck', '*.pkl', '*.npy', '*.las', '*.tif', '*.json'
   $out = & compact.exe /c /i /q "/s:$r" $p 2>&1 | Select-Object -Last 3
   Say ("{0} {1}: {2}; на E: свободно {3} ГБ" -f $r, $p, (($out -join ' ') -replace '\s+', ' '), (FreeGB))
 }
+# 31.10: выдача итоговой оцифровки (nlgx / bck / las / json ~0.4 МБ на лист, png не жмётся) — после её счёта (он читает выдачу)
+while (-not (Marker 'F:\nds\output\taskS\_final.log' 'FINAL DONE')) { Start-Sleep -Seconds 300 }
+$r = 'F:\nds\output\final_2026-10\FINAL'
+foreach ($p in @('*.nlgx', '*.bck', '*.las', '*.json', '*.tsv')) {
+  $out = & compact.exe /c /i /q "/s:$r" $p 2>&1 | Select-Object -Last 3
+  Say ("{0} {1}: {2}; на E: свободно {3} ГБ" -f $r, $p, (($out -join ' ') -replace '\s+', ' '), (FreeGB))
+}
 Say ("=== COMPACT QUAR DONE === на E: свободно {0} ГБ" -f (FreeGB))
