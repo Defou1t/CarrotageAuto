@@ -2,9 +2,9 @@ r"""_segfam_paths.py — ПУТИ ПО КАНАЛУ СВОЕГО СЕМЕЙСТ�
 
 §6.349: пути декодера по карте сети туши («чья-то оцифрованная кривая») дали честный путь половине слотов без честного кандидата.
 Одна карта на все семейства ведёт путь по чужой кривой там, где кривые сходятся и пересекаются. Сеть по семействам (§6.350,
-`ink_segfam_f`, канал 1 + k — семейство `FAMS[k]`) даёт карту на каждое семейство. Здесь для каждого семейства F среди кривых рамки
-листа (имена `frame_nlgx` без DA — их знает и прод) — пути `rowdec.trace_track` по каналу F (карта сети вместо карты декодера, как
-m < 0 у §6.349), K = min(K трека, число слотов F на листе + `--kplus`); эмбеддинги личности — декодера, привязка к линиям — прод
+`ink_segfam_f`, канал 1 + k — семейство `FAMS[k]`) даёт карту на каждое семейство. Здесь на каждом треке для каждого семейства F его
+слотов (кривые `frame_nlgx` без DA по трекам `emit._slot_track` — так прод считает `k_slots`) — пути `rowdec.trace_track` по каналу F
+(карта сети вместо карты декодера, как m < 0 у §6.349), K = min(K трека, слотов F на треке + `--kplus`); эмбеддинги личности — декодера, привязка к линиям — прод
 (`rowdec.trace_auto`). Сеть — вне фолда (скважина листа не в обучении). Прод-код не меняется: `trace_track` подменяется здесь.
 
   paths — кэш как у `redec` (`alt` — пути по каналам семейств, `alt_fam` — семейство каждого пути, `extra` = None).
@@ -64,7 +64,7 @@ def pack(tr):
 
 def cmd_paths():
     from types import SimpleNamespace
-    from auto import rowdec as RD, trace2d as T2, imaging as im, frame as FR, meta as Mm, ink_seg as IS
+    from auto import rowdec as RD, imaging as im, frame as FR, meta as Mm, ink_seg as IS, emit as EM
     from auto.config import Config
     from extract_nlgx import extract
     folds = json.loads((Path(a.seg) / "folds.json").read_text(encoding="utf-8"))
@@ -89,8 +89,13 @@ def cmd_paths():
         fo = folds.get(n.parent.parent.name)
         sp = str(Path(a.seg) / (f"f{fo}.pt" if fo is not None else "all.pt"))
         try:
-            FAM = Counter(IS.fam_index(Mm.mnem_root(cv["name"])) for cv in extract(str(c["frame_nlgx"]))["curves"]
-                          if Mm.mnem_root(cv["name"]) != "DA")
+            _model = extract(str(c["frame_nlgx"]))                 # семейства слотов ПО ТРЕКУ — как прод считает k_slots (pipeline)
+            FT = {}
+            for cv in _model.get("curves", []):
+                r_ = Mm.mnem_root(cv.get("name", ""))
+                if r_ != "DA":
+                    FT.setdefault(EM._slot_track(_model, cv, c["frame"]), Counter())[IS.fam_index(r_)] += 1
+            FAM = sorted({F for cnt in FT.values() for F in cnt})
             rgb = im.load_rgb(c["image"])
             if getattr(c["frame"], "row_shift", None) is not None:
                 rgb = FR.apply_row_shift(rgb, c["frame"].row_shift)
@@ -110,7 +115,8 @@ def cmd_paths():
 
             def tt(rgb_, track, k, p_, ck, y0, y1, conf_out=None, **kw):
                 out = []
-                for F, nF in sorted(FAM.items()):
+                ti_ = next((i for i, t_ in enumerate(sheet.frame.tracks) if t_ is track), None)
+                for F, nF in sorted(FT.get(ti_, {}).items()):
                     p_.rowdec_prob_mask = mk(F)
                     for t in orig(rgb_, track, max(1, min(k, nF + a.kplus)), p_, ck, y0, y1, conf_out=conf_out):
                         FID[id(t)] = F; out.append(t)
@@ -131,7 +137,7 @@ def cmd_paths():
         new["alt_fam"] = None if alt is None else [FID.get(id(tr)) for L, tr in alt]
         new["alt_conf"] = getattr(alt, "conf", None) if alt is not None else None
         new["extra"] = None
-        new["segfam"] = dict(seg=sp, fams=dict(FAM), kplus=a.kplus)
+        new["segfam"] = dict(seg=sp, fams={ti_: dict(cnt) for ti_, cnt in FT.items()}, kplus=a.kplus)
         tmp = dst.with_suffix(".tmp"); pickle.dump(new, open(tmp, "wb"), protocol=4); tmp.replace(dst)
         done += 1
         del rgb
