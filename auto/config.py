@@ -165,7 +165,9 @@ class CVParams:
     #   ⚠ ОТКАТ = "line_choice_v11pt.pkl" и rowdec_ink_seg = "".
     # ★ 30.10 (§6.348): v18p — + признак сети туши вдоль кандидата (`line_choice_seg`, среднее и доля строк на туши): поле+вне
     #   2792 → 2853 (+61, p = 0.0004), безымянных +45, сорт A +12. ⚠ ОТКАТ = "line_choice_v16p.pkl" и line_choice_seg = "".
-    line_choice: str = "line_choice_v18p.pkl"
+    # ★ 31.10 (§6.349): v19p — кандидаты включают пути по самой карте сети туши (`rowdec_ink_seg` «…:0.05,-1»): поле+вне
+    #   2853 → 3110 (+257, p < 0.0001), безымянных +281, сорт A +25. ⚠ ОТКАТ = "line_choice_v18p.pkl" и rowdec_ink_seg «…:0.05».
+    line_choice: str = "line_choice_v19p.pkl"
     # §6.348: веса сети туши для признака выбора трассы «доля строк кандидата на туши» (нужен модели с segf; "" — признак пуст).
     #   Стенд / повтор гасят её сами (`lcseg=` — только явно).
     line_choice_seg: str = "ink_seg_v1.pt"
@@ -480,7 +482,9 @@ class CVParams:
     # §6.345: сеть «тушь оцифрованных кривых» по цвету (`auto/ink_seg.py`) гасит карту декодера: карта × (m + (1 − m)·сеть); по ней —
     #   те же пути (основной порог, затем пути инерции) доп. кандидатами выбора трассы после прежних. «веса.pt:m» в auto/models; "" = выкл.
     #   ★ 25.10 В ПРОДЕ (A/B NSE15 → NSE16, см. line_choice). ⚠ ОТКАТ — вместе с line_choice.
-    rowdec_ink_seg: str = "ink_seg_v1.pt:0.05"
+    #   Несколько m через запятую — свой набор путей на каждое, по порядку; m < 0 — пути по карте сети вместо карты декодера.
+    #   ★ 31.10 (§6.349) В ПРОДЕ «0.05,-1» вместе с line_choice_v19p (откат — оба: «ink_seg_v1.pt:0.05» и v18p).
+    rowdec_ink_seg: str = "ink_seg_v1.pt:0.05,-1"
     rowdec_link_model: str = "link_model.pkl"     # модель перехода (`_link_train.py`) в auto/models или полный путь
     rowdec_inert_w: float = 1.0
     rowdec_inert_alpha: float = 0.3

@@ -49,5 +49,6 @@ python digitizer/rnd/_data_retention.py
   возвращены в `intake`.
 - Сжатие NTFS (`compact`, без потерь, `compact /u` — обратно) на `output`, `projects`, `data`: pkl ~2.5×, nlgx / bck ~8×
   (sha256 файла до / после сжатия / после распаковки совпадают). Драйвер `taskS/_compact_run.ps1`, лог `_compact.log`.
+  31.10 итог: на E: свободно 22,7 → 93,5 ГБ (pkl 104 → 47 ГБ, nlgx / bck / las ×3–6); после удаления карантина — ещё +622 ГБ.
 - ⚠ Каждый режим повтора `rp_lvl/<режим>` — ~1.8 ГБ; 27 старых режимов 26.10 перенесены на `F:\carrotage_offload` (до просьбы
   не трогать другие диски).
