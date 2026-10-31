@@ -186,8 +186,9 @@ def cmd_ceil():
             had = any(sc["lab"] is not None and sc["lab"][0] for sc in s["cands"])
             grp = "с честным" if had else "без честного"
             C[(grp, "слотов")] += 1
+            need = max(30, 0.9 * len(g))                  # тот же порог, что в err / HON: общих строк < 30 или покрытие < 0.9 — не честный
             for nm in paths:
-                hon = [i for i, d in enumerate(paths[nm]) if d and HON(err(d, g))]
+                hon = [i for i, d in enumerate(paths[nm]) if d and sum(1 for y in d if y in g) >= need and HON(err(d, g))]
                 C[(grp, nm)] += bool(hon)
                 if nm == "new" and hon and not had:
                     FAMN[s["root"]] += 1

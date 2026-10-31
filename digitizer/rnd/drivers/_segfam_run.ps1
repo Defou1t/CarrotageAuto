@@ -12,7 +12,8 @@ function Run($name, $args_) {
 function Marker($f, $m) { (Test-Path $f) -and (Select-String -Path $f -Pattern $m -SimpleMatch -Quiet) }
 Say "цепочка: жду кусков и конца итоговой оцифровки"
 while (-not (Marker "$ts/_segfam.log" 'SEGFAM PATCH DONE')) { Start-Sleep -Seconds 300 }
-while (-not (Marker "$ts/_final.log" 'FINAL DONE')) { Start-Sleep -Seconds 300 }
+# GPU свободен, когда шарды оцифровки кончились (круг без упора в лимит); счёт FINAL после них — только ЦП (~2.5 ч)
+while (-not ((Marker "$ts/_final.log" 'FINAL DONE') -or (Marker "$ts/_final.log" 'упёрлось в лимит 0,'))) { Start-Sleep -Seconds 300 }
 Say "GPU свободен — обучение"
 if (-not (Test-Path "$ts/ink_segfam_f/all.pt")) {
   Run 'sfam_net' @('-I','_seg_net.py','--fam','--data',"$ts/segpatch_fam",'--save-dir',"$ts/ink_segfam_f")
