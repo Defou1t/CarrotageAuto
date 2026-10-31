@@ -4,6 +4,9 @@
 $log = 'F:\nds\output\taskS\_compact.log'
 function Say($m) { "{0}  {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m | Out-File -FilePath $log -Encoding utf8 -Append }
 function FreeGB { [math]::Round((Get-PSDrive E).Free / 1GB, 1) }
+# ⚠ E: — HDD: сжатие рядом с итоговой оцифровкой тормозило её чтение сканов (108 → 66 листов / ч) — ждём конца её шардов
+function Marker($f, $m) { (Test-Path $f) -and (Select-String -Path $f -Pattern $m -SimpleMatch -Quiet) }
+while (-not ((Marker 'F:\nds\output\taskS\_final.log' 'FINAL DONE') -or (Marker 'F:\nds\output\taskS\_final.log' 'упёрлось в лимит 0,'))) { Start-Sleep -Seconds 300 }
 Say ("карантин: старт, на E: свободно {0} ГБ" -f (FreeGB))
 $r = 'E:\Carrotagki_auto\_quarantine'
 foreach ($p in @('*.nlgx', '*.bck', '*.pkl', '*.npy', '*.las', '*.tif', '*.json', '*.log', '*.err')) {

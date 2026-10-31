@@ -45,7 +45,8 @@ levelshift=1,namestyle=oof:F:/nds/output/taskS/name_style_v1,linechoice=oof:F:/n
 **Место на E: (31.10):** карантин `E:\Carrotagki_auto\_quarantine` 622 ГБ + 22.5 ГБ (`2026-10-31_closed`: `tk_*`, разведки маски
 туши, сканы / кусочки v18, старые модели выбора трассы, 8 заменённых режимов `rp_lvl` — в `rp_lvl` остались NS и NSE19) — удаляет
 заказчик (README внутри); сжатие NTFS дало 22.7 → 93.5 ГБ свободно; 31.10 вечер — сжатие самого карантина (`nds_compact_quar`,
-`_compact_quar.ps1`, лог `_compact.log`: pkl / nlgx / bck / npy / несжатые tif; без потерь). `E:\Archive HDD.rar` — личный бэкап (видео, игры), не проект.
+`_compact_quar.ps1`, лог `_compact.log`: pkl / nlgx / bck / npy / несжатые tif; без потерь) — ⚠ E: — HDD: рядом с оцифровкой
+тормозило её (108 → 66 листов / ч), прервано на nlgx (+5 ГБ) и ждёт конца её шардов. `E:\Archive HDD.rar` — личный бэкап (видео, игры), не проект.
 **Идёт §6.350 (`nds_segfam_patch` → `nds_segfam`, лог `taskS/_segfam.log`):** сеть туши по 17 семействам кривых (куски
 `segpatch_fam`, сети `ink_segfam_f`, признак `segfam_r*`), стенд v20e против v19e (+1506 / сорт A +194); `nds_segfam` ждёт конца
 итоговой оцифровки (GPU). **§6.351 разведка** (`nds_segfampaths`, лог `_segfampaths.log`): пути по каналу своего семейства
