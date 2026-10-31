@@ -31,13 +31,23 @@ def curve_mask(G, y0, x0, S, hw=2):
     return M
 
 
+# §6.350: семейства кривых для сети туши по семействам (`--fam`): бит k маски — семейство FAMS[k], последний бит — прочие
+FAMS = ["GZ", "SP", "GK", "OGZ", "DS", "BK", "ZAT", "CALI", "NGK", "MBK", "IK", "T", "TM", "MGZ", "MPZ", "PZ", "OTHER"]
+
+
+def fam_index(root):
+    import re
+    r = re.sub(r"^BKZ_", "", str(root))
+    return FAMS.index(r) if r in FAMS[:-1] else len(FAMS) - 1
+
+
 def one(job):
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
     from extract_nlgx import extract
     from _multi_replica_probe import dense
     from auto import meta as Mm, imaging as im, frame as FR
-    sh, q, tc, well, out, per, S, seed = job
+    sh, q, tc, well, out, per, S, seed, fam = job
     of = Path(out) / (hashlib.md5(sh.encode("utf-8")).hexdigest()[:16] + ".npz")
     if of.exists():
         return sh, -1
@@ -46,9 +56,11 @@ def one(job):
         rgb = im.load_rgb(c["image"])
         if getattr(c["frame"], "row_shift", None) is not None:
             rgb = FR.apply_row_shift(rgb, c["frame"].row_shift)
-        G = [dense(cv) for cv in extract(str(q))["curves"] if Mm.mnem_root(cv["name"]) != "DA"]
+        CV = [cv for cv in extract(str(q))["curves"] if Mm.mnem_root(cv["name"]) != "DA"]
+        G = [dense(cv) for cv in CV]
     except Exception:
         return sh, 0
+    FI = [fam_index(Mm.mnem_root(cv["name"])) for cv, g in zip(CV, G) if g]
     G = [g for g in G if g]
     if not G:
         return sh, 0
@@ -65,9 +77,18 @@ def one(job):
             yc, xc = rng.integers(ylo, yhi + 1), rng.integers(xlo, xhi + 1)
         y0 = int(np.clip(yc - S // 2, 0, H - S)); x0 = int(np.clip(xc - S // 2, 0, W - S))
         X.append(rgb[y0:y0 + S, x0:x0 + S].transpose(2, 0, 1).copy())
-        Y.append(curve_mask(G, y0, x0, S))
+        if fam:                                           # §6.350: бит семейства у каждого пикселя туши
+            M = np.zeros((S, S), np.uint32)
+            for k in sorted(set(FI)):
+                M |= curve_mask([g for g, f in zip(G, FI) if f == k], y0, x0, S).astype(np.uint32) << np.uint32(k)
+            Y.append(M)
+        else:
+            Y.append(curve_mask(G, y0, x0, S))
     tmp = str(of) + ".tmp.npz"
-    np.savez_compressed(tmp, X=np.stack(X), Y=np.stack(Y), sheet=sh, well=well)
+    if fam:
+        np.savez_compressed(tmp, X=np.stack(X), Yb=np.stack(Y), fams=np.array(FAMS), sheet=sh, well=well)
+    else:
+        np.savez_compressed(tmp, X=np.stack(X), Y=np.stack(Y), sheet=sh, well=well)
     os.replace(tmp, of)
     return sh, len(X)
 
@@ -79,6 +100,7 @@ def main():
     ap.add_argument("--size", type=int, default=192)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--out", default=r"F:/nds/output/taskS/segpatch")
+    ap.add_argument("--fam", action="store_true", help="§6.350: цель — битовая маска семейств (Yb uint32, бит k — FAMS[k]); те же куски")
     a = ap.parse_args()
     TS = Path(r"F:/nds/output/taskS")
     lst = lambda f: [l.strip() for l in (TS / f).read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -95,7 +117,7 @@ def main():
             key = f"{q.stem[:40]}_{hashlib.md5(q.stem.encode('utf-8')).hexdigest()[:8]}"
             tc = TS / cache / (key + ".pkl")
             if tc.exists():
-                jobs.append((sh, q, str(tc), well(sh), a.out, a.per, a.size, int(hashlib.md5(sh.encode()).hexdigest()[:8], 16)))
+                jobs.append((sh, q, str(tc), well(sh), a.out, a.per, a.size, int(hashlib.md5(sh.encode()).hexdigest()[:8], 16), a.fam))
     import multiprocessing as mp
     t0 = time.time(); n = 0
     with mp.Pool(a.workers) as pool:

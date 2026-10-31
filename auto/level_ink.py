@@ -287,7 +287,7 @@ def predict(f, path):
         kc = min(f["K"], KMAX)
         pr = 0
         for net in nets:
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+            with torch.autocast(dev, dtype=torch.bfloat16, enabled=dev == "cuda"):
                 lo = net(x)
             lo = lo.float()
             lo[:, kc:, :] = -1e4
@@ -361,7 +361,7 @@ def cut_fn(spec, sheet, gray, paper, chain):
         with torch.no_grad():
             for j in range(0, len(Xb), 512):
                 xb = torch.from_numpy(np.stack(Xb[j:j + 512])).to(dev).float() / 255.0
-                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                with torch.autocast(dev, dtype=torch.bfloat16, enabled=dev == "cuda"):
                     out[ib[j:j + 512]] = torch.sigmoid(net(xb).float()).cpu().numpy()
         return out
     return fn

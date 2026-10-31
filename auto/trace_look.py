@@ -84,6 +84,6 @@ def scores(gray, paper, dense_list, path, bs=256):
         for i in range(0, len(idx), bs):
             b = idx[i:i + bs]
             xb = torch.from_numpy(np.stack([Ps[j] for j in b])).to(dev).float() / 255.0
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+            with torch.autocast(dev, dtype=torch.bfloat16, enabled=dev == "cuda"):
                 out[b] = np.mean([torch.sigmoid(n_(xb).float()).cpu().numpy() for n_ in nets], 0)
     return out

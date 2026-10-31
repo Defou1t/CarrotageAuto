@@ -22,6 +22,7 @@ ap.add_argument("--steps", type=int, default=8000)
 ap.add_argument("--bs", type=int, default=24)
 ap.add_argument("--lr", type=float, default=2e-3)
 ap.add_argument("--pos-weight", type=float, default=4.0)
+ap.add_argument("--fam", action="store_true", help="§6.350: куски `_seg_patch.py --fam` — выход 1 + K каналов: тушь, затем семейства")
 a = ap.parse_args()
 import torch, torch.nn as nn
 from auto.ink_seg import build_net
@@ -33,25 +34,33 @@ files = sorted(Path(a.data).glob("*.npz"))
 meta = []
 for f in files:
     z = np.load(f)
-    meta.append((f, str(z["sheet"]), str(z["well"]), len(z["Y"])))
+    meta.append((f, str(z["sheet"]), str(z["well"]), len(z["Yb"] if a.fam else z["Y"])))
+FAMS = [str(x) for x in np.load(files[0])["fams"]] if a.fam else []
+K = len(FAMS)
 def train(TEW, TE, save):
     tr = [m for m in meta if m[2] not in TEW]; te = [m for m in meta if m[1] in TE]
     n_tr = sum(m[3] for m in tr); S = np.load(tr[0][0])["X"].shape[-1]
     print(f"кусков обучения {n_tr} ({len(tr)} листов), проверка {sum(m[3] for m in te)} ({len(te)} листов), S {S}")
-    X = np.empty((n_tr, 3, S, S), np.uint8); Y = np.empty((n_tr, S, S), np.uint8); o = 0
+    X = np.empty((n_tr, 3, S, S), np.uint8); Y = np.empty((n_tr, S, S), np.uint32 if a.fam else np.uint8); o = 0
     for f, _, _, n in tr:
-        z = np.load(f); X[o:o + n] = z["X"]; Y[o:o + n] = z["Y"]; o += n
+        z = np.load(f); X[o:o + n] = z["X"]; Y[o:o + n] = z["Yb"] if a.fam else z["Y"]; o += n
     dev = torch.device("cuda")
-    net = build_net(a.base).to(dev)
+    net = build_net(a.base, 1 + K if a.fam else 1).to(dev)
+    bits = torch.arange(K, device=dev, dtype=torch.int64)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
     sch = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.steps, pct_start=0.05)
     pw = torch.tensor(a.pos_weight, device=dev)
     rs = np.random.RandomState(0); t0 = time.time(); run = 0.0
     for st in range(a.steps):
         b = rs.randint(0, n_tr, a.bs)
-        xb = torch.from_numpy(X[b]).to(dev).float() / 255.0; yb = torch.from_numpy(Y[b]).to(dev).float()
+        xb = torch.from_numpy(X[b]).to(dev).float() / 255.0
+        if a.fam:                                         # канал 0 — любая тушь, k + 1 — семейство FAMS[k]
+            yi = torch.from_numpy(Y[b].astype(np.int64)).to(dev)
+            yb = torch.cat([(yi > 0)[:, None], ((yi[:, None] >> bits[None, :, None, None]) & 1) > 0], 1).float()
+        else:
+            yb = torch.from_numpy(Y[b]).to(dev).float()
         if rs.rand() < 0.5:
-            xb = torch.flip(xb, dims=[3]); yb = torch.flip(yb, dims=[2])
+            xb = torch.flip(xb, dims=[3]); yb = torch.flip(yb, dims=[yb.dim() - 1])
         with torch.autocast("cuda", dtype=torch.bfloat16):
             lo = net(xb)
         loss = nn.functional.binary_cross_entropy_with_logits(lo.float(), yb, pos_weight=pw)
@@ -60,18 +69,29 @@ def train(TEW, TE, save):
         if (st + 1) % 500 == 0:
             print(f"  шаг {st + 1}/{a.steps}: потеря {run:.4f}, {time.time() - t0:.0f} с")
     net.eval()
-    torch.save(dict(sd=net.state_dict(), base=a.base, S=S), save)
+    torch.save(dict(sd=net.state_dict(), base=a.base, S=S, out=1 + K if a.fam else 1, fams=FAMS), save)
     if te:
         from sklearn.metrics import roc_auc_score
-        P_, Y_ = [], []
+        P_, Y_, FA_ = [], [], []
         with torch.no_grad():
             for f, _, _, n in te:
                 z = np.load(f)
                 xb = torch.from_numpy(z["X"]).to(dev).float() / 255.0
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     pr = torch.sigmoid(net(xb).float()).cpu().numpy()
-                P_.append(pr[:, ::4, ::4].ravel()); Y_.append(z["Y"][:, ::4, ::4].ravel())
+                if a.fam:                                 # §6.350: доля верного семейства (argmax) на пикселях одной кривой
+                    yb_ = z["Yb"][:, ::4, ::4]; one_ = (yb_ > 0) & ((yb_ & (yb_ - 1)) == 0)
+                    am_ = pr[:, 1:, ::4, ::4].argmax(1)
+                    FA_.append((am_[one_], np.log2(yb_[one_]).round().astype(int)))
+                    pr = pr[:, 0]; yy_ = (yb_ > 0).astype(np.uint8)
+                else:
+                    yy_ = z["Y"][:, ::4, ::4]
+                P_.append(pr[:, ::4, ::4].ravel()); Y_.append(yy_.ravel())
         P_ = np.concatenate(P_); Y_ = np.concatenate(Y_)
+        if a.fam:
+            am_ = np.concatenate([x[0] for x in FA_]); tf_ = np.concatenate([x[1] for x in FA_])
+            print(f"★ проверка семейств: верное семейство у {np.mean(am_ == tf_):.3f} пикселей одной кривой ({len(tf_)}); "
+                  + ", ".join(f"{FAMS[k]} {np.mean(am_[tf_ == k] == k):.2f}" for k in range(K) if (tf_ == k).sum() > 500))
         print(f"★ проверка: AUC пикселей {roc_auc_score(Y_, P_):.4f}; при 0.5 — точность {((P_ >= 0.5) & (Y_ > 0)).sum() / max(1, (P_ >= 0.5).sum()):.3f}, "
               f"полнота {((P_ >= 0.5) & (Y_ > 0)).sum() / max(1, (Y_ > 0).sum()):.3f}")
     print(f"★ веса → {save}")
