@@ -1,4 +1,5 @@
-﻿# _final_run.ps1 — 31.10: ИТОГОВАЯ АВТОМАТИЧЕСКАЯ ОЦИФРОВКА АРХИВА ПРОДОМ (_final_run.py), 3 шарда, круги по 5.5 ч до конца;
+﻿# _final_run.ps1 — 31.10: ИТОГОВАЯ АВТОМАТИЧЕСКАЯ ОЦИФРОВКА АРХИВА ПРОДОМ (_final_run.py), 4 шарда (31.10 16:40: было 3 —
+# каждый шард упирается в одно ядро, ЦП 8%, GPU 37%; шард ≈ 3 ГБ видеопамяти, 4 — потолок правила), круги по 5.5 ч до конца;
 # затем счёт мерой приёмки (_name_cost_prod.py --mode FINAL). Сделанные листы пропускаются — перезапуск безопасен. ⚠ UTF-8 С BOM.
 $py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
 $rnd='F:/nds/Auto/digitizer/rnd'
@@ -10,8 +11,8 @@ function Done { (Get-ChildItem "$fin/FINAL" -Directory -ErrorAction SilentlyCont
 Say "старт"
 foreach ($round in 1..6) {
   $ps=@()
-  foreach ($i in 0..2) {
-    $a=@('-I','_final_run.py','--out',"$fin/FINAL",'--shard',"$i/3",'--max-hours','5.5')
+  foreach ($i in 0..3) {
+    $a=@('-I','_final_run.py','--out',"$fin/FINAL",'--shard',"$i/4",'--max-hours','5.5')
     $ps += Start-Process -FilePath $py -ArgumentList $a -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$ts/_final_${round}_$i.log" -RedirectStandardError "$ts/_final_${round}_$i.err" -PassThru
     Start-Sleep -Seconds 5
   }
