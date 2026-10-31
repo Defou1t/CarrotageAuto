@@ -98,18 +98,29 @@ def seg_resolve(spec, frame_nlgx=None):
     return str(p) if p.is_file() else None
 
 
-def seg_features(rgb, net, denses, step=2):
+def seg_features(rgb, net, denses, step=2, fam=False):
     """§6.348 (как `_seg_feat.py`): карта сети туши по рамке всех кандидатов; по кандидату (строки через step) v = max карты в ±1 px
     от x → (среднее v, доля строк с v > 0.5); меньше 10 строк — nan."""
     from . import ink_seg as IS
     ys_all = [y for d in denses for y in d]; xs_all = [x for d in denses for x in d.values()]
     out = [(np.nan, np.nan)] * len(denses)
     if not ys_all:
-        return out
+        return [None] * len(denses) if fam else out
     H, W = rgb.shape[:2]
     y0, y1 = max(0, int(min(ys_all))), min(H, int(max(ys_all)) + 1)
     x0, x1 = max(0, int(min(xs_all)) - 4), min(W, int(max(xs_all)) + 5)
     S = IS.prob_map(rgb, y0, y1, x0, x1, net)
+    if fam:                                               # §6.350 (как `_seg_feat.py --fam`): среднее по каждому каналу
+        out = [None] * len(denses)
+        for k, d in enumerate(denses):
+            ys = np.array(sorted(d))[::step]
+            ys = ys[(ys >= y0) & (ys < y1)]
+            if len(ys) < 10:
+                continue
+            xs = np.round([d[int(y)] for y in ys]).astype(int) - x0
+            v = np.max(np.stack([S[:, ys - y0, np.clip(xs + o, 0, S.shape[2] - 1)] for o in (-1, 0, 1)]), 0)
+            out[k] = v.mean(1).astype(np.float16)
+        return out
     for k, d in enumerate(denses):
         ys = np.array(sorted(d))[::step]
         ys = ys[(ys >= y0) & (ys < y1)]
@@ -238,6 +249,14 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
                 f += [c.get("cnn", np.nan)]
             if ck.get("segf"):                            # §6.348 — после оценки сети трассы, как в стенде
                 f += list(c.get("segf", (np.nan, np.nan)))
+            if ck.get("segfam"):                          # §6.350: своё семейство слота, лучшее чужое, разность
+                _v = c.get("segfam")
+                if _v is None or not np.isfinite(_v[0]):
+                    f += [np.nan, np.nan, np.nan]
+                else:
+                    from .ink_seg import fam_index as _fi_
+                    _v = np.asarray(_v, float)[1:]; _fi = _fi_(root); _ot = np.delete(_v, _fi).max()
+                    f += [float(_v[_fi]), float(_ot), float(_v[_fi] - _ot)]
             ROWS.append((si, r["k"], f, r["here"], r["elsewhere"]))
     if not ROWS:
         return {}
@@ -305,7 +324,7 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
     return out
 
 
-def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None):
+def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None, segfam=None):
     """slots — [(имя, top_y, n_rows, (xl, xr))] в порядке рамки (только слоты с цепочкой шкал);
     cands — [dict(src, tr — исходная трасса, dense, style, rough)];
     written — [(имя, плотная записанная трасса)] в порядке рамки (что стоит в слотах сейчас).
@@ -346,6 +365,16 @@ def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, 
                 _announce("⚠ модель выбора трассы ждёт признак сети туши (§6.348), а `line_choice_seg` не задан — признак пуст")
             for c_, v_ in zip(CS, sf_):
                 c_["segf"] = v_
+        if ck.get("segfam"):                              # §6.350: сеть туши по семействам вдоль кандидата (segfam = (rgb, веса))
+            try:
+                sm_ = seg_features(segfam[0], segfam[1], [c["dense"] for c in cands], fam=True) if segfam is not None else [None] * len(cands)
+            except Exception as e_:
+                _announce(f"⚠ признак сети туши по семействам (§6.350) НЕ включён: {type(e_).__name__}: {e_} — признак пуст")
+                sm_ = [None] * len(cands)
+            if segfam is None:
+                _announce("⚠ модель выбора трассы ждёт признак по семействам (§6.350), а `line_choice_segfam` не задан — признак пуст")
+            for c_, v_ in zip(CS, sm_):
+                c_["segfam"] = v_
         return _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales)
     model, fams, tau, dlt = ck["model"], dict(ck["fams"]), ck["tau"], ck["delta"]
     # занятость: кандидат стоит в слоте, если x совпадает в 1 px на ≥ 90% общих строк (как в стенде по файлам выдачи)

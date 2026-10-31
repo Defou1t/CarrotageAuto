@@ -32,13 +32,7 @@ def curve_mask(G, y0, x0, S, hw=2):
 
 
 # §6.350: семейства кривых для сети туши по семействам (`--fam`): бит k маски — семейство FAMS[k], последний бит — прочие
-FAMS = ["GZ", "SP", "GK", "OGZ", "DS", "BK", "ZAT", "CALI", "NGK", "MBK", "IK", "T", "TM", "MGZ", "MPZ", "PZ", "OTHER"]
-
-
-def fam_index(root):
-    import re
-    r = re.sub(r"^BKZ_", "", str(root))
-    return FAMS.index(r) if r in FAMS[:-1] else len(FAMS) - 1
+from auto.ink_seg import FAMS, fam_index                # noqa: E402 — один список с продом
 
 
 def one(job):

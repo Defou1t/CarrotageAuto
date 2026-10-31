@@ -370,7 +370,8 @@ def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name,
             pass
 
 
-def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_name, out, stem, seg_spec="", frame=None, frame_nlgx=None):
+def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_name, out, stem, seg_spec="", frame=None, frame_nlgx=None,
+                      segfam_spec=""):
     """§6.280: модель выбора трассы для слота (auto/line_choice.py) — замена трассы слота на свободного кандидата ведения
     (меняется `mapping` на месте). Замены — в `<stem>_linechoice.json`."""
     from . import line_choice as LC, name_style as NS, level_ink as LI
@@ -430,7 +431,20 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
                 seg = (_FR.apply_row_shift(rgb, _rs), _sp)
             else:
                 seg = (rgb, _sp)
-    rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root, scales=scales, look=(gray, paper), seg=seg)
+    segfam = None
+    if segfam_spec:                                     # §6.350: сеть туши по семействам — тот же выпрямленный скан
+        _sp2 = LC.seg_resolve(segfam_spec, frame_nlgx)
+        if _sp2 is not None:
+            _rs = getattr(frame, "row_shift", None) if frame is not None else None
+            if seg is not None:
+                segfam = (seg[0], _sp2)
+            elif _rs is not None:
+                from . import frame as _FR
+                segfam = (_FR.apply_row_shift(rgb, _rs), _sp2)
+            else:
+                segfam = (rgb, _sp2)
+    rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root, scales=scales, look=(gray, paper), seg=seg,
+                     segfam=segfam)
     for name, (k, p) in rep_.items():
         if k is None:                                   # §6.283: трассу слота забрал другой слот, своей нет — слот пуст
             mapping.pop(name, None)
@@ -817,7 +831,8 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     _lcp = getattr(_cvp0, "line_choice", "") or ""
     if _lcp:
         _line_choice_pass(_lcp, model, mapping, traces, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem,
-                          seg_spec=getattr(_cvp0, "line_choice_seg", "") or "", frame=frame, frame_nlgx=frame_nlgx)
+                          seg_spec=getattr(_cvp0, "line_choice_seg", "") or "", frame=frame, frame_nlgx=frame_nlgx,
+                          segfam_spec=getattr(_cvp0, "line_choice_segfam", "") or "")
     # ★ 04.10 (§6.286): имена по стилю ЕЩЁ РАЗ, уже по трассам после выбора (перестановки — в `<лист>_namestyle2.json`)
     if _nsp and _lcp and getattr(_cvp0, "name_style_after", False):
         _name_style_pass(_nsp, model, frame, mapping, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem, tag="namestyle2")

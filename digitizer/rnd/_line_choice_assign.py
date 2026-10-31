@@ -132,7 +132,7 @@ SEGFAM = {}
 for _sf in (a.segfam.split(";") if a.segfam else []):
     SEGFAM.update(pickle.load(open(_sf, "rb")))
 if a.segfam:
-    from _seg_patch import fam_index as _fam_index
+    from auto.ink_seg import fam_index as _fam_index
 for _sf in (a.segf.split(";") if a.segf else []):
     SEGF.update(pickle.load(open(_sf, "rb")))
 CFI = {f_: i for i, f_ in enumerate(CFAM.get("__classes__", [])) if i > 0 and f_ != "прочее"}   # прочее — последний класс

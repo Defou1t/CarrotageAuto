@@ -5,9 +5,17 @@ r"""ink_seg.py — СЕТЬ «ТУШЬ ОЦИФРОВАННЫХ КРИВЫХ» �
 небольшая U-Net по RGB (`digitizer/rnd/_seg_net.py`, цель — ±2 px от ломаной эксперта); её вероятность гасит карту декодера:
 prob × (m + (1 − m)·seg). Веса — {sd, base}; torch грузится лениво.
 """
+import re
 import numpy as np
 
 _NET = {}
+# §6.350: семейства сети туши по семействам (канал 1 + k — FAMS[k]; последний — прочие)
+FAMS = ["GZ", "SP", "GK", "OGZ", "DS", "BK", "ZAT", "CALI", "NGK", "MBK", "IK", "T", "TM", "MGZ", "MPZ", "PZ", "OTHER"]
+
+
+def fam_index(root):
+    r = re.sub(r"^BKZ_", "", str(root))
+    return FAMS.index(r) if r in FAMS[:-1] else len(FAMS) - 1
 
 
 def build_net(base=32, out=1):
