@@ -1,6 +1,7 @@
 ﻿# _final_exif_run.ps1 — 01.11 §6.352: после FINAL DONE переделать 12 листов, чьи сканы повёрнуты тегом EXIF (прод читал их без
 # разворота: 90° — падение или мусор, 180° — молча по перевёрнутому скану): прежние каталоги — в карантин, `_final_exif.py`
 # (разворот только в своём процессе — живой auto/ не трогаем, пока идут A/B §6.350–6.351), затем пересчёт FINAL и отчёт.
+# + 01.11 круг 3: TIFF БВп с пустыми первыми полосами (decoder error -2) и MemoryError — --add-failed по последнему статусу журналов.
 # Лог taskS/_final_exif.log, маркер "=== FINAL EXIF DONE ===". ⚠ UTF-8 С BOM.
 $py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
 $rnd='F:/nds/Auto/digitizer/rnd'
@@ -15,8 +16,8 @@ function Run($name, $a) {
   Say ("{0}: код {1}; {2}" -f $name, $p.ExitCode, ((Get-Content "$ts/_final_exif_$name.log" -Encoding utf8 | Select-String -Pattern '★' -SimpleMatch | Select-Object -Last 3) -join ' | '))
 }
 while (-not (Marker "$ts/_final.log" 'FINAL DONE')) { Start-Sleep -Seconds 300 }
-Say "старт: 12 листов с EXIF-ориентацией"
-Run 'redo' @('-I','_final_exif.py','--out',"$fin/FINAL",'--sheets',"$ts/final_exif_sheets.txt",'--shard','0/1','--max-hours','5.5','--requeue','E:/Carrotagki_auto/_quarantine/2026-11-01_exif')
+Say "старт: 12 листов с EXIF-ориентацией + упавшие с decoder error (пустые полосы TIFF) / MemoryError"
+Run 'redo' @('-I','_final_exif.py','--out',"$fin/FINAL",'--sheets',"$ts/final_exif_sheets.txt",'--shard','0/1','--max-hours','5.5','--add-failed','decoder|MemoryError','--requeue','E:/Carrotagki_auto/_quarantine/2026-11-01_exif')
 Run 'score' @('-I','_name_cost_prod.py','--dir',$fin,'--mode','FINAL','--dump',"$fin/score_FINAL2.pkl")
 Copy-Item "$ts/_final_exif_score.log" "$ts/_final_score2.log" -Force
 Run 'report' @('-I','_final_report.py','--out',"$fin/FINAL",'--score',"$ts/_final_score2.log")
