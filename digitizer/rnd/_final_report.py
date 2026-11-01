@@ -3,9 +3,14 @@ r"""_final_report.py — сводка итоговой оцифровки арх
 
   _final_report.py --out F:/nds/output/final_2026-10/FINAL --score F:/nds/output/taskS/_final_score.log
 """
-import sys, argparse, hashlib, os
+import sys, re, argparse, hashlib, os
 from collections import Counter, defaultdict
 from pathlib import Path
+
+
+# дефекты исходных данных (§6.352): падение листа — не ошибка оцифровки
+KNOWN = {"Melykh_034_1980_01_22_KM_0144_1264_500_D_1.nlgx": "скан — 92 байта `desktop.ini` во всех копиях приёмки; нужен настоящий скан",
+         "БВп29_1987.06.25_ПМ.nlgx": "TIFF недописан: нет IFD, данных 2710 строк из ~9500; нужен целый оригинал"}
 
 
 def sheet_dir(n):
@@ -36,6 +41,8 @@ def main():
     a = ap.parse_args()
     out = Path(a.out)
     src = sorted({q for r in a.roots for q in Path(r).glob("*/wlg/*.nlgx")}, key=lambda q: q.name)
+    auto = [q.name for q in src if re.search(r"_auto\d*$", q.stem)]       # выдачи автомата в папках архива — не листы
+    src = [q for q in src if q.name not in auto]
     st, sec = {}, {}
     for lg in sorted(out.glob("_log_*.tsv")):
         for line in lg.read_text(encoding="utf-8").splitlines():
@@ -64,6 +71,11 @@ def main():
             cnt["не обработан"] += 1
     L = [f"# Итоговая автоматическая оцифровка архива — {len(src)} листов", ""]
     L += ["| итог | листов |", "|---|---|"] + [f"| {k} | {v} |" for k, v in cnt.most_common()]
+    if auto:
+        L += ["", f"Не листы, в счёт не входят: {len(auto)} `*_auto*.nlgx` — прежние выдачи автомата в папках wlg архива "
+              f"({', '.join(auto)}); не трогались."]
+    L += ["", "Сканы с тегом EXIF Orientation (12) и TIFF Бильче-Волыци с незаписанными первыми полосами переделаны "
+          "`_final_exif.py` (§6.352): прод читал первые неразвёрнутыми, вторые падали."]
     ok = cnt["ок"] + cnt["ок без las"]
     t = [sec[k] for k in sec if not st[k].startswith("нет")]
     L += ["", f"Кривых в .las: **{ncurv}** (в среднем {ncurv / max(ok, 1):.1f} на лист). Выдача: {size / 2**30:.1f} ГБ "
@@ -72,7 +84,7 @@ def main():
     L += ["", "## По скважинам", "", "| скважина | листов | оцифровано | кривых |", "|---|---|---|---|"]
     L += [f"| {w} | {v[0]} | {v[1]} | {v[2]} |" for w, v in sorted(by_well.items())]
     if fails:
-        L += ["", "## Падения", ""] + [f"- `{n}` — {s}" for n, s in fails]
+        L += ["", "## Падения", ""] + [f"- `{n}` — {s}" + (f" — **дефект данных:** {KNOWN[n]}" if n in KNOWN else "") for n, s in fails]
     if a.score and Path(a.score).exists():
         sl = [l for l in Path(a.score).read_text(encoding="utf-8", errors="replace").splitlines() if l.startswith("★")]
         L += ["", "## Счёт мерой приёмки (с эталоном архива)", "", "⚠ Модели прода учены на всём корпусе — по листам корпуса число завышено; "
