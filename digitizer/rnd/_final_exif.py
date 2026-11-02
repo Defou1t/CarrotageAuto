@@ -90,6 +90,8 @@ def requeue(out, sheets, q):
         if not d.is_dir():
             continue
         dst = Path(q) / d.name
+        if dst.exists():                         # уже в карантине — в `out` выдача переделки (повторный запуск после обрыва)
+            continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         size = sum(f.stat().st_size for f in d.iterdir()) / 2**20
         shutil.move(str(d), str(dst))

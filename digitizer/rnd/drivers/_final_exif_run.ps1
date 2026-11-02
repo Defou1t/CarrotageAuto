@@ -15,7 +15,8 @@ function Run($name, $a) {
   $null = $p.Handle; $p.WaitForExit()
   Say ("{0}: код {1}; {2}" -f $name, $p.ExitCode, ((Get-Content "$ts/_final_exif_$name.log" -Encoding utf8 | Select-String -Pattern '★' -SimpleMatch | Select-Object -Last 3) -join ' | '))
 }
-while (-not (Marker "$ts/_final.log" 'FINAL DONE')) { Start-Sleep -Seconds 300 }
+# 02.11: старт по концу шардов (круг без упора в лимит), а не по FINAL DONE — первый счёт FINAL всё равно устаревает после переделки
+while (-not ((Marker "$ts/_final.log" 'FINAL DONE') -or (Marker "$ts/_final.log" 'упёрлось в лимит 0,'))) { Start-Sleep -Seconds 300 }
 Say "старт: 12 листов с EXIF-ориентацией + упавшие с decoder error (пустые полосы TIFF) / MemoryError"
 Run 'redo' @('-I','_final_exif.py','--out',"$fin/FINAL",'--sheets',"$ts/final_exif_sheets.txt",'--shard','0/1','--max-hours','5.5','--add-failed','decoder|MemoryError','--requeue','E:/Carrotagki_auto/_quarantine/2026-11-01_exif')
 Run 'score' @('-I','_name_cost_prod.py','--dir',$fin,'--mode','FINAL','--dump',"$fin/score_FINAL2.pkl")
