@@ -37,7 +37,14 @@ $jobs = @(
   @{ task='nds_t256_chain'; log='F:\nds\output\taskS\_t256_chain.log'; done='=== CHAIN DONE ===' },
   @{ task='nds_allk512_crops'; log='F:\nds\output\taskS\_allk512_crops.log'; done='=== ALLK512 CROPS DONE ===' },
   @{ task='nds_ctx_chain'; log='F:\nds\output\taskS\_ctx_chain.log'; done='=== CHAIN DONE ===' },
-  @{ task='nds_snap_field'; log='F:\nds\output\taskS\_snap_field.log'; done='=== SNAP DONE ===' }
+  @{ task='nds_snap_field'; log='F:\nds\output\taskS\_snap_field.log'; done='=== SNAP DONE ===' },
+  # 02.11: после отключения питания 01.11 (ПК стоял ~37 ч) — итоговая оцифровка и цепочки §6.350–6.352 (все перезапускаемы)
+  @{ task='nds_final';        log='F:\nds\output\taskS\_final.log';        done='=== FINAL DONE ===' },
+  @{ task='nds_final_exif';   log='F:\nds\output\taskS\_final_exif.log';   done='=== FINAL EXIF DONE ===' },
+  @{ task='nds_segfam';       log='F:\nds\output\taskS\_segfam.log';       done='=== SEGFAM DONE ===' },
+  @{ task='nds_segfampaths';  log='F:\nds\output\taskS\_segfampaths.log';  done='=== SEGFAM PATHS DONE ===' },
+  @{ task='nds_segfamfull';   log='F:\nds\output\taskS\_segfamfull.log';   done='=== SEGFAM FULL DONE ===' },
+  @{ task='nds_compact_quar'; log='F:\nds\output\taskS\_compact.log';      done='=== COMPACT QUAR DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue
