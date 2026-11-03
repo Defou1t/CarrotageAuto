@@ -76,17 +76,33 @@ def main():
         x0, x1 = int(min(xs_all)) - 4, int(max(xs_all)) + 5
         H, W = rgb.shape[:2]
         y0, x0 = max(0, y0), max(0, x0); y1, x1 = min(H, y1), min(W, x1)
-        S = IS.prob_map(rgb, y0, y1, x0, x1, net)
-        for k, d in enumerate(DD):
+        # ★ 03.11: карта — полосами по сетке плиток prob_map (шаг плитки × 8 строк): плитки независимы, значения бит-в-бит, а
+        #   память ∝ полосе. Целиком карта по семействам [1 + K, h, w] float32 на листе в 100+ тыс. строк — > 22 ГБ (ro0 §6.350).
+        PR = []
+        for d in DD:
             ys = np.array(sorted(d))[::a.step]
             ys = ys[(ys >= y0) & (ys < y1)]
+            PR.append((ys, np.round([d[int(y)] for y in ys]).astype(int) - x0 if len(ys) else np.zeros(0, int)))
+        VAL = [[] for _ in DD]; C = None; band = (1024 - 2 * 64) * 8
+        for s0 in range(y0, y1, band):
+            S = IS.prob_map(rgb, s0, min(y1, s0 + band), x0, x1, net)
+            C = S.shape[0] if a.fam else None
+            for k, (ys, xs) in enumerate(PR):
+                m = (ys >= s0) & (ys < s0 + band)
+                if len(ys) < 10 or not m.any():
+                    continue
+                yy, xx = ys[m] - s0, xs[m]
+                if a.fam:                                 # [1 + K, h, w]: max в ±1 px — по каждому каналу
+                    VAL[k].append(np.max(np.stack([S[:, yy, np.clip(xx + o, 0, S.shape[2] - 1)] for o in (-1, 0, 1)]), 0))
+                else:
+                    VAL[k].append(np.max(np.stack([S[yy, np.clip(xx + o, 0, S.shape[1] - 1)] for o in (-1, 0, 1)]), 0))
+            del S
+        for k, (ys, xs) in enumerate(PR):
             if len(ys) < 10:
-                R[(sh, k)] = np.full(S.shape[0], np.nan, np.float16) if a.fam else (np.nan, np.nan); continue
-            xs = np.round([d[int(y)] for y in ys]).astype(int) - x0
-            if a.fam:                                     # [1 + K, h, w]: среднее по строкам max в ±1 px — по каждому каналу
-                v = np.max(np.stack([S[:, ys - y0, np.clip(xs + o, 0, S.shape[2] - 1)] for o in (-1, 0, 1)]), 0)
+                R[(sh, k)] = np.full(C, np.nan, np.float16) if a.fam else (np.nan, np.nan); continue
+            v = np.concatenate(VAL[k], axis=-1)
+            if a.fam:                                     # среднее по строкам — по каждому каналу
                 R[(sh, k)] = v.mean(1).astype(np.float16); continue
-            v = np.max(np.stack([S[ys - y0, np.clip(xs + o, 0, S.shape[1] - 1)] for o in (-1, 0, 1)]), 0)
             R[(sh, k)] = (float(v.mean()), float((v > 0.5).mean()))
         if n % 50 == 0:
             pickle.dump(R, open(outp, "wb"), protocol=4)
