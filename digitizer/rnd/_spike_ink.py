@@ -81,7 +81,7 @@ def one(args):
 
         def seg(ys, xs, rgb=rgb, net=net):
             y0, y1 = min(ys) - 2, max(ys) + 3; x0, x1 = int(min(xs)) - 4, int(max(xs)) + 5
-            pm = IS.prob_map(rgb, y0, y1, x0, x1, net)
+            pm = IS.prob_map(rgb, y0, y1, x0, x1, net, tile=192)   # плитка 192 = окно ± 64 px контекста (не 1024² на каждый укол)
             yy = np.clip(np.asarray(ys) - max(0, y0), 0, pm.shape[0] - 1); xx = np.round(np.asarray(xs)).astype(int) - max(0, x0)
             return np.max(np.stack([pm[yy, np.clip(xx + o, 0, pm.shape[1] - 1)] for o in (-1, 0, 1)]), 0)
     else:
@@ -145,7 +145,7 @@ def main():
     with Pool(a.workers, initializer=_init, initargs=(a.seg,)) as pool:
         for k, r in enumerate(pool.imap_unordered(one, jobs, chunksize=4), 1):
             res.append(r)
-            if k % 100 == 0:
+            if k % 10 == 0:
                 print(f"  {k}/{len(jobs)} листов, {time.time() - t0:.0f} с")
     (S.TS / f"_spike_ink{'_seg' if a.seg else ''}.json").write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
     R = [x for _, _, rows, _ in res for x in rows]
