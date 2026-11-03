@@ -286,6 +286,18 @@ def l_jump(segs, tr, ch, frac=0.5, R=2):
     return out
 
 
+def c_band(w, ch, m=0.0):
+    """§6.355: строки выдачи вне полосы шкал трека (объединение x всех уровней цепочки ± m px) — долой (цифры глубины, рамка
+    соседнего трека); у эталона такие строки — редкость"""
+    if not ch:
+        return w
+    xl = min(min(s_["x_left"], s_["x_right"]) for s_ in ch) - m; xr = max(max(s_["x_left"], s_["x_right"]) for s_ in ch) + m
+    return {y: x for y, x in w.items() if xl <= x <= xr}
+
+
+CFILTERS = {"band0": lambda w, ch: c_band(w, ch, 0), "band5": lambda w, ch: c_band(w, ch, 5), "band20": lambda w, ch: c_band(w, ch, 20)}
+
+
 LFILTERS = {"lvljump": lambda s, t, c: l_jump(s, t, c), "lvljump4": lambda s, t, c: l_jump(s, t, c, 0.4),
             "lvljump6": lambda s, t, c: l_jump(s, t, c, 0.6),
             "lvlq15": lambda s, t, c: l_quiet(s, t, c, 15), "lvlq40": lambda s, t, c: l_quiet(s, t, c, 40),
@@ -327,7 +339,8 @@ def one(args):
     for g, gt in gts.items():
         if g not in wr:
             continue
-        rec = {"curve": g}
+        rec = {"curve": g, "n_gt": len(gt), "gt_out": len(gt) - len(c_band(gt, CH.get(g, []))), "n_w": len(wr[g]),
+               "w_out": len(wr[g]) - len(c_band(wr[g], CH.get(g, [])))}
         for fn in ["base"] + filt:
             w, lw, lg = WS.get(fn, wr)[g], LW.get(g, {}), LG.get(g, {})
             if not w:
@@ -335,6 +348,8 @@ def one(args):
             for part_ in fn.split("+"):                  # «spike3+lvlq15» — по очереди
                 if part_ in FILTERS:
                     w = FILTERS[part_](w)
+                elif part_ in CFILTERS:
+                    w = CFILTERS[part_](w, CH.get(g, []))
                 elif part_ in LFILTERS:
                     lw = LFILTERS[part_](SW.get(g), w, CH.get(g, []))
             S._TREES.clear()
