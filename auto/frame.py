@@ -389,6 +389,14 @@ def frame_from_nlgx(nlgx_path, meta=None, p=None, rgb=None) -> Frame:
             merged.append([x0, x1])
     if not merged:
         merged = [[int(0.06 * W), int(0.96 * W)]] if W else [[0, 1]]
+    m_ = int(getattr(p, "track_margin", 0) or 0)
+    if m_ > 0 and merged:                                 # §6.353: поле за краями шкалы — до середины зазора с соседом
+        wide = []
+        for i, (a, b) in enumerate(merged):
+            lo = (merged[i - 1][1] + a) // 2 + 1 if i > 0 else 0
+            hi = (b + merged[i + 1][0]) // 2 - 1 if i + 1 < len(merged) else ((W - 1) if W else b + m_)
+            wide.append([max(lo, a - m_), min(hi, b + m_)])
+        merged = wide
     tracks = [Track(a, b, i) for i, (a, b) in enumerate(merged)]
     period, gys = (None, [])
     if rgb is not None and bottom_y > top_y:

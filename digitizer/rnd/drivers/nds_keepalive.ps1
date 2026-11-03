@@ -45,7 +45,8 @@ $jobs = @(
   @{ task='nds_segfampaths';  log='F:\nds\output\taskS\_segfampaths.log';  done='=== SEGFAM PATHS DONE ===' },
   @{ task='nds_segfamfull';   log='F:\nds\output\taskS\_segfamfull.log';   done='=== SEGFAM FULL DONE ===' },
   @{ task='nds_compact_quar'; log='F:\nds\output\taskS\_compact.log';      done='=== COMPACT QUAR DONE ===' },
-  @{ task='nds_segclean';     log='F:\nds\output\taskS\_segclean.log';     done='=== SEGCLEAN DONE ===' }
+  @{ task='nds_segclean';     log='F:\nds\output\taskS\_segclean.log';     done='=== SEGCLEAN DONE ===' },
+  @{ task='nds_tm80';         log='F:\nds\output\taskS\_tm80.log';         done='=== TM80 DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue

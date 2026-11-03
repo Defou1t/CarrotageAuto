@@ -264,7 +264,31 @@ SFILTERS = {"dedupgap": lambda wr: s_dedup(wr, mode="gap"), "dedupint": lambda w
             "xswap": lambda wr: s_cross(wr, 0.5), "xswap33": lambda wr: s_cross(wr, 0.33), "xswap5t1": lambda wr: s_cross(wr, 0.5, min_turn=1.0)}
 
 
-LFILTERS = {"lvlq15": lambda s, t, c: l_quiet(s, t, c, 15), "lvlq40": lambda s, t, c: l_quiet(s, t, c, 40),
+def l_jump(segs, tr, ch, frac=0.5, R=2):
+    """прыжок трассы ≥ frac ширины шкалы (за ≤ R строк) без смены уровня — перевынос, уровень обязан смениться: прыжок влево → +1
+    («большие значения всегда в масштабе, который левее»), вправо → −1; действует до следующей смены уровня выдачи"""
+    lv = {y: int(l) for a, b, l in sorted(segs or []) for y in range(int(a), int(b) + 1)}
+    if len(ch) < 2:
+        return lv
+    xl, xr = sorted((ch[0]["x_left"], ch[0]["x_right"])); W = (xr - xl) or 1
+    ys = sorted(tr); out = dict(lv); shift = 0
+    for i in range(1, len(ys)):
+        y0, y1 = ys[i - 1], ys[i]
+        if lv.get(y1, 0) != lv.get(y0, 0):
+            shift = 0                                    # выдача сама сменила уровень — её решение
+        elif y1 - y0 <= R and abs(tr[y1] - tr[y0]) >= frac * W:
+            if tr[y1] < tr[y0] and tr[y0] >= xr - 0.15 * W:          # перо ушло за правый край → масштаб левее
+                shift += 1
+            elif tr[y1] > tr[y0] and tr[y0] <= xl + 0.25 * W and lv.get(y1, 0) + shift > 0:   # вернулось в свой масштаб
+                shift -= 1
+        if shift:
+            out[y1] = min(len(ch) - 1, max(0, lv.get(y1, 0) + shift))
+    return out
+
+
+LFILTERS = {"lvljump": lambda s, t, c: l_jump(s, t, c), "lvljump4": lambda s, t, c: l_jump(s, t, c, 0.4),
+            "lvljump6": lambda s, t, c: l_jump(s, t, c, 0.6),
+            "lvlq15": lambda s, t, c: l_quiet(s, t, c, 15), "lvlq40": lambda s, t, c: l_quiet(s, t, c, 40),
             "lvlq15f10": lambda s, t, c: l_quiet(s, t, c, 15, 0.10)}
 
 
@@ -329,8 +353,10 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--tag", default="base")
     ap.add_argument("--sheets", default="", help="файл со списком листов (иначе все поле + вне + сорт A)")
+    ap.add_argument("--mode", default="NSE19", help="режим выдачи в taskS/rp_lvl (по умолчанию повтор прода NSE19)")
     a = ap.parse_args()
     import _sample_review as S
+    S.OOF = S.TS / "rp_lvl" / a.mode
     TRACK = S.load_tracks(); SETS = S.eval_sets(); SRC = {q.name: q for q in S.ARCH.glob("*/wlg/*.nlgx")}
     only = set(Path(a.sheets).read_text(encoding="utf-8").split("\n")) if a.sheets else None
     jobs = []
