@@ -17,6 +17,7 @@ import numpy as np
 
 L, D, E = 3, 20.0, 15.0
 SEG = ""
+LMAX, LMIN = 3, 0                                # §6.356: длинные отлёты — `--L 15 --Lmin 3` (только длиннее Lmin)
 
 
 def spikes(tr, L=L, D=D, E=E):
@@ -42,9 +43,11 @@ def spikes(tr, L=L, D=D, E=E):
 def spike_rows(tr, gray, paper):
     """уколы трассы с тушью вдоль прыжков → [(y0, y1, амплитуда, тушь внутрь, тушь наружу, хорда-функция)]"""
     from auto.detour import _ink
-    ys, xs, sp = spikes(tr)
+    ys, xs, sp = spikes(tr, L=LMAX)
     out = []
     for i, j in sp:
+        if j - i + 1 <= LMIN:
+            continue
         a, b = xs[i - 1], xs[j + 1]
         ch = lambda y, a=a, b=b, y0=ys[i - 1], y1=ys[j + 1]: a + (b - a) * (y - y0) / (y1 - y0)
         amp = float(max(abs(xs[k] - ch(ys[k])) for k in range(i, j + 1)))
@@ -53,9 +56,9 @@ def spike_rows(tr, gray, paper):
     return out
 
 
-def _init(seg):
-    global SEG
-    SEG = seg
+def _init(seg, lmax=3, lmin=0):
+    global SEG, LMAX, LMIN
+    SEG, LMAX, LMIN = seg, lmax, lmin
 
 
 def one(args):
@@ -110,11 +113,12 @@ def one(args):
                 dw = [abs(wr[g][y] - gt[y]) for y in yy]; dc = [abs(ch(y) - gt[y]) for y in yy]
                 lab = "настоящий" if np.median(dw) <= 10 else "ложный" if (min(dw) > 15 and max(dc) <= 10) else "неясно"
             xs_ = [wr[g][y] for y in range(y0, y1 + 1)]; xm = xs_[int(np.argmax([abs(x - ch(y)) for y, x in zip(range(y0, y1 + 1), xs_)]))]
-            sp_ = sc_ = np.nan
+            sp_ = sc_ = sm_ = np.nan
             if seg is not None:
                 yr = list(range(y0, y1 + 1))
                 v = seg(yr + yr, list(xs_) + [ch(y) for y in yr]); sp_ = float(np.max(v[:len(yr)])); sc_ = float(np.mean(v[len(yr):]))
-            rows.append((g, y0, y1, amp, ki, ko, lab, near((y0 + y1) / 2), float((xm - xl) / (xr - xl)) if xr > xl else np.nan, sp_, sc_))
+                sm_ = float(np.mean(v[:len(yr)]))
+            rows.append((g, y0, y1, amp, ki, ko, lab, near((y0 + y1) / 2), float((xm - xl) / (xr - xl)) if xr > xl else np.nan, sp_, sc_, sm_))
     return nm, part, rows, ""
 
 
@@ -123,6 +127,8 @@ def main():
     ap.add_argument("--limit", type=int, default=400)
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--mode", default="NSE19")
+    ap.add_argument("--L", type=int, default=3, help="наибольшая длина укола, строк")
+    ap.add_argument("--Lmin", type=int, default=0, help="только уколы длиннее Lmin строк")
     ap.add_argument("--seg", default="", help="каталог сетей туши вне фолда (folds.json, f{k}.pt) — тушь сети у укола и у хорды")
     a = ap.parse_args()
     global SEG
@@ -139,15 +145,15 @@ def main():
     rng = np.random.default_rng(7)
     if a.limit:
         jobs = [jobs[i] for i in sorted(rng.permutation(len(jobs))[:a.limit])]
-    print(f"★ листов {len(jobs)}; укол — ≤ {L} строк дальше {D:.0f} px от хорды соседей (соседи ≤ {E:.0f} px)")
+    print(f"★ листов {len(jobs)}; укол — {a.Lmin + 1}…{a.L} строк дальше {D:.0f} px от хорды соседей (соседи ≤ {E:.0f} px)")
     from multiprocessing import Pool
     res = []; t0 = time.time()
-    with Pool(a.workers, initializer=_init, initargs=(a.seg,)) as pool:
+    with Pool(a.workers, initializer=_init, initargs=(a.seg, a.L, a.Lmin)) as pool:
         for k, r in enumerate(pool.imap_unordered(one, jobs, chunksize=4), 1):
             res.append(r)
             if k % 10 == 0:
                 print(f"  {k}/{len(jobs)} листов, {time.time() - t0:.0f} с")
-    (S.TS / f"_spike_ink{'_seg' if a.seg else ''}.json").write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
+    (S.TS / f"_spike_ink{'_seg' if a.seg else ''}{f'_L{a.L}' if a.L != 3 else ''}.json").write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
     R = [x for _, _, rows, _ in res for x in rows]
     from collections import Counter
     C = Counter(x[6] for x in R)
@@ -171,10 +177,10 @@ def main():
         yv = np.array([x[6] == "ложный" for x in Z]); sp = np.array([x[9] for x in Z]); sc = np.array([x[10] for x in Z])
         print(f"  сеть туши: AUC «ложный» по (хорда − укол) {roc_auc_score(yv, sc - sp):.3f}, по 1 − укол {roc_auc_score(yv, 1 - sp):.3f}; "
               f"укол у настоящих квартили {np.percentile(sp[~yv], [10, 25, 50, 75, 90]).round(2)}, у ложных {np.percentile(sp[yv], [10, 25, 50, 75, 90]).round(2)}")
-        for th in (0.1, 0.2, 0.3):
-            for tc in (0.5, 0.7):
-                m = (sp < th) & (sc > tc)
-                print(f"    укол < {th}, хорда > {tc}: {m.sum()} — ложных {yv[m].mean() if m.sum() else 0:.0%}, поймано ложных {m[yv].mean():.0%}, "
+        sm = np.array([x[11] if len(x) > 11 else x[9] for x in Z])
+        for th, tc, use in [(t1, t2, u) for u in ('max', 'mean') for t1 in (0.1, 0.2, 0.3) for t2 in (0.5, 0.7)]:
+                m = ((sp if use == 'max' else sm) < th) & (sc > tc)
+                print(f"    укол ({use}) < {th}, хорда > {tc}: {m.sum()} — ложных {yv[m].mean() if m.sum() else 0:.0%}, поймано ложных {m[yv].mean():.0%}, "
                       f"задето настоящих {m[~yv].mean():.1%}")
     for tau in (0.1, 0.2, 0.3, 0.5):
         for amin in (20, 40, 80):
