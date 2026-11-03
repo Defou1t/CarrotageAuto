@@ -111,13 +111,13 @@ def stand(a):
         tr = lab & (FD != f) & (FD != -1); te = FD == f
         m = mk(); m.fit(X[tr], Y[tr]); P[te] = m.predict_proba(X[te])[:, 1]
     m = mk(); m.fit(X[lab & (FD != -1)], Y[lab & (FD != -1)]); P[FD == -1] = m.predict_proba(X[FD == -1])[:, 1]
-    od = Path(a.out_dir) / "oof"; od.mkdir(exist_ok=True)
-    pickle.dump(m, open(od / "detour_all.pkl", "wb"))                       # §6.355: сорт A и листы вне фолдов
-    for f in sorted(set(FD) - {-1}):
-        mf = mk(); tr = lab & (FD != f) & (FD != -1); mf.fit(X[tr], Y[tr]); pickle.dump(mf, open(od / f"detour_f{f}.pkl", "wb"))
-    (od / "detour_folds.json").write_text(json.dumps(folds, ensure_ascii=False), encoding="utf-8")
-    mp = mk(); mp.fit(X[lab], Y[lab]); pickle.dump(mp, open(Path(a.out_dir) / "detour_prod.pkl", "wb"))   # все метки, с сортом A
-    if a.fit_only:
+    if a.fit_only:                                      # модели пишутся только так: повтор читает их, стенд их не трогает
+        od = Path(a.out_dir) / "oof"; od.mkdir(exist_ok=True)
+        pickle.dump(m, open(od / "detour_all.pkl", "wb"))                   # §6.355: сорт A и листы вне фолдов
+        for f in sorted(set(FD) - {-1}):
+            mf = mk(); tr = lab & (FD != f) & (FD != -1); mf.fit(X[tr], Y[tr]); pickle.dump(mf, open(od / f"detour_f{f}.pkl", "wb"))
+        (od / "detour_folds.json").write_text(json.dumps(folds, ensure_ascii=False), encoding="utf-8")
+        mp = mk(); mp.fit(X[lab], Y[lab]); pickle.dump(mp, open(Path(a.out_dir) / "detour_prod.pkl", "wb"))   # все метки, с сортом A
         print(f"★ модели: {od} (фолды {sorted(set(FD) - {-1})}), прод {Path(a.out_dir) / 'detour_prod.pkl'}"); return
     for pk, msk in (("поле+вне", FD != -1), ("сорт A", FD == -1)):
         mm = msk & lab
@@ -128,10 +128,11 @@ def stand(a):
     W_ = {}
     for (nm, g, ci, a_, b_, x, y, fd), p in zip(rows, P):
         W_.setdefault(nm, {}).setdefault(g, []).append((float(p), ci, a_, b_))
+    TG = [(t_, g_) if g_ else t_ for t_ in a.tau for g_ in a.guard]
     jobs = [(nm, r["part"], SRC[nm], next(iter(sorted((S.OOF / S.sheet_dir(nm)).glob("*_auto.nlgx"))), None), nm in fld,
-             W_.get(nm, {}), list(a.tau)) for nm, r in D.items()]
+             W_.get(nm, {}), TG) for nm, r in D.items()]
     jobs = [j for j in jobs if j[3] is not None]
-    agg = {(t, pk): np.zeros(8) for t in a.tau for pk in ("поле+вне", "сорт A")}; ps = {k: [] for k in agg}
+    agg = {(t, pk): np.zeros(8) for t in TG for pk in ("поле+вне", "сорт A")}; ps = {k: [] for k in agg}
     from multiprocessing import Pool
     t0 = time.time()
     with Pool(a.workers) as pool:
@@ -141,7 +142,7 @@ def stand(a):
                 agg[(tau, pk)] += v; ps[(tau, pk)].append((dh, dc))
             if k % 100 == 0:
                 print(f"  мера: {k}/{len(jobs)} листов, {time.time() - t0:.0f} с")
-    for tau in a.tau:
+    for tau in TG:
         for pk in ("поле+вне", "сорт A"):
             v = agg[(tau, pk)]; d = np.array(ps[(tau, pk)]) if ps[(tau, pk)] else np.zeros((0, 2))
             sg = lambda col: f"↑{int((d[:, col] > 0).sum())}/↓{int((d[:, col] < 0).sum())}" if len(d) else ""
@@ -170,24 +171,22 @@ def eval_sheet(args):
     LG = {c["name"]: S.lv_rows(c) for c in mt["curves"] if c["name"] in gts}
     CH = {c["name"]: DL.build_family(mt, c) for c in mt["curves"] if c["name"] in gts}
     LW = {c["name"]: S.lv_rows(c) for c in mw["curves"] if c["name"] in wr}
+    from auto.detour import take, jump_ok
     out = {tau: [np.zeros(8), 0, 0] for tau in taus}
     for g, gt in gts.items():
         if g not in wr:
             continue
         w = wr[g]; lw, lg, ch = LW.get(g, {}), LG.get(g, {}), CH.get(g, [])
         r0 = _measure(S, T, w, gt, lw, lg, ch)
-        for tau in taus:
-            w2 = dict(w); taken = []
-            for p, ci, a_, b_ in sorted(Wn.get(g, []), key=lambda z: -z[0]):
-                if p <= tau:
-                    break
-                if any(not (b_ < x0 or a_ > x1) for x0, x1 in taken):
-                    continue
+        for tau in taus:                                  # τ или (τ, G) — G: запрет прыжка, `auto.detour.jump_ok`
+            t_, G = tau if isinstance(tau, tuple) else (tau, 0)
+            w2 = dict(w)
+            taken = take(Wn.get(g, []), t_, ok=lambda ci, a_, b_: jump_ok(w, C[ci], a_, b_, G))
+            for ci, a_, b_ in taken:
                 t = C[ci]
                 for yy in range(a_, b_ + 1):
                     if yy in t:
                         w2[yy] = t[yy]
-                taken.append((a_, b_))
             r1 = _measure(S, T, w2, gt, lw, lg, ch) if taken else r0
             out[tau][0] += [r0[0], r1[0], r0[1], r1[1], r0[2], r1[2], r0[3], r1[3]]
             out[tau][1] += r1[0] - r0[0]; out[tau][2] += r1[2] - r0[2]
@@ -203,5 +202,6 @@ if __name__ == "__main__":
     ap.add_argument("--seg", default="", help="каталог сетей туши вне фолда (folds.json, f{k}.pt) — признак сети по куску")
     ap.add_argument("--out-dir", default=str(OUT))
     ap.add_argument("--fit-only", action="store_true", help="только модели (фолды, все, прод) — без меры")
+    ap.add_argument("--guard", type=float, nargs="+", default=[0], help="запрет прыжка куска кандидата > G px (0 — без)")
     a = ap.parse_args()
     extract(a) if a.cmd == "extract" else stand(a)

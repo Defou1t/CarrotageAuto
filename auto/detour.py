@@ -155,16 +155,40 @@ def curve_windows(g, w, wr, C, lk, axis, seg):
     return out
 
 
-def take(scored, tau):
-    """[(p, ci, a, b)] → окна к замене: P > τ, без перекрытий, по убыванию P"""
+def take(scored, tau, ok=None):
+    """[(p, ci, a, b)] → окна к замене: P > τ, ok(ci, a, b) (если задан), без перекрытий, по убыванию P"""
     taken = []
     for p, ci, a, b in sorted(scored, key=lambda z: -z[0]):
         if p <= tau:
             break
         if any(not (b < x0 or a > x1) for _, x0, x1 in taken):
             continue
+        if ok is not None and not ok(ci, a, b):
+            continue
         taken.append((ci, a, b))
     return taken
+
+
+def max_jump(w, t, a, b):
+    """наибольший |Δx| соседних строк (разрыв ≤ 2) на [a − 1, b + 1] у w и у w с куском t на [a, b] → (до, после)"""
+    ys = [y for y in range(a - 1, b + 2) if y in w or (a <= y <= b and y in t)]
+    x0 = [w.get(y, t.get(y)) for y in ys]
+    x1 = [t[y] if (a <= y <= b and y in t) else w.get(y, t.get(y)) for y in ys]
+    m0 = m1 = 0.0
+    for i in range(1, len(ys)):
+        if ys[i] - ys[i - 1] <= 2:
+            if x0[i] is not None and x0[i - 1] is not None:
+                m0 = max(m0, abs(x0[i] - x0[i - 1]))
+            m1 = max(m1, abs(x1[i] - x1[i - 1]))
+    return m0, m1
+
+
+def jump_ok(w, t, a, b, G):
+    """§6.355 (разбор глазами D19): кусок кандидата не вносит прыжка больше G px, которого у выдачи там не было; G ≤ 0 — без запрета"""
+    if G <= 0:
+        return True
+    m0, m1 = max_jump(w, t, a, b)
+    return m1 <= max(G, m0)
 
 
 def resolve(spec, sheet=None):
