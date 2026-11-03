@@ -259,6 +259,20 @@ INKFILTERS = {"inkx": lambda wr, LW, gr, pa: s_inkx(wr, LW, gr, pa), "inkx3": la
               "inkx5L": lambda wr, LW, gr, pa: s_inkx(wr, LW, gr, pa, Lmax=2000), "inkx5d": lambda wr, LW, gr, pa: s_inkx(wr, LW, gr, pa, drift=1.0)}
 
 
+def s_spikeseg(wr, rgb, net, NF, ts=0.1, tc=0.5):
+    """§6.356: уколы без туши сети под собой при туши на хорде → хорда (`auto.spike.fix`); NF[кривая] += замен"""
+    from auto import spike as SP
+    out = {}
+    for g, w in wr.items():
+        out[g], log = SP.fix(w, rgb, net, ts, tc)
+        NF[g] += len(log)
+    return out
+
+
+SEGFILTERS = {"spikeseg": lambda wr, rgb, net, NF: s_spikeseg(wr, rgb, net, NF),
+              "spikeseg2": lambda wr, rgb, net, NF: s_spikeseg(wr, rgb, net, NF, ts=0.2, tc=0.5)}
+
+
 SFILTERS = {"dedupgap": lambda wr: s_dedup(wr, mode="gap"), "dedupint": lambda wr: s_dedup(wr, mode="int"),
             "dedupgap50": lambda wr: s_dedup(wr, Lmin=50, mode="gap"),
             "xswap": lambda wr: s_cross(wr, 0.5), "xswap33": lambda wr: s_cross(wr, 0.33), "xswap5t1": lambda wr: s_cross(wr, 0.5, min_turn=1.0)}
@@ -305,7 +319,8 @@ LFILTERS = {"lvljump": lambda s, t, c: l_jump(s, t, c), "lvljump4": lambda s, t,
 
 
 def one(args):
-    nm, part, src, got, tr_map, filt = args
+    nm, part, src, got, tr_map, filt = args[:6]
+    segdir = args[6] if len(args) > 6 else ""
     import _sample_review as S
     try:
         mt, mw, gts, wr = S.curves(src, got)
@@ -328,13 +343,27 @@ def one(args):
         gray = rgb.min(axis=2) if rgb.ndim == 3 else rgb
         del rgb
         paper = float(np.percentile(gray[::7, ::7], 80))
+    rgb = net = None; NF = {fn: defaultdict(int) for fn in filt}
+    if segdir and any(p_ in SEGFILTERS for fn in filt for p_ in fn.split("+")):
+        import _final_exif
+        from dataset_build import find_image
+        img = find_image(Path(src))
+        if img is None:
+            return nm, part, [], "нет скана"
+        rgb = _final_exif.load_rgb(str(img))
+        import torch
+        torch.set_num_threads(4)                         # сеть туши на ЦП окошками: 4 потока на процесс, не все ядра
+        FO = json.loads((Path(segdir) / "folds.json").read_text(encoding="utf-8")); k_ = FO.get(Path(src).parent.parent.name)
+        net = str(Path(segdir) / (f"f{k_}.pt" if k_ is not None else "all.pt"))   # сеть туши вне фолда скважины листа
     for fn in filt:
-        sp = [p_ for p_ in fn.split("+") if p_ in SFILTERS or p_ in INKFILTERS]
+        sp = [p_ for p_ in fn.split("+") if p_ in SFILTERS or p_ in INKFILTERS or p_ in SEGFILTERS]
         if sp:
             ww = wr
             for p_ in sp:
-                ww = SFILTERS[p_](ww) if p_ in SFILTERS else INKFILTERS[p_](ww, LW, gray, paper)
+                ww = SFILTERS[p_](ww) if p_ in SFILTERS else INKFILTERS[p_](ww, LW, gray, paper) if p_ in INKFILTERS \
+                    else SEGFILTERS[p_](ww, rgb, net, NF[fn])
             WS[fn] = ww
+    del rgb
     rows = []
     for g, gt in gts.items():
         if g not in wr:
@@ -357,6 +386,8 @@ def one(args):
             hon = S.HON(*S.err(wl, gt))
             st = strict(S, wl, gt, frozenset(y for y in w if lw.get(y, 0) != lg.get(y, 0)))
             rec[fn] = {"hon": bool(hon), **(st or {})}
+            if fn != "base" and NF.get(fn):
+                rec[fn]["n_fix"] = NF[fn][g]
         rows.append(rec)
     return nm, part, rows, ""
 
@@ -369,6 +400,7 @@ def main():
     ap.add_argument("--tag", default="base")
     ap.add_argument("--sheets", default="", help="файл со списком листов (иначе все поле + вне + сорт A)")
     ap.add_argument("--mode", default="NSE19", help="режим выдачи в taskS/rp_lvl (по умолчанию повтор прода NSE19)")
+    ap.add_argument("--seg", default=r"F:/nds/output/taskS/ink_seg_f", help="сети туши вне фолда (folds.json, f{k}.pt) — для spikeseg")
     a = ap.parse_args()
     import _sample_review as S
     S.OOF = S.TS / "rp_lvl" / a.mode
@@ -381,7 +413,7 @@ def main():
                 continue
             got = next(iter(sorted((S.OOF / S.sheet_dir(nm)).glob("*_auto.nlgx"))), None)
             if got is not None and nm in SRC:
-                jobs.append((nm, part, SRC[nm], got, TRACK.get(nm, {}), a.filters))
+                jobs.append((nm, part, SRC[nm], got, TRACK.get(nm, {}), a.filters, a.seg))
     if a.limit:
         jobs = jobs[::max(1, len(jobs) // a.limit)][:a.limit]
     print(f"★ листов {len(jobs)}, вычистка {a.filters or '—'}, процессов {a.workers}")

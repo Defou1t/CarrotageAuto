@@ -3,7 +3,7 @@ r"""_strict_ab.py — A/B СТРОГОЙ МЕРЫ ДВУХ ПОВТОРОВ (03.
 Берёт два итога `_strict_stand.py --mode <режим> --tag <тег>` (`taskS/_strict_<тег>.json`) и по общим листам считает чистых (верна
 приёмкой И лишнее ≤ 1% / ≤ 5% строк выдачи И пропуск ≤ того же), лишние строки и пропуски; знаковый тест по листам (Δ чистых листа).
 
-  _strict_ab.py <тег A> <тег B>
+  _strict_ab.py <тег A>[:вычистка] <тег B>[:вычистка]   (вычистка — столбец итога, по умолчанию base: «spikeseg:base spikeseg:spikeseg»)
 """
 import sys, json
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -21,12 +21,12 @@ def sign_p(up, dn):
     return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n)
 
 
-def per_sheet(path):
+def per_sheet(path, fn="base"):
     out = {}
     for nm, part, rows, _ in json.loads(Path(path).read_text(encoding="utf-8")):
         v = [0, 0, 0, 0, 0, 0]                          # честных, чистых 1%, чистых 5%, лишних, строк выдачи, пропусков
         for rec in rows:
-            s = rec["base"]
+            s = rec[fn]
             if not s.get("n_o"):
                 continue
             v[3] += s["off_o"]; v[4] += s["n_o"]; v[5] += s["off_t"]
@@ -40,7 +40,8 @@ def per_sheet(path):
 
 def main():
     ta, tb = sys.argv[1], sys.argv[2]
-    A, B = per_sheet(TS / f"_strict_{ta}.json"), per_sheet(TS / f"_strict_{tb}.json")
+    sp = lambda t: (t.split(":") + ["base"])[:2]
+    A, B = per_sheet(TS / f"_strict_{sp(ta)[0]}.json", sp(ta)[1]), per_sheet(TS / f"_strict_{sp(tb)[0]}.json", sp(tb)[1])
     com = sorted(set(A) & set(B))
     print(f"★ строгая мера {ta} → {tb}: общих листов {len(com)} (только в {ta} {len(set(A) - set(B))}, только в {tb} {len(set(B) - set(A))})")
     for pk in ("поле+вне", "сорт A"):

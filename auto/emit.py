@@ -528,6 +528,45 @@ def _detour_pass(spec, seg_spec, tau, model, mapping, traces, get_rgb, sheet_nam
             pass
 
 
+def _spike_pass(seg_spec, model, mapping, get_rgb, out, stem, frame_nlgx=None, ts=0.1, tc=0.5):
+    """§6.356: уколы трассы (≤ 3 строк дальше 20 px от хорды соседей, соседи ≤ 15 px) без туши сети под собой (< ts) при туши на
+    хорде (> tc) → хорда (`auto/spike.py`, меняется `mapping` на месте). Трасса — как её читает стенд (записанные строки, разрывы
+    ≤ 200 — по хорде). Замены — в `<stem>_spike.json`."""
+    from . import spike as SP, line_choice as LC
+    net = LC.seg_resolve(seg_spec, frame_nlgx)
+    if net is None:
+        LC._announce(f"⚠ уколы ({seg_spec}) НЕ вычищены: нет сети туши")
+        return
+    rgb = get_rgb()
+    if rgb is None:
+        return
+    curves = {c["name"]: c for c in model.get("curves", [])}
+    log = []
+    for name, (L, tr) in list(mapping.items()):
+        c = curves.get(name)
+        if c is None or meta_mod.mnem_root(name) == "DA":
+            continue
+        top_y = c["top_y"]
+        w = LC.dense_tr({top_y + i: int(round(tr[top_y + i])) for i in range(c["n_rows"]) if (top_y + i) in tr})
+        if len(w) < 3:
+            continue
+        w2, lg = SP.fix(w, rgb, net, ts, tc)
+        if not lg:
+            continue
+        tr2 = dict(tr)
+        for y0, y1, _, _ in lg:
+            for y in range(y0, y1 + 1):
+                if y in tr2:
+                    tr2[y] = w2[y]
+        mapping[name] = (L, tr2)
+        log += [{"curve": name, "y0": y0, "y1": y1, "seg": s, "chord": cc} for y0, y1, s, cc in lg]
+    if log:
+        try:
+            (Path(out) / f"{stem}_spike.json").write_text(json.dumps(log, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+
 def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False, cut_spec=""):
     """§6.266: переразложить уровни масштаба кривых с цепочкой моделью по скану (auto/level_ink.py). Чужие трассы — как в
     готовом файле: записанные нами + DA (прочие слоты рамки вычищены).
@@ -911,6 +950,11 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         _detour_pass(_dtp, getattr(_cvp0, "detour_seg", "") or "", float(getattr(_cvp0, "detour_tau", 0.75)), model, mapping,
                      traces, _get_rgb, Path(frame_nlgx).name, out, stem, frame_nlgx=frame_nlgx,
                      jump=float(getattr(_cvp0, "detour_jump", 0.0) or 0.0))
+    # §6.356: УКОЛЫ на цифры глубины / сетку — хорда, если под уколом нет туши сети, а на хорде есть (после объездов, до записи)
+    _spp = getattr(_cvp0, "spike_seg", "") or ""
+    if _spp:
+        _spike_pass(_spp, model, mapping, _get_rgb, out, stem, frame_nlgx=frame_nlgx,
+                    ts=float(getattr(_cvp0, "spike_ts", 0.1)), tc=float(getattr(_cvp0, "spike_tc", 0.5)))
     written, wrote_ifd = [], set()
     ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):
