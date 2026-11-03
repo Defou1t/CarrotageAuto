@@ -40,8 +40,26 @@ def _slope(tr, ys):
     return float(np.polyfit(ys, [tr[y] for y in ys], 1)[0])
 
 
-def piece_feats(tr, a, b, ctx, others, axis):
-    """признаки куска tr на строках [a, b]; ctx — (gray, paper, rgb_s, ref_color, H, W)"""
+def seg_map(rgb, ys_xs, net, pad=6):
+    """карта сети туши (`auto.ink_seg`) по рамке всех трасс — полосами по сетке плиток (как `_seg_feat.py`), float16 →
+    функция (ys, xs) → значения max в ±1 px"""
+    from auto import ink_seg as IS
+    H, W = rgb.shape[:2]
+    y0 = max(0, min(y for y, _ in ys_xs)); y1 = min(H, max(y for y, _ in ys_xs) + 1)
+    x0 = max(0, int(min(x for _, x in ys_xs)) - pad); x1 = min(W, int(max(x for _, x in ys_xs)) + pad + 1)
+    M = np.zeros((y1 - y0, x1 - x0), np.float16); band = (1024 - 2 * 64) * 8
+    for s0 in range(y0, y1, band):
+        s1 = min(y1, s0 + band)
+        M[s0 - y0:s1 - y0] = IS.prob_map(rgb, s0, s1, x0, x1, net).astype(np.float16)
+
+    def at(ys, xs):
+        yy = np.clip(np.asarray(ys) - y0, 0, M.shape[0] - 1); xx = np.round(np.asarray(xs)).astype(int) - x0
+        return np.max(np.stack([M[yy, np.clip(xx + o, 0, M.shape[1] - 1)] for o in (-1, 0, 1)]), 0).astype(np.float32)
+    return at
+
+
+def piece_feats(tr, a, b, ctx, others, axis, seg=None):
+    """признаки куска tr на строках [a, b]; ctx — (gray, paper, rgb_s, ref_color, H, W); seg — карта сети туши (или None)"""
     gray, paper, rgb_s, ref, H, W = ctx
     rr = [y for y in range(a, b + 1) if y in tr]
     if len(rr) < 3:
@@ -66,8 +84,12 @@ def piece_feats(tr, a, b, ctx, others, axis):
     edge = min(abs(xm - axis["x_left"]), abs(xm - axis["x_right"])) if axis else np.nan
     s_in = abs(_slope(tr, range(a, a + K)) - _slope(tr, range(a - K, a)))
     s_out = abs(_slope(tr, range(b - K + 1, b + 1)) - _slope(tr, range(b + 1, b + 1 + K)))
-    return [len(rr), float(np.mean(dk)), float(np.mean(dk > DARK)), colr, float(np.mean(dx)), float(dx.max()), dry, dup, vcol, edge,
-            s_in, s_out]
+    f = [len(rr), float(np.mean(dk)), float(np.mean(dk > DARK)), colr, float(np.mean(dx)), float(dx.max()), dry, dup, vcol, edge,
+         s_in, s_out]
+    if seg is not None:
+        sv = seg(rr[::2], xs[::2])
+        f += [float(np.mean(sv)), float(np.mean(sv > 0.5)), float(np.min(np.convolve(sv, np.ones(5) / 5, "valid"))) if len(sv) >= 5 else float(np.min(sv))]
+    return f
 
 
 def windows(w, t, k=K, minlen=5, maxlen=3000):
@@ -93,8 +115,8 @@ def windows(w, t, k=K, minlen=5, maxlen=3000):
 
 
 def one_extract(args):
-    nm, part, src, got, field = args
-    out = OUT / (sdir(nm) + ".pkl")
+    nm, part, src, got, field, segdir, outdir = args
+    out = Path(outdir) / (sdir(nm) + ".pkl")
     if out.exists():
         return nm, "есть"
     import _sample_review as S, decode_levels as DL, _final_exif
@@ -113,7 +135,16 @@ def one_extract(args):
     rgb_s = (lambda yy, xx: rgb[yy, xx].astype(np.float32)) if rgb.ndim == 3 else (lambda yy, xx: np.repeat(gray[yy, xx][:, None], 3, 1).astype(np.float32))
     paper = float(np.percentile(gray[::7, ::7], 80)); H, W = gray.shape
     CH = {c["name"]: DL.build_family(mt, c) for c in mt["curves"] if c["name"] in gts}
-    rec = {"sheet": nm, "part": part, "rows": []}
+    seg = None
+    if segdir:                                              # §: сеть туши вне фолда (скважина листа не в обучении)
+        FO = json.loads((Path(segdir) / "folds.json").read_text(encoding="utf-8"))
+        k_ = FO.get(Path(src).parent.parent.name)
+        net = str(Path(segdir) / (f"f{k_}.pt" if k_ is not None else "all.pt"))
+        pts = [(y, x) for w in wr.values() for y, x in list(w.items())[::50]]
+        if pts:
+            seg = seg_map(rgb, pts + [(min(y for y, _ in pts), max(0, min(x for _, x in pts) - 60)),
+                                      (max(y for y, _ in pts), min(W - 1, max(x for _, x in pts) + 60))], net)
+    rec = {"sheet": nm, "part": part, "rows": [], "seg": bool(seg)}
     for g, w in wr.items():
         if len(w) < 50:
             continue
@@ -132,7 +163,7 @@ def one_extract(args):
                 if (a, b, round(t.get(a, 0))) in seen:
                     continue
                 seen.add((a, b, round(t.get(a, 0))))
-                fw = piece_feats(w, a, b, ctx, others, axis); ft = piece_feats(t, a, b, ctx, others, axis)
+                fw = piece_feats(w, a, b, ctx, others, axis, seg); ft = piece_feats(t, a, b, ctx, others, axis, seg)
                 if fw is None or ft is None:
                     continue
                 sep = float(np.median([abs(w[y] - t[y]) for y in range(a, b + 1) if y in w and y in t]))
@@ -158,7 +189,7 @@ def sdir(nm):
 
 def extract(a):
     import _sample_review as S
-    OUT.mkdir(parents=True, exist_ok=True)
+    Path(a.out_dir).mkdir(parents=True, exist_ok=True)
     SETS = S.eval_sets(); SRC = {q.name: q for q in S.ARCH.glob("*/wlg/*.nlgx")}
     part = {nm: p for p, SS in SETS.items() for nm in SS}
     fld = set(l.strip() for l in (TS / "tcache_sheets.txt").read_text(encoding="utf-8").splitlines())
@@ -167,8 +198,8 @@ def extract(a):
     for nm in names:
         got = next(iter(sorted((S.OOF / S.sheet_dir(nm)).glob("*_auto.nlgx"))), None)
         if got is not None and nm in SRC and nm in part:
-            jobs.append((nm, part[nm], SRC[nm], got, nm in fld))
-    print(f"★ листов {len(jobs)}, процессов {a.workers}")
+            jobs.append((nm, part[nm], SRC[nm], got, nm in fld, a.seg, a.out_dir))
+    print(f"★ листов {len(jobs)}, процессов {a.workers}, сеть туши {a.seg or '—'} → {a.out_dir}")
     from multiprocessing import Pool
     t0 = time.time()
     with Pool(a.workers) as pool:
@@ -184,7 +215,7 @@ def stand(a):
     import _sample_review as S, _strict_stand as T, decode_levels as DL
     from _repair_ceiling import cands
     D = {}
-    for f in sorted(OUT.glob("*.pkl")):
+    for f in sorted(Path(a.out_dir).glob("*.pkl")):
         r = pickle.load(open(f, "rb")); D[r["sheet"]] = r
     folds = json.loads((TS / "line_choice_v6e" / "line_choice_folds.json").read_text(encoding="utf-8"))
     rows = [(nm, *x, -1 if r["part"] == "сорт A" else folds.get(nm, hash(nm) % 5)) for nm, r in D.items() for x in r["rows"]]
@@ -257,5 +288,7 @@ if __name__ == "__main__":
     ap.add_argument("--sheets", default=str(TS / "segclean_sheets.txt"))
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--tau", type=float, nargs="+", default=[0.6, 0.75, 0.9])
+    ap.add_argument("--seg", default="", help="каталог сетей туши вне фолда (folds.json, f{k}.pt) — признак сети по куску")
+    ap.add_argument("--out-dir", default=str(OUT))
     a = ap.parse_args()
     extract(a) if a.cmd == "extract" else stand(a)
