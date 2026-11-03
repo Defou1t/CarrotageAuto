@@ -206,7 +206,8 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "nsafter": ("name_style_after", lambda v: bool(int(v))),   # ★ 04.10 (§6.286): имена по стилю ещё раз после выбора
                "detour": ("detour", str),               # §6.355: объезды; "oof:<каталог>" — модель фолда листа
                "detourseg": ("detour_seg", str),        # §6.355: сеть туши признаков объездов; "oof:<каталог>"
-               "detourtau": ("detour_tau", float)}
+               "detourtau": ("detour_tau", float),
+               "detourjump": ("detour_jump", float)}    # §6.355: запрет прыжка куска кандидата > G px
 
 
 def cmd_replay():

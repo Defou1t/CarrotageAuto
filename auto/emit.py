@@ -459,7 +459,7 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
             pass
 
 
-def _detour_pass(spec, seg_spec, tau, model, mapping, traces, get_rgb, sheet_name, out, stem, frame_nlgx=None):
+def _detour_pass(spec, seg_spec, tau, model, mapping, traces, get_rgb, sheet_name, out, stem, frame_nlgx=None, jump=0.0):
     """§6.355: объезды (auto/detour.py) — окно кривой выдачи, где она расходится с кандидатом ведения и сходится до и после,
     заменяется куском кандидата при P(кандидат верен) > τ (меняется `mapping` на месте). Замены — в `<stem>_detour.json`."""
     from . import detour as DT, line_choice as LC
@@ -508,7 +508,8 @@ def _detour_pass(spec, seg_spec, tau, model, mapping, traces, get_rgb, sheet_nam
             LC._announce(f"⚠ объезды: признаков {X.shape[1]}, модель ждёт {clf.n_features_in_} (сеть туши?) — выключены")
             return
         P = clf.predict_proba(X)[:, 1]
-        taken = DT.take([(float(p), ci, a, b) for p, (ci, a, b, _) in zip(P, rows)], tau)
+        taken = DT.take([(float(p), ci, a, b) for p, (ci, a, b, _) in zip(P, rows)], tau,
+                        ok=lambda ci, a, b: DT.jump_ok(w, C[ci], a, b, jump))      # кусок без нового прыжка > jump px
         if not taken:
             continue
         L, tr = mapping[name]; tr2 = dict(tr)
@@ -908,7 +909,8 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     _dtp = getattr(_cvp0, "detour", "") or ""
     if _dtp:
         _detour_pass(_dtp, getattr(_cvp0, "detour_seg", "") or "", float(getattr(_cvp0, "detour_tau", 0.75)), model, mapping,
-                     traces, _get_rgb, Path(frame_nlgx).name, out, stem, frame_nlgx=frame_nlgx)
+                     traces, _get_rgb, Path(frame_nlgx).name, out, stem, frame_nlgx=frame_nlgx,
+                     jump=float(getattr(_cvp0, "detour_jump", 0.0) or 0.0))
     written, wrote_ifd = [], set()
     ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):

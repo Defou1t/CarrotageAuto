@@ -1,4 +1,4 @@
-﻿# _detour_ab_run.ps1 — §6.355: повтор NSE22 = NSE19 + объезды вне фолда (`detour=oof:detour_seg/oof`, сеть туши фолда скважины, τ 0.75)
+﻿# _detour_ab_run.ps1 — §6.355: повтор NSE22 = NSE19 + объезды вне фолда (`detour=oof:detour_seg/oof`, сеть туши фолда скважины, τ 0.75, запрет прыжка 150 px)
 # кусками по 100 листов: своих процессов ≤ 2 и тяжёлых на видеокарте всего ≤ 4 (идёт §6.351); счёт `_name_cost_prod`, `merge_ab3`
 # NSE19 → NSE22, строгая мера NSE22 и её A/B против `_strict_pop` (NSE19). Идемпотентен (метки кусков в detour_ab/). ⚠ UTF-8 С BOM.
 $py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
@@ -16,7 +16,7 @@ function Heavy {
 }
 New-Item -ItemType Directory -Force $dir | Out-Null
 $common="rdpick=3,slotlen=0.18,slotall=1,slotgeom=1,slotfill=1,confveto=0.8,levelink=oof:$ts/level_ink_v7e,levelcut=oof:$ts/cut_cnn_w2,levelshift=1,namestyle=oof:$ts/name_style_v1,linechoice=oof:$ts/line_choice_v19e,lcseg=oof:$ts/ink_seg_f"
-$mode="NSE22:$common,detour=oof:$ts/detour_seg/oof,detourseg=oof:$ts/ink_seg_f,detourtau=0.75"
+$mode="NSE22:$common,detour=oof:$ts/detour_seg/oof,detourseg=oof:$ts/ink_seg_f,detourtau=0.75,detourjump=150"
 $xf=@("$ts/tcache_pk3","$ts/tcache_inert|extra","$ts/tcache_seg|alt","$ts/tcache_seg|extra","$ts/tcache_segraw_f|alt","$ts/tcache_segraw_f|extra")
 $xo=@("$ts/tcache_out|extra","$ts/tcache_out_inert|extra","$ts/tcache_out_seg|alt","$ts/tcache_out_seg|extra","$ts/tcache_out_segraw|alt","$ts/tcache_out_segraw|extra")
 $enc = New-Object System.Text.UTF8Encoding($false)
