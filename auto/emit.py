@@ -459,6 +459,74 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
             pass
 
 
+def _detour_pass(spec, seg_spec, tau, model, mapping, traces, get_rgb, sheet_name, out, stem, frame_nlgx=None):
+    """§6.355: объезды (auto/detour.py) — окно кривой выдачи, где она расходится с кандидатом ведения и сходится до и после,
+    заменяется куском кандидата при P(кандидат верен) > τ (меняется `mapping` на месте). Замены — в `<stem>_detour.json`."""
+    from . import detour as DT, line_choice as LC
+    path = DT.resolve(spec, sheet=sheet_name)
+    if path is None:
+        LC._announce(f"⚠ объезды ({spec}) НЕ включены: нет модели — трассы как есть")
+        return
+    try:
+        import decode_levels as DL
+        clf = DT.load(path)
+    except Exception as e:
+        LC._announce(f"⚠ объезды ({spec}) НЕ включены: {type(e).__name__}: {e}")
+        return
+    rgb = get_rgb()
+    if rgb is None:
+        return
+    # кандидаты — как у стенда (`_repair_ceiling.cands`): прод-трассы, декодер, доп. пути, без отбора дублей
+    C = [tr for _, tr in list(traces or [])] + [tr for _, tr in list(getattr(traces, "alt", None) or [])] + \
+        [tr for _, tr in list(getattr(traces, "extra", None) or [])]
+    curves = {c["name"]: c for c in model.get("curves", [])}
+    wr = {}
+    for name, (L, tr) in mapping.items():
+        c = curves.get(name)
+        if c is None or meta_mod.mnem_root(name) == "DA":
+            continue
+        top_y = c["top_y"]                              # как стенд читает выдачу: записанные строки, разрывы ≤ 200 — по хорде
+        wr[name] = LC.dense_tr({top_y + i: int(round(tr[top_y + i])) for i in range(c["n_rows"]) if (top_y + i) in tr})
+    if not C or not wr:
+        return
+    lk = DT.look(rgb)
+    seg = None
+    if seg_spec:
+        _sp = LC.seg_resolve(seg_spec, frame_nlgx)
+        if _sp is None:
+            LC._announce(f"⚠ объезды: сети туши ({seg_spec}) нет — объезды выключены")
+            return
+        seg = DT.sheet_seg(rgb, wr, _sp)
+    log = []
+    for name, w in wr.items():
+        fam = DL.build_family(model, curves[name])
+        rows = DT.curve_windows(name, w, wr, C, lk, fam[0] if fam else None, seg)
+        if not rows:
+            continue
+        X = np.stack([r[3] for r in rows])
+        if X.shape[1] != getattr(clf, "n_features_in_", X.shape[1]):
+            LC._announce(f"⚠ объезды: признаков {X.shape[1]}, модель ждёт {clf.n_features_in_} (сеть туши?) — выключены")
+            return
+        P = clf.predict_proba(X)[:, 1]
+        taken = DT.take([(float(p), ci, a, b) for p, (ci, a, b, _) in zip(P, rows)], tau)
+        if not taken:
+            continue
+        L, tr = mapping[name]; tr2 = dict(tr)
+        for ci, a, b in taken:
+            t = C[ci]
+            for y in range(a, b + 1):
+                if y in t:
+                    tr2[y] = t[y]
+        mapping[name] = (L, tr2)
+        pk = {(ci, a, b): float(p) for p, (ci, a, b, _) in zip(P, rows)}
+        log += [{"curve": name, "k": ci, "a": a, "b": b, "p": round(pk[(ci, a, b)], 4)} for ci, a, b in taken]
+    if log:
+        try:
+            (Path(out) / f"{stem}_detour.json").write_text(json.dumps(log, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+
 def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False, cut_spec=""):
     """§6.266: переразложить уровни масштаба кривых с цепочкой моделью по скану (auto/level_ink.py). Чужие трассы — как в
     готовом файле: записанные нами + DA (прочие слоты рамки вычищены).
@@ -836,6 +904,11 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     # ★ 04.10 (§6.286): имена по стилю ЕЩЁ РАЗ, уже по трассам после выбора (перестановки — в `<лист>_namestyle2.json`)
     if _nsp and _lcp and getattr(_cvp0, "name_style_after", False):
         _name_style_pass(_nsp, model, frame, mapping, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem, tag="namestyle2")
+    # §6.355: ОБЪЕЗДЫ — уход трассы на чужую линию заменяется куском кандидата ведения (после выбора и имён, до записи и уровней)
+    _dtp = getattr(_cvp0, "detour", "") or ""
+    if _dtp:
+        _detour_pass(_dtp, getattr(_cvp0, "detour_seg", "") or "", float(getattr(_cvp0, "detour_tau", 0.75)), model, mapping,
+                     traces, _get_rgb, Path(frame_nlgx).name, out, stem, frame_nlgx=frame_nlgx)
     written, wrote_ifd = [], set()
     ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):

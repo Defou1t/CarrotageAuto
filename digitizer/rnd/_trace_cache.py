@@ -203,7 +203,10 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "lcsegfam": ("line_choice_segfam", str),   # §6.350: сеть туши по семействам; "oof:<каталог>"
                "lcseg": ("line_choice_seg", str),        # ★ 29.10 (§6.348): сеть туши для признака выбора трассы; "oof:<каталог>"
                "linechoice": ("line_choice", str),      # ★ 04.10 (§6.280): выбор трассы для слота; "oof:<каталог>" — замер
-               "nsafter": ("name_style_after", lambda v: bool(int(v)))}   # ★ 04.10 (§6.286): имена по стилю ещё раз после выбора
+               "nsafter": ("name_style_after", lambda v: bool(int(v))),   # ★ 04.10 (§6.286): имена по стилю ещё раз после выбора
+               "detour": ("detour", str),               # §6.355: объезды; "oof:<каталог>" — модель фолда листа
+               "detourseg": ("detour_seg", str),        # §6.355: сеть туши признаков объездов; "oof:<каталог>"
+               "detourtau": ("detour_tau", float)}
 
 
 def cmd_replay():
@@ -271,6 +274,7 @@ def cmd_replay():
             cfg.cv.line_choice_seg = ""           # ★ 29.10: §6.348 — только явно `lcseg=`
             cfg.cv.line_choice_segfam = ""        # §6.350 — только явно `lcsegfam=`
             cfg.cv.name_style_after = False       # ★ 04.10: §6.286 — только явно `nsafter=1`
+            cfg.cv.detour = ""                    # §6.355 — только явно `detour=` (и `detourseg=`, `detourtau=`)
             for k, v in kw.items():
                 attr, conv = REPLAY_KEYS[k]
                 setattr(cfg.cv, attr, conv(v))

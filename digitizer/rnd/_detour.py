@@ -17,101 +17,10 @@ for _p in (r"F:\nds\Auto", r"F:\nds\Auto\digitizer", r"F:\nds\Auto\digitizer\rnd
 from pathlib import Path
 import numpy as np
 
+from auto.detour import J, DARK, K, NEAR, PF, FEATS, seg_map, sheet_seg, look, piece_feats, windows, curve_windows  # noqa: F401 (§6.355: один код со стендом)
+
 TS = Path(r"F:/nds/output/taskS")
 OUT = TS / "detour"
-J, DARK, K, NEAR = 8, 45, 6, 3.0
-PF = ["n", "ink", "inkrow", "colr", "jit", "maxj", "nj_dry", "dup", "vcol", "edge", "s_in", "s_out"]
-FEATS = [f"w_{f}" for f in PF] + [f"t_{f}" for f in PF] + [f"d_{f}" for f in PF] + ["sep", "logn"]
-
-
-def _ink(gray, paper, y, xa, xb):
-    lo, hi = int(min(xa, xb)) + 2, int(max(xa, xb)) - 2
-    if hi <= lo or not (0 <= y < gray.shape[0] - 1):
-        return 1.0
-    lo, hi = max(0, lo), min(gray.shape[1], hi)
-    seg = np.minimum(gray[y, lo:hi], gray[y + 1, lo:hi]).astype(float)
-    return float(np.mean(seg < paper - DARK)) if len(seg) else 1.0
-
-
-def _slope(tr, ys):
-    ys = [y for y in ys if y in tr]
-    if len(ys) < 3:
-        return 0.0
-    return float(np.polyfit(ys, [tr[y] for y in ys], 1)[0])
-
-
-def seg_map(rgb, ys_xs, net, pad=6):
-    """карта сети туши (`auto.ink_seg`) по рамке всех трасс — полосами по сетке плиток (как `_seg_feat.py`), float16 →
-    функция (ys, xs) → значения max в ±1 px"""
-    from auto import ink_seg as IS
-    H, W = rgb.shape[:2]
-    y0 = max(0, min(y for y, _ in ys_xs)); y1 = min(H, max(y for y, _ in ys_xs) + 1)
-    x0 = max(0, int(min(x for _, x in ys_xs)) - pad); x1 = min(W, int(max(x for _, x in ys_xs)) + pad + 1)
-    M = np.zeros((y1 - y0, x1 - x0), np.float16); band = (1024 - 2 * 64) * 8
-    for s0 in range(y0, y1, band):
-        s1 = min(y1, s0 + band)
-        M[s0 - y0:s1 - y0] = IS.prob_map(rgb, s0, s1, x0, x1, net).astype(np.float16)
-
-    def at(ys, xs):
-        yy = np.clip(np.asarray(ys) - y0, 0, M.shape[0] - 1); xx = np.round(np.asarray(xs)).astype(int) - x0
-        return np.max(np.stack([M[yy, np.clip(xx + o, 0, M.shape[1] - 1)] for o in (-1, 0, 1)]), 0).astype(np.float32)
-    return at
-
-
-def piece_feats(tr, a, b, ctx, others, axis, seg=None):
-    """признаки куска tr на строках [a, b]; ctx — (gray, paper, rgb_s, ref_color, H, W); seg — карта сети туши (или None)"""
-    gray, paper, rgb_s, ref, H, W = ctx
-    rr = [y for y in range(a, b + 1) if y in tr]
-    if len(rr) < 3:
-        return None
-    xs = np.array([tr[y] for y in rr]); yi = np.clip(np.array(rr), 0, H - 1); xi = np.clip(np.round(xs).astype(int), 1, W - 2)
-    under = np.minimum(np.minimum(gray[yi, xi - 1], gray[yi, xi]), gray[yi, xi + 1]).astype(float)
-    dk = paper - under
-    sel = slice(None, None, max(1, len(rr) // 150))
-    colr = float(np.linalg.norm(np.median(rgb_s(yi[sel], xi[sel]), 0) - ref))
-    dx = np.abs(np.diff(xs)) if len(xs) > 1 else np.zeros(1)
-    dry = 0
-    for i in np.flatnonzero(dx > J)[:50]:
-        dry += _ink(gray, paper, rr[i], xs[i], xs[i + 1]) < 0.5
-    dup = 0.0
-    for o in others:
-        v = [abs(o[y] - tr[y]) <= NEAR for y in rr[::3] if y in o]
-        if v:
-            dup = max(dup, float(np.mean(v)))
-    xm = float(np.median(xs)); yc = (a + b) // 2
-    ca, cb = max(0, yc - 400), min(H, yc + 400); xc = int(np.clip(round(xm), 1, W - 2))
-    vcol = float(np.mean(paper - gray[ca:cb:4, xc - 1:xc + 2].min(1) > DARK))
-    edge = min(abs(xm - axis["x_left"]), abs(xm - axis["x_right"])) if axis else np.nan
-    s_in = abs(_slope(tr, range(a, a + K)) - _slope(tr, range(a - K, a)))
-    s_out = abs(_slope(tr, range(b - K + 1, b + 1)) - _slope(tr, range(b + 1, b + 1 + K)))
-    f = [len(rr), float(np.mean(dk)), float(np.mean(dk > DARK)), colr, float(np.mean(dx)), float(dx.max()), dry, dup, vcol, edge,
-         s_in, s_out]
-    if seg is not None:
-        sv = seg(rr[::2], xs[::2])
-        f += [float(np.mean(sv)), float(np.mean(sv > 0.5)), float(np.min(np.convolve(sv, np.ones(5) / 5, "valid"))) if len(sv) >= 5 else float(np.min(sv))]
-    return f
-
-
-def windows(w, t, k=K, minlen=5, maxlen=3000):
-    """окна расхождения w и t (> NEAR px) с совпадением (≤ NEAR) на ≥ k/2 из k строк до и после → [(a, b)]"""
-    ys = [y for y in sorted(w) if y in t]
-    if len(ys) < 50:
-        return []
-    agree = {y: abs(w[y] - t[y]) <= NEAR for y in ys}
-    out, i = [], 0
-    while i < len(ys):
-        if agree[ys[i]]:
-            i += 1; continue
-        j = i
-        while j + 1 < len(ys) and not agree[ys[j + 1]] and ys[j + 1] - ys[j] <= 2:
-            j += 1
-        a, b = ys[i], ys[j]
-        if minlen <= b - a + 1 <= maxlen:
-            pre = sum(1 for y in range(a - k, a) if agree.get(y)); post = sum(1 for y in range(b + 1, b + 1 + k) if agree.get(y))
-            if pre >= k // 2 and post >= k // 2:
-                out.append((a, b))
-        i = j + 1
-    return out
 
 
 def one_extract(args):
@@ -131,51 +40,26 @@ def one_extract(args):
         rgb = _final_exif.load_rgb(str(img))
     except Exception as e:
         return nm, f"{type(e).__name__}"
-    gray = rgb.min(axis=2) if rgb.ndim == 3 else rgb
-    rgb_s = (lambda yy, xx: rgb[yy, xx].astype(np.float32)) if rgb.ndim == 3 else (lambda yy, xx: np.repeat(gray[yy, xx][:, None], 3, 1).astype(np.float32))
-    paper = float(np.percentile(gray[::7, ::7], 80)); H, W = gray.shape
+    lk = look(rgb); H, W = lk[3], lk[4]
     CH = {c["name"]: DL.build_family(mt, c) for c in mt["curves"] if c["name"] in gts}
     seg = None
     if segdir:                                              # §: сеть туши вне фолда (скважина листа не в обучении)
         FO = json.loads((Path(segdir) / "folds.json").read_text(encoding="utf-8"))
         k_ = FO.get(Path(src).parent.parent.name)
-        net = str(Path(segdir) / (f"f{k_}.pt" if k_ is not None else "all.pt"))
-        pts = [(y, x) for w in wr.values() for y, x in list(w.items())[::50]]
-        if pts:
-            seg = seg_map(rgb, pts + [(min(y for y, _ in pts), max(0, min(x for _, x in pts) - 60)),
-                                      (max(y for y, _ in pts), min(W - 1, max(x for _, x in pts) + 60))], net)
+        seg = sheet_seg(rgb, wr, str(Path(segdir) / (f"f{k_}.pt" if k_ is not None else "all.pt")))
     rec = {"sheet": nm, "part": part, "rows": [], "seg": bool(seg)}
     for g, w in wr.items():
-        if len(w) < 50:
-            continue
-        ys = sorted(w)[::max(1, len(w) // 3000)]
-        yi = np.clip(np.array(ys), 0, H - 1); xi = np.clip(np.round([w[y] for y in ys]).astype(int), 1, W - 2)
-        ref = np.median(rgb_s(yi, xi), 0)
-        ctx = (gray, paper, rgb_s, ref, H, W)
-        others = [o for kk, o in wr.items() if kk != g]
         axis = CH[g][0] if CH.get(g) else None
         gt = gts.get(g)
-        seen = set()
-        for ci, t in enumerate(C):
-            if sum(1 for y in ys if y in t and abs(t[y] - w[y]) <= NEAR) > 0.97 * len(ys):
-                continue                                    # сама трасса выдачи (или её копия)
-            for a, b in windows(w, t):
-                if (a, b, round(t.get(a, 0))) in seen:
-                    continue
-                seen.add((a, b, round(t.get(a, 0))))
-                fw = piece_feats(w, a, b, ctx, others, axis, seg); ft = piece_feats(t, a, b, ctx, others, axis, seg)
-                if fw is None or ft is None:
-                    continue
-                sep = float(np.median([abs(w[y] - t[y]) for y in range(a, b + 1) if y in w and y in t]))
-                lab = np.nan
-                if gt is not None:
-                    rr = [y for y in range(a, b + 1) if y in gt and y in w and y in t]
-                    if len(rr) >= 0.5 * (b - a + 1):
-                        won = np.mean([abs(w[y] - gt[y]) <= 3 for y in rr]); woff = np.mean([abs(w[y] - gt[y]) > 10 for y in rr])
-                        ton = np.mean([abs(t[y] - gt[y]) <= 3 for y in rr]); toff = np.mean([abs(t[y] - gt[y]) > 10 for y in rr])
-                        lab = 1.0 if (ton >= 0.7 and woff >= 0.7) else 0.0 if (won >= 0.7 and toff >= 0.7) else np.nan
-                rec["rows"].append((g, ci, a, b, np.array(fw + ft + list(np.array(fw) - np.array(ft)) + [sep, np.log1p(b - a + 1)],
-                                                         np.float32), lab))
+        for ci, a, b, x in curve_windows(g, w, wr, C, lk, axis, seg):
+            t = C[ci]; lab = np.nan
+            if gt is not None:
+                rr = [y for y in range(a, b + 1) if y in gt and y in w and y in t]
+                if len(rr) >= 0.5 * (b - a + 1):
+                    won = np.mean([abs(w[y] - gt[y]) <= 3 for y in rr]); woff = np.mean([abs(w[y] - gt[y]) > 10 for y in rr])
+                    ton = np.mean([abs(t[y] - gt[y]) <= 3 for y in rr]); toff = np.mean([abs(t[y] - gt[y]) > 10 for y in rr])
+                    lab = 1.0 if (ton >= 0.7 and woff >= 0.7) else 0.0 if (won >= 0.7 and toff >= 0.7) else np.nan
+            rec["rows"].append((g, ci, a, b, x, lab))
     pickle.dump(rec, open(out, "wb"), protocol=4)
     nl = sum(1 for r in rec["rows"] if not np.isnan(r[5]))
     return nm, f"окон {len(rec['rows'])}, с меткой {nl}"
@@ -215,7 +99,7 @@ def stand(a):
     import _sample_review as S, _strict_stand as T, decode_levels as DL
     from _repair_ceiling import cands
     D = {}
-    for f in sorted(Path(a.out_dir).glob("*.pkl")):
+    for f in sorted(q for q in Path(a.out_dir).glob("*.pkl") if not q.name.startswith("detour_")):   # модели — не листы
         r = pickle.load(open(f, "rb")); D[r["sheet"]] = r
     folds = json.loads((TS / "line_choice_v6e" / "line_choice_folds.json").read_text(encoding="utf-8"))
     rows = [(nm, *x, -1 if r["part"] == "сорт A" else folds.get(nm, int(hashlib.md5(nm.encode("utf-8")).hexdigest(), 16) % 5))
@@ -227,7 +111,14 @@ def stand(a):
         tr = lab & (FD != f) & (FD != -1); te = FD == f
         m = mk(); m.fit(X[tr], Y[tr]); P[te] = m.predict_proba(X[te])[:, 1]
     m = mk(); m.fit(X[lab & (FD != -1)], Y[lab & (FD != -1)]); P[FD == -1] = m.predict_proba(X[FD == -1])[:, 1]
-    pickle.dump(m, open(Path(a.out_dir) / "detour_all.pkl", "wb"))
+    od = Path(a.out_dir) / "oof"; od.mkdir(exist_ok=True)
+    pickle.dump(m, open(od / "detour_all.pkl", "wb"))                       # §6.355: сорт A и листы вне фолдов
+    for f in sorted(set(FD) - {-1}):
+        mf = mk(); tr = lab & (FD != f) & (FD != -1); mf.fit(X[tr], Y[tr]); pickle.dump(mf, open(od / f"detour_f{f}.pkl", "wb"))
+    (od / "detour_folds.json").write_text(json.dumps(folds, ensure_ascii=False), encoding="utf-8")
+    mp = mk(); mp.fit(X[lab], Y[lab]); pickle.dump(mp, open(Path(a.out_dir) / "detour_prod.pkl", "wb"))   # все метки, с сортом A
+    if a.fit_only:
+        print(f"★ модели: {od} (фолды {sorted(set(FD) - {-1})}), прод {Path(a.out_dir) / 'detour_prod.pkl'}"); return
     for pk, msk in (("поле+вне", FD != -1), ("сорт A", FD == -1)):
         mm = msk & lab
         if mm.sum() and len(set(Y[mm])) == 2:
@@ -311,5 +202,6 @@ if __name__ == "__main__":
     ap.add_argument("--tau", type=float, nargs="+", default=[0.6, 0.75, 0.9])
     ap.add_argument("--seg", default="", help="каталог сетей туши вне фолда (folds.json, f{k}.pt) — признак сети по куску")
     ap.add_argument("--out-dir", default=str(OUT))
+    ap.add_argument("--fit-only", action="store_true", help="только модели (фолды, все, прод) — без меры")
     a = ap.parse_args()
     extract(a) if a.cmd == "extract" else stand(a)
