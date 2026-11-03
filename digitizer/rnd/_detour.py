@@ -10,7 +10,7 @@ r"""_detour.py — ОБЪЕЗДЫ: КТО ВЕРЕН НА УЧАСТКЕ РАС�
   _detour.py extract --sheets <список> --workers 2      → taskS/detour/<лист>.pkl
   _detour.py stand [--tau 0.6 0.75 0.9]                   → модель вне фолда, замена, мера приёмки и строгая до / после
 """
-import sys, argparse, json, pickle, time
+import sys, argparse, json, pickle, time, hashlib
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 for _p in (r"F:\nds\Auto", r"F:\nds\Auto\digitizer", r"F:\nds\Auto\digitizer\rnd"):
     sys.path.insert(0, _p)
@@ -218,7 +218,8 @@ def stand(a):
     for f in sorted(Path(a.out_dir).glob("*.pkl")):
         r = pickle.load(open(f, "rb")); D[r["sheet"]] = r
     folds = json.loads((TS / "line_choice_v6e" / "line_choice_folds.json").read_text(encoding="utf-8"))
-    rows = [(nm, *x, -1 if r["part"] == "сорт A" else folds.get(nm, hash(nm) % 5)) for nm, r in D.items() for x in r["rows"]]
+    rows = [(nm, *x, -1 if r["part"] == "сорт A" else folds.get(nm, int(hashlib.md5(nm.encode("utf-8")).hexdigest(), 16) % 5))
+            for nm, r in D.items() for x in r["rows"]]
     X = np.array([r[5] for r in rows], np.float32); Y = np.array([r[6] for r in rows], np.float32); FD = np.array([r[7] for r in rows])
     lab = ~np.isnan(Y); P = np.full(len(rows), np.nan)
     mk = lambda: HistGradientBoostingClassifier(max_iter=300, learning_rate=0.06, max_leaf_nodes=31, l2_regularization=1.0, random_state=0)
@@ -226,7 +227,7 @@ def stand(a):
         tr = lab & (FD != f) & (FD != -1); te = FD == f
         m = mk(); m.fit(X[tr], Y[tr]); P[te] = m.predict_proba(X[te])[:, 1]
     m = mk(); m.fit(X[lab & (FD != -1)], Y[lab & (FD != -1)]); P[FD == -1] = m.predict_proba(X[FD == -1])[:, 1]
-    pickle.dump(m, open(TS / "detour_all.pkl", "wb"))
+    pickle.dump(m, open(Path(a.out_dir) / "detour_all.pkl", "wb"))
     for pk, msk in (("поле+вне", FD != -1), ("сорт A", FD == -1)):
         mm = msk & lab
         if mm.sum() and len(set(Y[mm])) == 2:
@@ -235,58 +236,78 @@ def stand(a):
     fld = set(l.strip() for l in (TS / "tcache_sheets.txt").read_text(encoding="utf-8").splitlines())
     W_ = {}
     for (nm, g, ci, a_, b_, x, y, fd), p in zip(rows, P):
-        W_.setdefault((nm, g), []).append((p, ci, a_, b_))
+        W_.setdefault(nm, {}).setdefault(g, []).append((float(p), ci, a_, b_))
+    jobs = [(nm, r["part"], SRC[nm], next(iter(sorted((S.OOF / S.sheet_dir(nm)).glob("*_auto.nlgx"))), None), nm in fld,
+             W_.get(nm, {}), list(a.tau)) for nm, r in D.items()]
+    jobs = [j for j in jobs if j[3] is not None]
+    agg = {(t, pk): np.zeros(8) for t in a.tau for pk in ("поле+вне", "сорт A")}; ps = {k: [] for k in agg}
+    from multiprocessing import Pool
+    t0 = time.time()
+    with Pool(a.workers) as pool:
+        for k, (nm, part, out) in enumerate(pool.imap_unordered(eval_sheet, jobs, chunksize=2), 1):
+            pk = "сорт A" if part == "сорт A" else "поле+вне"
+            for tau, (v, dh, dc) in out.items():
+                agg[(tau, pk)] += v; ps[(tau, pk)].append((dh, dc))
+            if k % 100 == 0:
+                print(f"  мера: {k}/{len(jobs)} листов, {time.time() - t0:.0f} с")
     for tau in a.tau:
-        agg = {"поле+вне": np.zeros(8), "сорт A": np.zeros(8)}; ps = {"поле+вне": [], "сорт A": []}
-        for nm, r in D.items():
-            got = next(iter(sorted((S.OOF / S.sheet_dir(nm)).glob("*_auto.nlgx"))), None)
-            mt, mw, gts, wr = S.curves(SRC[nm], got)
-            C = cands(S.sheet_dir(nm), nm in fld)
-            LG = {c["name"]: S.lv_rows(c) for c in mt["curves"] if c["name"] in gts}
-            CH = {c["name"]: DL.build_family(mt, c) for c in mt["curves"] if c["name"] in gts}
-            LW = {c["name"]: S.lv_rows(c) for c in mw["curves"] if c["name"] in wr}
-            pk = "сорт A" if r["part"] == "сорт A" else "поле+вне"
-            dh = dc = 0
-            for g, gt in gts.items():
-                if g not in wr:
-                    continue
-                w = wr[g]; w2 = dict(w); taken = []
-                for p, ci, a_, b_ in sorted(W_.get((nm, g), []), key=lambda z: -z[0]):
-                    if p <= tau:
-                        break
-                    if any(not (b_ < x0 or a_ > x1) for x0, x1 in taken):
-                        continue
-                    t = C[ci]
-                    for yy in range(a_, b_ + 1):
-                        if yy in t:
-                            w2[yy] = t[yy]
-                    taken.append((a_, b_))
-                res = []
-                for ww in (w, w2):
-                    S._TREES.clear()
-                    lw, lg = LW.get(g, {}), LG.get(g, {})
-                    wl = S.relevel(ww, lw, lg, CH.get(g, []))
-                    hon = S.HON(*S.err(wl, gt))
-                    st = T.strict(S, wl, gt, frozenset(y for y in ww if lw.get(y, 0) != lg.get(y, 0)))
-                    c5 = bool(hon and st and st["off_o"] <= 0.05 * st["n_o"] and st["off_t"] <= 0.05 * st["n_t"])
-                    c1 = bool(hon and st and st["off_o"] <= 0.01 * st["n_o"] and st["off_t"] <= 0.01 * st["n_t"])
-                    res.append((hon, c1, c5, st["off_o"] if st else 0))
-                agg[pk] += [res[0][0], res[1][0], res[0][1], res[1][1], res[0][2], res[1][2], res[0][3], res[1][3]]
-                dh += res[1][0] - res[0][0]; dc += res[1][2] - res[0][2]
-            ps[pk].append((dh, dc))
-        for pk, v in agg.items():
-            d = np.array(ps[pk]) if ps[pk] else np.zeros((0, 2))
+        for pk in ("поле+вне", "сорт A"):
+            v = agg[(tau, pk)]; d = np.array(ps[(tau, pk)]) if ps[(tau, pk)] else np.zeros((0, 2))
             sg = lambda col: f"↑{int((d[:, col] > 0).sum())}/↓{int((d[:, col] < 0).sum())}" if len(d) else ""
             print(f"  τ {tau} {pk:9s}: приёмка {int(v[0])} → {int(v[1])} ({int(v[1] - v[0]):+d}, листов {sg(0)}); чистых ≤ 1% {int(v[2])} → "
                   f"{int(v[3])}; ≤ 5% {int(v[4])} → {int(v[5])} ({int(v[5] - v[4]):+d}, листов {sg(1)}); лишних строк {int(v[6])} → {int(v[7])} "
                   f"({(v[7] - v[6]) / max(v[6], 1):+.1%})")
 
 
+def _measure(S, T, ww, gt, lw, lg, ch):
+    S._TREES.clear()
+    wl = S.relevel(ww, lw, lg, ch)
+    hon = S.HON(*S.err(wl, gt))
+    st = T.strict(S, wl, gt, frozenset(y for y in ww if lw.get(y, 0) != lg.get(y, 0)))
+    c5 = bool(hon and st and st["off_o"] <= 0.05 * st["n_o"] and st["off_t"] <= 0.05 * st["n_t"])
+    c1 = bool(hon and st and st["off_o"] <= 0.01 * st["n_o"] and st["off_t"] <= 0.01 * st["n_t"])
+    return hon, c1, c5, st["off_o"] if st else 0
+
+
+def eval_sheet(args):
+    """мера листа до / после замены окон при каждом τ (база считается один раз; кривая без замен — база)"""
+    nm, part, src, got, field, Wn, taus = args
+    import _sample_review as S, _strict_stand as T, decode_levels as DL
+    from _repair_ceiling import cands
+    mt, mw, gts, wr = S.curves(src, got)
+    C = cands(S.sheet_dir(nm), field)
+    LG = {c["name"]: S.lv_rows(c) for c in mt["curves"] if c["name"] in gts}
+    CH = {c["name"]: DL.build_family(mt, c) for c in mt["curves"] if c["name"] in gts}
+    LW = {c["name"]: S.lv_rows(c) for c in mw["curves"] if c["name"] in wr}
+    out = {tau: [np.zeros(8), 0, 0] for tau in taus}
+    for g, gt in gts.items():
+        if g not in wr:
+            continue
+        w = wr[g]; lw, lg, ch = LW.get(g, {}), LG.get(g, {}), CH.get(g, [])
+        r0 = _measure(S, T, w, gt, lw, lg, ch)
+        for tau in taus:
+            w2 = dict(w); taken = []
+            for p, ci, a_, b_ in sorted(Wn.get(g, []), key=lambda z: -z[0]):
+                if p <= tau:
+                    break
+                if any(not (b_ < x0 or a_ > x1) for x0, x1 in taken):
+                    continue
+                t = C[ci]
+                for yy in range(a_, b_ + 1):
+                    if yy in t:
+                        w2[yy] = t[yy]
+                taken.append((a_, b_))
+            r1 = _measure(S, T, w2, gt, lw, lg, ch) if taken else r0
+            out[tau][0] += [r0[0], r1[0], r0[1], r1[1], r0[2], r1[2], r0[3], r1[3]]
+            out[tau][1] += r1[0] - r0[0]; out[tau][2] += r1[2] - r0[2]
+    return nm, part, out
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["extract", "stand"])
     ap.add_argument("--sheets", default=str(TS / "segclean_sheets.txt"))
-    ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--workers", type=int, default=2, help="процессов извлечения / меры стенда")
     ap.add_argument("--tau", type=float, nargs="+", default=[0.6, 0.75, 0.9])
     ap.add_argument("--seg", default="", help="каталог сетей туши вне фолда (folds.json, f{k}.pt) — признак сети по куску")
     ap.add_argument("--out-dir", default=str(OUT))
