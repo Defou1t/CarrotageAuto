@@ -210,7 +210,8 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "detourjump": ("detour_jump", float),    # §6.355: запрет прыжка куска кандидата > G px
                "spikeseg": ("spike_seg", str),          # §6.356: уколы — сеть туши; "oof:<каталог>" — сеть фолда скважины листа
                "spikets": ("spike_ts", float),
-               "spiketc": ("spike_tc", float)}
+               "spiketc": ("spike_tc", float),
+               "spikelong": ("spike_long", int)}        # §6.356: и отлёты 4…N строк
 
 
 def cmd_replay():

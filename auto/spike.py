@@ -36,11 +36,13 @@ def seg_at(rgb, net, ys, xs):
     return np.max(np.stack([pm[yy, np.clip(xx + o, 0, pm.shape[1] - 1)] for o in (-1, 0, 1)]), 0)
 
 
-def fix(tr, rgb, net, ts=TS, tc=TC, L=L, D=D, E=E):
-    """трасса {y: x} → (трасса с уколами без туши по хорде, [(y0, y1, туши у укола, туши у хорды)] замен)"""
+def fix(tr, rgb, net, ts=TS, tc=TC, L=L, D=D, E=E, Lmin=0):
+    """трасса {y: x} → (трасса с уколами без туши по хорде, [(y0, y1, туши у укола, туши у хорды)] замен); Lmin — только длиннее"""
     ys, xs, sp = spikes(tr, L, D, E)
     out = dict(tr); log = []
     for i, j in sp:
+        if j - i + 1 <= Lmin:
+            continue
         a, b, ya, yb = xs[i - 1], xs[j + 1], ys[i - 1], ys[j + 1]
         yr = list(ys[i:j + 1]); ch = [a + (b - a) * (y - ya) / (yb - ya) for y in yr]
         v = seg_at(rgb, net, yr + yr, list(xs[i:j + 1]) + ch)
@@ -49,4 +51,14 @@ def fix(tr, rgb, net, ts=TS, tc=TC, L=L, D=D, E=E):
             for y, c in zip(yr, ch):
                 out[y] = c
             log.append((yr[0], yr[-1], round(s_, 3), round(c_, 3)))
+    return out, log
+
+
+def fix_all(tr, rgb, net, ts=TS, tc=TC, long_=0):
+    """уколы ≤ 3 строк, затем (long_ > 3) отлёты 4…long_ строк — обвод цифр глубины (`_spike_ink.py --L 15 --Lmin 3`: 150 листов,
+    правило то же — ложных 100%, задето настоящих 0.0%, поймано ложных 25%)"""
+    out, log = fix(tr, rgb, net, ts, tc)
+    if long_ > L:
+        out, lg2 = fix(out, rgb, net, ts, tc, L=long_, Lmin=L)
+        log += lg2
     return out, log

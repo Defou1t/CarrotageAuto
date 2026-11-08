@@ -528,7 +528,7 @@ def _detour_pass(spec, seg_spec, tau, model, mapping, traces, get_rgb, sheet_nam
             pass
 
 
-def _spike_pass(seg_spec, model, mapping, get_rgb, out, stem, frame_nlgx=None, ts=0.1, tc=0.5):
+def _spike_pass(seg_spec, model, mapping, get_rgb, out, stem, frame_nlgx=None, ts=0.1, tc=0.5, long_=0):
     """§6.356: уколы трассы (≤ 3 строк дальше 20 px от хорды соседей, соседи ≤ 15 px) без туши сети под собой (< ts) при туши на
     хорде (> tc) → хорда (`auto/spike.py`, меняется `mapping` на месте). Трасса — как её читает стенд (записанные строки, разрывы
     ≤ 200 — по хорде). Замены — в `<stem>_spike.json`."""
@@ -550,7 +550,7 @@ def _spike_pass(seg_spec, model, mapping, get_rgb, out, stem, frame_nlgx=None, t
         w = LC.dense_tr({top_y + i: int(round(tr[top_y + i])) for i in range(c["n_rows"]) if (top_y + i) in tr})
         if len(w) < 3:
             continue
-        w2, lg = SP.fix(w, rgb, net, ts, tc)
+        w2, lg = SP.fix_all(w, rgb, net, ts, tc, long_)
         if not lg:
             continue
         tr2 = dict(tr)
@@ -954,7 +954,8 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     _spp = getattr(_cvp0, "spike_seg", "") or ""
     if _spp:
         _spike_pass(_spp, model, mapping, _get_rgb, out, stem, frame_nlgx=frame_nlgx,
-                    ts=float(getattr(_cvp0, "spike_ts", 0.1)), tc=float(getattr(_cvp0, "spike_tc", 0.5)))
+                    ts=float(getattr(_cvp0, "spike_ts", 0.1)), tc=float(getattr(_cvp0, "spike_tc", 0.5)),
+                    long_=int(getattr(_cvp0, "spike_long", 0) or 0))
     written, wrote_ifd = [], set()
     ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):

@@ -259,18 +259,20 @@ INKFILTERS = {"inkx": lambda wr, LW, gr, pa: s_inkx(wr, LW, gr, pa), "inkx3": la
               "inkx5L": lambda wr, LW, gr, pa: s_inkx(wr, LW, gr, pa, Lmax=2000), "inkx5d": lambda wr, LW, gr, pa: s_inkx(wr, LW, gr, pa, drift=1.0)}
 
 
-def s_spikeseg(wr, rgb, net, NF, ts=0.1, tc=0.5):
-    """§6.356: уколы без туши сети под собой при туши на хорде → хорда (`auto.spike.fix`); NF[кривая] += замен"""
+def s_spikeseg(wr, rgb, net, NF, ts=0.1, tc=0.5, long_=0):
+    """§6.356: уколы без туши сети под собой при туши на хорде → хорда (`auto.spike.fix_all`; long_ — и отлёты 4…long_ строк);
+    NF[кривая] += замен"""
     from auto import spike as SP
     out = {}
     for g, w in wr.items():
-        out[g], log = SP.fix(w, rgb, net, ts, tc)
+        out[g], log = SP.fix_all(w, rgb, net, ts, tc, long_)
         NF[g] += len(log)
     return out
 
 
 SEGFILTERS = {"spikeseg": lambda wr, rgb, net, NF: s_spikeseg(wr, rgb, net, NF),
-              "spikeseg2": lambda wr, rgb, net, NF: s_spikeseg(wr, rgb, net, NF, ts=0.2, tc=0.5)}
+              "spikeseg2": lambda wr, rgb, net, NF: s_spikeseg(wr, rgb, net, NF, ts=0.2, tc=0.5),
+              "spikeseg15": lambda wr, rgb, net, NF: s_spikeseg(wr, rgb, net, NF, long_=15)}
 
 
 SFILTERS = {"dedupgap": lambda wr: s_dedup(wr, mode="gap"), "dedupint": lambda wr: s_dedup(wr, mode="int"),
