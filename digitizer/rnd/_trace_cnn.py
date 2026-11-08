@@ -26,6 +26,7 @@ ap.add_argument("--fam", action="store_true", help="§6.327: вместо «че
                 "пишет вектор вероятностей и список классов (ключ '__classes__')")
 ap.add_argument("--save-dir", default="", help="веса: trace_cnn_f{k}.pt (фолды), trace_cnn_all.pt (на поле) — рядом с моделями выбора трассы")
 ap.add_argument("--prod-out", default="", help="веса для прода: учится на ВСЁМ с меткой, включая сорт A")
+ap.add_argument("--resume", action="store_true", help="08.11 (отключения питания): готовые веса фолда / all / прода в --save-dir (и --prod-out) не учить заново — загрузить и оценить")
 a = ap.parse_args()
 import torch, torch.nn as nn
 
@@ -147,23 +148,46 @@ class Ens:
 _train1, _score1 = train, score
 train = lambda tr: Ens([_train1(tr, sd) for sd in range(a.seeds)])
 score = lambda ens, te: np.mean([_score1(n, te) for n in ens.nets], 0)
+
+
+def _save(ens, path):
+    """08.11: запись весов через временный файл и подмену — оборванная отключением питания запись не выглядит готовой"""
+    tmp = Path(str(path) + ".tmp"); torch.save(ens.state(), tmp); tmp.replace(path)
+
+
+def _load(path):
+    """готовые веса (`--resume`) → Ens; нет / не читаются → None"""
+    if not (a.resume and path and Path(path).exists()):
+        return None
+    try:
+        sd = torch.load(path, map_location=dev)
+        nets = []
+        for one in (sd["sds"] if isinstance(sd, dict) and "sds" in sd else [sd]):
+            n_ = build_net(len(CLS) if a.fam else 1).to(dev); n_.load_state_dict(one); nets.append(n_)
+        print(f"  готовые веса: {path}")
+        return Ens(nets)
+    except Exception as e:
+        print(f"  веса {path} не читаются ({type(e).__name__}) — учу заново")
+        return None
 S = np.full((len(Y), len(CLS)) if a.fam else len(Y), np.nan, np.float32); t0 = time.time()
 AUCY = (Y > 0).astype(int)                                # мера: «честна хоть для одного» (при --fam — 1 − P(мусор))
 _auc = lambda m: roc_auc_score(AUCY[m], (1 - S[m, 0]) if a.fam else S[m])
 for k in range(a.folds):
     tr = np.flatnonzero((Y >= 0) & np.isin(GRP, [f_ for f_ in range(a.folds) if f_ != k]))   # листы скважин сорта A — никогда
     te = np.flatnonzero(GRP == k)
-    net = train(tr); S[te] = score(net, te)
+    fk = Path(a.save_dir) / f"trace_cnn_f{k}.pt" if a.save_dir else None
+    net = _load(fk) or train(tr); S[te] = score(net, te)
     if a.save_dir:
-        Path(a.save_dir).mkdir(parents=True, exist_ok=True); torch.save(net.state(), Path(a.save_dir) / f"trace_cnn_f{k}.pt")
+        Path(a.save_dir).mkdir(parents=True, exist_ok=True); _save(net, fk)
     m = te[Y[te] >= 0]
     print(f"  фолд {k}: обучение {len(tr)}, AUC {_auc(m):.4f}, {time.time() - t0:.0f} с")
 tr = np.flatnonzero((Y >= 0) & np.isin(GRP, list(range(a.folds)))); te = np.flatnonzero((GRP == "A") | (GRP == "out"))
-net = train(tr); S[te] = score(net, te)
+net = _load(Path(a.save_dir) / "trace_cnn_all.pt" if a.save_dir else None) or train(tr); S[te] = score(net, te)
 if a.save_dir:
-    torch.save(net.state(), Path(a.save_dir) / "trace_cnn_all.pt")
+    _save(net, Path(a.save_dir) / "trace_cnn_all.pt")
 if a.prod_out:
-    torch.save(train(np.flatnonzero(Y >= 0)).state(), a.prod_out)
+    if _load(a.prod_out) is None:
+        Path(a.prod_out).parent.mkdir(parents=True, exist_ok=True); _save(train(np.flatnonzero(Y >= 0)), a.prod_out)
     print(f"★ веса для прода (всё с меткой, с сортом A): {a.prod_out}")
 for nm, sel in (("поле+вне", np.isin(GRP, list(range(a.folds)))), ("сорт A", GRP == "A")):
     m = sel & (Y >= 0)

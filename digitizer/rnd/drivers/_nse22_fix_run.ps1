@@ -36,7 +36,7 @@ for ($t = 1; $t -le 3; $t++) {
   foreach ($r in @(@('f', "$dir/repair_f.txt", "$ts/tcache", $nf), @('o', "$dir/repair_o.txt", "$ts/tcache_out", $no))) {
     if ($r[3] -eq 0) { continue }
     $ex = $(if ($r[0] -eq 'f') { $xf } else { $xo })
-    $null = Run ("nse22_repair_{0}{1}" -f $r[0], $t) (@('-I','_trace_cache.py','replay','--sheets',$r[1],'--cache',$r[2],'--extra-cache') + $ex + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--mode',$mode))
+    $null = Run ("nse22_repair_{0}{1}" -f $r[0], $t) (@('-I','_trace_cache.py','replay','--sheets',$r[1],'--cache',$r[2],'--extra-cache') + $ex + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--mode',$mode,'--resume'))
   }
 }
 $miss = (Lines "$dir/repair_f.txt") + (Lines "$dir/repair_o.txt")

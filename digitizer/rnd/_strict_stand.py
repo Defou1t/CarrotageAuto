@@ -419,15 +419,46 @@ def main():
     if a.limit:
         jobs = jobs[::max(1, len(jobs) // a.limit)][:a.limit]
     print(f"★ листов {len(jobs)}, вычистка {a.filters or '—'}, процессов {a.workers}")
-    t0 = time.time(); res = []
+    # 08.11 (отключения питания): итог каждого листа сразу дописывается в `_strict_<tag>.part.jsonl` (первая строка — подпись запуска);
+    #   перезапуск с той же подписью досчитывает только недостающие листы
+    import os, hashlib
+    part = Path(r"F:/nds/output/taskS") / f"_strict_{a.tag}.part.jsonl"
+    sig = json.dumps({"mode": a.mode, "filters": a.filters, "limit": a.limit, "sheets": a.sheets, "seg": a.seg,
+                      "jobs": hashlib.md5("\n".join(j[0] for j in jobs).encode("utf-8")).hexdigest()}, ensure_ascii=False)
+    res = []
+    if part.exists():
+        ln = part.read_text(encoding="utf-8").splitlines()
+        if ln and ln[0] == sig:
+            for l in ln[1:]:
+                try:
+                    res.append(json.loads(l))
+                except ValueError:
+                    pass                                  # строка, оборванная отключением питания
+            print(f"★ досчёт: готовых листов с прошлого раза {len(res)}")
+        else:
+            part.replace(part.with_name(part.name + f".stale_{int(time.time())}"))
+    have = {r[0] for r in res}
+    todo = [j for j in jobs if j[0] not in have]
+    fresh = not part.exists()
+    tail_ok = fresh or part.read_bytes()[-1:] == b"\n"
+    fh = open(part, "a", encoding="utf-8")
+    if fresh:
+        fh.write(sig + "\n"); fh.flush()
+    elif not tail_ok:
+        fh.write("\n"); fh.flush()                        # оборванная последняя строка — новая с начала строки
+    t0 = time.time()
     from multiprocessing import Pool
     with Pool(a.workers) as pool:
-        for k, r in enumerate(pool.imap_unordered(one, jobs, chunksize=4), 1):
+        for k, r in enumerate(pool.imap_unordered(one, todo, chunksize=4), 1):
             res.append(r)
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n"); fh.flush(); os.fsync(fh.fileno())
             if k % 200 == 0:
-                print(f"  {k}/{len(jobs)} листов, {time.time() - t0:.0f} с")
+                print(f"  {k}/{len(todo)} листов, {time.time() - t0:.0f} с")
+    fh.close()
     out = Path(r"F:/nds/output/taskS") / f"_strict_{a.tag}.json"
-    out.write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
+    tmp = out.with_name(out.name + ".tmp")                # через подмену: оборванный итог не выглядит готовым для драйвера
+    tmp.write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8"); tmp.replace(out)
+    part.replace(part.with_name(part.name + ".done"))
     report(res, ["base"] + a.filters)
     print(f"★ {out}")
 

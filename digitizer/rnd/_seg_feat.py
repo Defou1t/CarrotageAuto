@@ -16,6 +16,14 @@ from pathlib import Path
 import numpy as np
 
 
+
+def _save(R, outp):
+    """08.11 (отключения питания): запись через временный файл и подмену — оборванная запись не портит готовое"""
+    tmp = outp.with_name(outp.name + ".tmp")
+    with open(tmp, "wb") as fh:
+        pickle.dump(R, fh, protocol=4)
+    tmp.replace(outp)
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     ap = argparse.ArgumentParser()
@@ -37,7 +45,12 @@ def main():
     un = lambda t: dict(zip(t[0].tolist(), t[1].tolist()))
     files = sorted(Path(a.data).glob("*.pkl"))[si::sn]
     outp = Path(a.out)
-    R = pickle.load(open(outp, "rb")) if outp.exists() else {}
+    R = {}
+    if outp.exists():
+        try:
+            R = pickle.load(open(outp, "rb"))
+        except Exception:                                 # 08.11: оборван отключением питания — начать заново, файл не терять
+            outp.replace(outp.with_name(outp.name + f".bad_{int(time.time())}"))
     done = {sh for sh, _ in R}
     t0 = time.time(); n = 0
     for f in files:
@@ -105,9 +118,9 @@ def main():
                 R[(sh, k)] = v.mean(1).astype(np.float16); continue
             R[(sh, k)] = (float(v.mean()), float((v > 0.5).mean()))
         if n % 50 == 0:
-            pickle.dump(R, open(outp, "wb"), protocol=4)
+            _save(R, outp)
             print(f"  {n}/{len(files)} листов, {time.time() - t0:.0f} с")
-    pickle.dump(R, open(outp, "wb"), protocol=4)
+    _save(R, outp)
     print(f"★ готово: {len(files)} листов, кандидатов {len(R)} → {outp}")
 
 

@@ -78,7 +78,7 @@ while ($pending.Count -gt 0 -or $running.Count -gt 0) {
   if ($pending.Count -gt 0 -and $running.Count -lt 2 -and (Heavy) -lt 4) {
     $c = $pending[0]; $pending.RemoveAt(0)
     $ex = $(if ($c[3] -eq 'f') { $xf } else { $xo })
-    $a = @('-I','_trace_cache.py','replay','--sheets',$c[1],'--cache',$c[2],'--extra-cache') + $ex + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--mode',$mode)
+    $a = @('-I','_trace_cache.py','replay','--sheets',$c[1],'--cache',$c[2],'--extra-cache') + $ex + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--mode',$mode,'--resume')
     $p = Start-Process -FilePath $py -ArgumentList $a -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$dir/$($c[0]).log" -RedirectStandardError "$dir/$($c[0]).err" -PassThru
     $null = $p.Handle; $running[$c[0]] = @($p, $c)
     $nd = @(Get-ChildItem $dir -Filter *.done).Count
@@ -100,7 +100,7 @@ for ($t = 1; $t -le 3; $t++) {
   foreach ($r in @(@('f', "$dir/repair_f.txt", "$ts/tcache", $nf), @('o', "$dir/repair_o.txt", "$ts/tcache_out", $no))) {
     if ($r[3] -eq 0) { continue }
     $ex = $(if ($r[0] -eq 'f') { $xf } else { $xo })
-    $null = Run ("nse23_repair_{0}{1}" -f $r[0], $t) (@('-I','_trace_cache.py','replay','--sheets',$r[1],'--cache',$r[2],'--extra-cache') + $ex + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--mode',$mode))
+    $null = Run ("nse23_repair_{0}{1}" -f $r[0], $t) (@('-I','_trace_cache.py','replay','--sheets',$r[1],'--cache',$r[2],'--extra-cache') + $ex + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--mode',$mode,'--resume'))
   }
 }
 $miss = (Lines "$dir/repair_f.txt") + (Lines "$dir/repair_o.txt")

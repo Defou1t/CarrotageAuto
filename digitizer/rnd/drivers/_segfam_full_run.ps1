@@ -87,7 +87,7 @@ foreach ($i in 0..1) {
   Start-Sleep -Seconds 5
 }
 New-Item -ItemType Directory -Force "$ts/line_choice_v21p" | Out-Null
-Run 'sff_cnn' @('-I','_trace_cnn.py','--epochs','8','--data',"$ts/line_choice_t","$ts/line_choice_out_t",'--patch',"$ts/tpatch_t",'--save-dir',"$ts/line_choice_v21e",'--prod-out',"$ts/line_choice_v21p/trace_cnn_all.pt",'--out',"$ts/trace_cnn_t.pkl")
+Run 'sff_cnn' @('-I','_trace_cnn.py','--epochs','8','--data',"$ts/line_choice_t","$ts/line_choice_out_t",'--patch',"$ts/tpatch_t",'--save-dir',"$ts/line_choice_v21e",'--prod-out',"$ts/line_choice_v21p/trace_cnn_all.pt",'--out',"$ts/trace_cnn_t.pkl",'--resume')
 foreach ($p in $ps) { $null = $p.Handle; $p.WaitForExit() }
 if ($fam) {                                         # §6.350 в базе — его признак и на новых сканах (после первой четвёрки: ≤ 4 на GPU)
   $ps=@()
@@ -124,7 +124,7 @@ if (($ba -gt -99999) -and ($aa -ge $ba + 15) -and ($sa -ge $bs)) {
   function Rep($mode, $lc, $sheets, $cache, $extras) {
     $ps=@()
     foreach ($i in 0..2) {
-      $a=@('-I','_trace_cache.py','replay','--sheets',$sheets,'--cache',$cache,'--extra-cache') + $extras + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--shard',"$i/3",'--mode',"${mode}:$common,linechoice=oof:$lc,lcseg=oof:$ts/ink_seg_f$lcf")
+      $a=@('-I','_trace_cache.py','replay','--sheets',$sheets,'--cache',$cache,'--extra-cache') + $extras + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--shard',"$i/3",'--mode',"${mode}:$common,linechoice=oof:$lc,lcseg=oof:$ts/ink_seg_f$lcf",'--resume')
       $tag = $sheets.Substring(0,4)
       $ps += Start-Process -FilePath $py -ArgumentList $a -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$ts/_rp_${mode}_${tag}_$i.log" -RedirectStandardError "$ts/_rp_${mode}_${tag}_$i.err" -PassThru
       Start-Sleep -Seconds 5

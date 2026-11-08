@@ -45,6 +45,8 @@ ap.add_argument("--seg-mask", default="", help="§6.345 (redec): «веса.pt:m
 ap.add_argument("--oracle-mask", type=float, default=0.0, help="§6.345 (redec): ОРАКУЛ — карта декодера × (m + (1 − m)·[≤ 4 px от кривой "
                 "эталона листа]), m — значение ключа; только замер потолка сегментации туши")
 ap.add_argument("--conf", default="", help="§6.240: сайдкар уверенности декодера (`_dec_conf.py`) — в повторе даётся emit как `traces.alt_conf`")
+ap.add_argument("--resume", action="store_true", help="08.11 (отключения питания): повтор пропускает лист, у которого во всех режимах есть "
+                "выдача и метка `_replay_ok.txt` с ТЕМ ЖЕ описанием режима (пишется после удачного emit)")
 ap.add_argument("--knob", action="append", default=[], help="§6.236: ручка ВЕДЕНИЯ для сборки, `имя=значение` (пишется в кэш)")
 ap.add_argument("--extra-cache", nargs="*", default=[], help="§6.287: кэши другого декода — их пути даются выбору трассы "
                 "(`traces.extra`) как дополнительные кандидаты, по порядку; `каталог|поле` (по умолчанию alt; extra — у redec с "
@@ -250,7 +252,20 @@ def cmd_replay():
             CONF.update(pickle.load(open(part, "rb")))
     if a.conf:
         print(f"★ уверенность декодера: {len(CONF)} листов из {a.conf}")
+    SPEC = dict(a.mode_specs); resumed = 0
+
+    def _ok(nm, n):                                       # 08.11: лист этого режима уже выдан тем же описанием режима
+        d = Path(a.out) / nm / sheet_dir(n); mk = d / "_replay_ok.txt"
+        try:
+            return mk.read_text(encoding="utf-8") == SPEC[nm] and any(d.glob("*_auto.nlgx"))
+        except OSError:
+            return False
     for n in sheets:
+        if a.resume and all(_ok(nm, n) for nm, _ in modes):
+            for nm, _ in modes:
+                stat[nm][0] += 1
+            resumed += 1
+            continue
         src = CACHE / (sheet_dir(n) + ".pkl")
         if not src.exists():
             for nm, _ in modes:
@@ -316,6 +331,7 @@ def cmd_replay():
                     conf_missing[nm] += 1
             out = Path(a.out) / nm / sheet_dir(n)
             out.mkdir(parents=True, exist_ok=True)
+            (out / "_replay_ok.txt").unlink(missing_ok=True)
             for old in out.glob("*_auto.nlgx"):
                 old.unlink()
             try:
@@ -323,10 +339,12 @@ def cmd_replay():
                     E.emit_into_frame(traces, c["frame_nlgx"], c["frame"], out, c["stem"], cfg.mnemonics,
                                       image=c["image"], las=False, cv=cfg.cv)
                 stat[nm][0] += 1
+                if any(out.glob("*_auto.nlgx")):          # 08.11: метка готовности — для `--resume` после отключения питания
+                    (out / "_replay_ok.txt").write_text(SPEC[nm], encoding="utf-8")
             except Exception as e:
                 stat[nm][1] += 1; print(f"  {n.stem[:44]} {nm} ПАДЕНИЕ {type(e).__name__}: {e}")
     for nm, (ok, bad) in stat.items():
-        print(f"★ ПОВТОР {nm}: выдано {ok}, пропущено/упало {bad} из {len(sheets)}")
+        print(f"★ ПОВТОР {nm}: выдано {ok}, пропущено/упало {bad} из {len(sheets)}" + (f" (готовых с прошлого раза {resumed})" if resumed else ""))
     # ⛔ 27.09 (разбор): маркер ПОЛНОГО повтора — драйверы и `_replay_sweep --skip-replay` верят ему, а не наличию каталога
     import json as _json
     _mk = Path(a.out) / "_replay_done.json"

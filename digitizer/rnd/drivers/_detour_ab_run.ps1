@@ -1,6 +1,7 @@
 ﻿# _detour_ab_run.ps1 — §6.355: повтор NSE22 = NSE19 + объезды вне фолда (`detour=oof:detour_seg/oof`, сеть туши фолда скважины, τ 0.75, запрет прыжка 150 px)
 # кусками по 100 листов: своих процессов ≤ 2 и тяжёлых на видеокарте всего ≤ 4 (идёт §6.351); счёт `_name_cost_prod`, `merge_ab3`
 # NSE19 → NSE22, строгая мера NSE22 и её A/B против `_strict_pop` (NSE19). Идемпотентен (метки кусков в detour_ab/). ⚠ UTF-8 С BOM.
+# 08.11: повтор с `--resume` — после отключения питания кусок досчитывает только листы без метки `_replay_ok.txt`.
 $py='D:/ComfyUI/ComfyUI/ComfyUI_windows_portable/python_embeded/python.exe'
 $rnd='F:/nds/Auto/digitizer/rnd'
 $ts='F:/nds/output/taskS'
@@ -49,7 +50,7 @@ while ($pending.Count -gt 0 -or $running.Count -gt 0) {
   if ($pending.Count -gt 0 -and $running.Count -lt 2 -and (Heavy) -lt 4) {
     $c = $pending[0]; $pending.RemoveAt(0)
     $ex = $(if ($c[3] -eq 'f') { $xf } else { $xo })
-    $a = @('-I','_trace_cache.py','replay','--sheets',$c[1],'--cache',$c[2],'--extra-cache') + $ex + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--mode',$mode)
+    $a = @('-I','_trace_cache.py','replay','--sheets',$c[1],'--cache',$c[2],'--extra-cache') + $ex + @('--out',"$ts/rp_lvl",'--conf',"$ts/conf_tcache.pkl",'--mode',$mode,'--resume')
     $p = Start-Process -FilePath $py -ArgumentList $a -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$dir/$($c[0]).log" -RedirectStandardError "$dir/$($c[0]).err" -PassThru
     $null = $p.Handle; $running[$c[0]] = @($p, $c)
     $nd = @(Get-ChildItem $dir -Filter *.done).Count
