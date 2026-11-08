@@ -32,21 +32,25 @@ def read(p):
 
 
 def merge(p):
-    """{(часть, именных|безымянных): (a, b, Δ, p)}"""
-    out = {}
-    for m in re.finditer(r"★ (поле\+вне|сорт A|поле|вне) \(\d+ листов\), (именных|безымянных) честных в значениях: \S+ " + NUM +
+    """{(часть, именных|безымянных): (a, b, Δ, p)}, {часть: листов}"""
+    out, n = {}, {}
+    for m in re.finditer(r"★ (поле\+вне|сорт A|поле|вне) \((\d+) листов\), (именных|безымянных) честных в значениях: \S+ " + NUM +
                          r" → \S+ " + NUM + r" \(Δ ([+-]?\d+), листов ↑\d+/↓\d+, p = ([\d.]+)\)", read(p)):
-        out[(m.group(1), m.group(2))] = (int(m.group(3)), int(m.group(4)), int(m.group(5)), float(m.group(6)))
-    return out
+        out[(m.group(1), m.group(3))] = (int(m.group(4)), int(m.group(5)), int(m.group(6)), float(m.group(7)))
+        n[m.group(1)] = int(m.group(2))
+    return out, n
 
 
 def strict(p):
-    """{часть: {верных|чистых1|чистых5: (a, b, Δ, p), лишних: (a, b), пропусков: (a, b)}}"""
+    """{часть: {верных|чистых1|чистых5: (a, b, Δ, p), лишних: (a, b), пропусков: (a, b), листов: N}, «только»: (в A, в B)}"""
     out, cur = {}, None
     for ln in read(p).splitlines():
-        m = re.match(r"## (поле\+вне|сорт A)", ln.strip())
+        m = re.search(r"общих листов \d+ \(только в \S+ (\d+), только в \S+ (\d+)\)", ln)
         if m:
-            cur = out.setdefault(m.group(1), {}); continue
+            out["только"] = (int(m.group(1)), int(m.group(2))); continue
+        m = re.match(r"## (поле\+вне|сорт A) \((\d+) листов\)", ln.strip())
+        if m:
+            cur = out.setdefault(m.group(1), {}); cur["листов"] = int(m.group(2)); continue
         if cur is None:
             continue
         m = re.search(r"(верных приёмкой|чистых ≤ 1%|чистых ≤ 5%)\s*: " + NUM + r" → " + NUM + r" \(([+-]?\d+), листов ↑\d+/↓\d+, p = ([\d.]+)\)", ln)
@@ -64,11 +68,24 @@ def main():
     ap.add_argument("--rule", required=True, choices=["detour", "spike-stand", "spike-ab"])
     ap.add_argument("--merge", default="")
     ap.add_argument("--strict", required=True)
+    ap.add_argument("--n-fo", type=int, default=2062, help="листов поле+вне в полном сравнении (база NSE19)")
+    ap.add_argument("--n-a", type=int, default=311, help="листов сорта A")
     a = ap.parse_args()
     try:
-        S = strict(a.strict); M_ = merge(a.merge) if a.merge else {}
+        S = strict(a.strict); M_, MN = merge(a.merge) if a.merge else ({}, {})
     except FileNotFoundError as e:
         print(f"⛔ нет лога: {e}"); sys.exit(2)
+    # покрытие (08.11): сравнение идёт по ОБЩИМ листам — выпавший лист (падение повтора) не должен молча сузить выборку
+    cov = []
+    if S.get("только", (0, 0)) != (0, 0) or "только" not in S:
+        cov.append(f"строгая: листы только в одном из повторов {S.get('только')}")
+    for part, n in (("поле+вне", a.n_fo), ("сорт A", a.n_a)):
+        if S.get(part, {}).get("листов") != n:
+            cov.append(f"строгая {part}: листов {S.get(part, {}).get('листов')} вместо {n}")
+        if a.merge and MN.get(part) != n:
+            cov.append(f"приёмка {part}: листов {MN.get(part)} вместо {n}")
+    if cov:
+        print("⛔ неполное сравнение — критерий не проверяю: " + "; ".join(cov)); sys.exit(2)
     checks = []
     def need(name, ok):
         checks.append((name, bool(ok)))
