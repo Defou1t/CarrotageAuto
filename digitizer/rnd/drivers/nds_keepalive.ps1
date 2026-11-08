@@ -48,7 +48,8 @@ $jobs = @(
   @{ task='nds_segclean';     log='F:\nds\output\taskS\_segclean.log';     done='=== SEGCLEAN DONE ===' },
   @{ task='nds_tm80';         log='F:\nds\output\taskS\_tm80.log';         done='=== TM80 DONE ===' },
   @{ task='nds_detour_ab';    log='F:\nds\output\taskS\_detour_ab.log';    done='=== DETOUR AB DONE ===' },
-  @{ task='nds_spikeseg';     log='F:\nds\output\taskS\_spikeseg.log';     done='=== SPIKESEG DONE ===' }
+  @{ task='nds_spikeseg';     log='F:\nds\output\taskS\_spikeseg.log';     done='=== SPIKESEG DONE ===' },
+  @{ task='nds_spike_ab';     log='F:\nds\output\taskS\_spike_ab.log';     done='=== SPIKE AB DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue

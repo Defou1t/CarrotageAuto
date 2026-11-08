@@ -21,8 +21,8 @@ while (-not (Test-Path "$ts/_strict_spikeseg.json") -and $try -lt 3) {
 }
 if (-not (Test-Path "$ts/_strict_spikeseg.json")) { Say "⛔ строгая мера со spikeseg не досчитана за 3 попытки"; Say "=== SPIKESEG DONE ==="; exit 1 }
 foreach ($fn in @('spikeseg','spikeseg2','spikeseg15')) {
-  $o = & $py -I -X utf8 "$rnd/_strict_ab.py" 'spikeseg:base' "spikeseg:$fn" 2>&1
-  $o | Out-File -FilePath "$ts/_strict_ab_$fn.log" -Encoding utf8
-  foreach ($ln in $o) { if ("$ln" -match '★|##|верных|чистых|лишних') { Say "$ln" } }
+  $q = Start-Process -FilePath $py -ArgumentList @('-I','-X','utf8','_strict_ab.py','spikeseg:base',"spikeseg:$fn") -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$ts/_strict_ab_$fn.log" -RedirectStandardError "$ts/_strict_ab_$fn.err" -PassThru
+  $null = $q.Handle; $q.WaitForExit()   # не через конвейер PowerShell — он портит UTF-8 вывод python (08.11)
+  Get-Content "$ts/_strict_ab_$fn.log" -Encoding UTF8 | Where-Object { $_ -match '★|##|верных|чистых|лишних' } | ForEach-Object { Say $_ }
 }
 Say "=== SPIKESEG DONE ==="
