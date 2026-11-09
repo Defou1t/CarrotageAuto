@@ -55,7 +55,10 @@ def work(args):
         if Jth not in cache:
             cache[Jth] = segs(cv, Pp, Jth)
         S = cache[Jth]; p = base.copy()
-        if v in ("V3", "V4", "V5"):
+        if v == "V3":                                 # тот же код, что прод (`auto.level_ink.seg_vote`)
+            from auto import level_ink as LI
+            p = LI.seg_vote(pr, Pp, cv["ty"], cv["tx"], cv["chain"], Jth)
+        if v in ("V4", "V5"):
             for i0, i1, q in S:
                 if v == "V5" and not q:
                     continue

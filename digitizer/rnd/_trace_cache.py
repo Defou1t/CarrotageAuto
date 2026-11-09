@@ -213,7 +213,8 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "spikeseg": ("spike_seg", str),          # §6.356: уколы — сеть туши; "oof:<каталог>" — сеть фолда скважины листа
                "spikets": ("spike_ts", float),
                "spiketc": ("spike_tc", float),
-               "spikelong": ("spike_long", int)}        # §6.356: и отлёты 4…N строк
+               "spikelong": ("spike_long", int),        # §6.356: и отлёты 4…N строк
+               "levelsegvote": ("level_segvote", float)}   # §6.357: один уровень на отрезок трассы между прыжками (J)
 
 
 def cmd_replay():
@@ -296,6 +297,7 @@ def cmd_replay():
             cfg.cv.name_style_after = False       # ★ 04.10: §6.286 — только явно `nsafter=1`
             cfg.cv.detour = ""                    # §6.355 — только явно `detour=` (и `detourseg=`, `detourtau=`)
             cfg.cv.spike_seg = ""                 # §6.356 — только явно `spikeseg=`
+            cfg.cv.level_segvote = 0.0            # §6.357 — только явно `levelsegvote=`
             for k, v in kw.items():
                 attr, conv = REPLAY_KEYS[k]
                 setattr(cfg.cv, attr, conv(v))

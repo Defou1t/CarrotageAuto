@@ -278,6 +278,30 @@ def _input(f, Lb, nb, dev, cutch=False):
 
 def predict(f, path):
     """→ уровни по позициям (argmax среднего softmax ансамбля)"""
+    return predict_proba(f, path).argmax(0).astype(np.int16)
+
+
+def seg_vote(pr, P, ty, tx, chain, J):
+    """§6.357 (V3 стенда `_level_reset.py`): внутри отрезка трассы между прыжками (размах x на шаге позиций > J·ширины шкалы
+    уровня 0) — один уровень, argmax средних вероятностей отрезка. pr [K, n] → уровни [n]. Уровень не переносится с чужой туши
+    через прыжок и не меняется посреди сплошной линии (разбор 40 серий §6.354). Стенд: поле+вне +17 (p = 0.006), сорт A +1."""
+    ty = np.asarray(ty, np.int64); tx = np.asarray(tx, np.float64); P = np.asarray(P, np.int64)
+    s0 = chain[0]; W0 = abs(s0["x_right"] - s0["x_left"]) or 1.0
+    a = np.searchsorted(ty, P[:-1]); b = np.searchsorted(ty, P[1:], side="right")
+    p = pr.argmax(0).astype(np.int16); start = 0
+    for i in range(len(P) - 1):
+        if b[i] - a[i] < 2:
+            continue
+        seg = tx[a[i]:b[i]]
+        if (seg.max() - seg.min()) / W0 > J:
+            p[start:i + 1] = int(pr[:, start:i + 1].mean(1).argmax()); start = i + 1
+    if start < len(P):
+        p[start:] = int(pr[:, start:].mean(1).argmax())
+    return p
+
+
+def predict_proba(f, path):
+    """→ вероятности уровней [K, n] по позициям (среднее softmax ансамбля; уровни за длиной цепочки — 0)"""
     import torch
     nets, meta, dev = _load(path)
     n = len(f["P"])
@@ -293,7 +317,7 @@ def predict(f, path):
             lo[:, kc:, :] = -1e4
             pr = pr + torch.softmax(lo, dim=1)
         pr = (pr / len(nets))[0, :, :n].cpu().numpy()
-    return pr.argmax(0).astype(np.int16)
+    return pr
 
 
 def needs_cut(path):

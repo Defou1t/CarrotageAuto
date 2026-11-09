@@ -567,7 +567,7 @@ def _spike_pass(seg_spec, model, mapping, get_rgb, out, stem, frame_nlgx=None, t
             pass
 
 
-def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False, cut_spec=""):
+def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, shift=False, cut_spec="", segvote=0.0):
     """§6.266: переразложить уровни масштаба кривых с цепочкой моделью по скану (auto/level_ink.py). Чужие трассы — как в
     готовом файле: записанные нами + DA (прочие слоты рамки вычищены).
     §6.267 (`shift`): у СДВИГОВЫХ цепочек (термометрия) — уровень по гладким участкам трассы, без скана и без torch;
@@ -618,7 +618,10 @@ def _level_ink_pass(spec, model, ifds, ink_jobs, get_gray, set_tag, sheet_name, 
         f = LI.features(gray, paper, fam, c["name"], meta_mod.mnem_root(c["name"]), ty, tx, lw_segs, others, cut=_cf)
         if f is None:
             continue
-        lv = LI.predict(f, path)
+        if segvote > 0:                                 # §6.357: один уровень на отрезок трассы между прыжками
+            lv = LI.seg_vote(LI.predict_proba(f, path), f["P"], ty, tx, fam, segvote)
+        else:
+            lv = LI.predict(f, path)
         tops, bots, levs = LI.segments(f, lv, c["top_y"], c["n_rows"])
         set_tag(ifds, k, 35492, 4, [len(tops)]); set_tag(ifds, k, 35494, 4, tops)
         set_tag(ifds, k, 35496, 4, bots); set_tag(ifds, k, 35498, 4, levs)
@@ -1018,7 +1021,8 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     _ls = bool(getattr(_cvp, "level_shift", False))
     if (_li or _ls) and ink_jobs:
         _level_ink_pass(_li, model, ifds, ink_jobs, _get_gray, set_tag, Path(frame_nlgx).name, shift=_ls,
-                        cut_spec=getattr(_cvp, "level_cut", "") or "")
+                        cut_spec=getattr(_cvp, "level_cut", "") or "",
+                        segvote=float(getattr(_cvp, "level_segvote", 0.0) or 0.0))
 
     data = write_full(ifds)
     dst = out / f"{stem}_auto.nlgx"
