@@ -11,7 +11,10 @@ t0 = time.time()
 for top in os.listdir(ROOT):
     if top in SKIP:
         continue
+    if os.path.isjunction(os.path.join(ROOT, top)):
+        continue                                         # 10.11: junction (intake → data\intake и др.) — тот же файл по двум путям
     for dp, dn, fn in os.walk(os.path.join(ROOT, top)):
+        dn[:] = [d for d in dn if not os.path.isjunction(os.path.join(dp, d))]
         for f in fn:
             if f == "user.session" or f.endswith(".session"):
                 continue                                 # сессия телеграма — не трогать

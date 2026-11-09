@@ -1,9 +1,11 @@
 r"""_dedup_move.py — ЛИШНИЕ КОПИИ В КАРАНТИН (09.11, просьба Эдуарда «оптимизировать место»): по группам дубликатов (одинаковые имя,
 размер, начало и конец — `dups.json` скана) переносит в `_quarantine\<дата>_dups` копию, которую код не читает, и оставляет рабочую:
-  - `data\intake\…` при копии в `intake\…` (код читает `E:\Carrotagki_auto\intake\…`; `data\intake` — прежнее место);
-  - `projects\Archive_incomplete\…` при копии в `data\archive_incomplete\…` (на неё — junction `F:\nds\projects\Archive_incomplete`
-    и `_tiff_lossless.py`).
-Перед переносом — ПОЛНАЯ побайтная сверка с оставляемой копией; `*.session` (сессия телеграма) не трогаются. Перенос в пределах тома —
+  - `data\intake\…` при копии в `intake\…`;
+  - `projects\Archive_incomplete\…` при копии в `data\archive_incomplete\…`.
+⛔ 10.11: ОБА правила на этом томе пустые — `intake` и `projects\Archive_incomplete` это junction'ы на `data\intake` и
+`data\archive_incomplete` (тот же файл по двум путям); 09.11 запуск унёс 2431 единственную копию, всё возвращено. Скрипт оставлен
+с проверкой `samefile` — для настоящих копий.
+Перед переносом — проверка, что оставляемая копия — ДРУГОЙ физический файл (`os.path.samefile`: 09.11 через junction `intake` → `data\intake` «пары» были одним файлом), и ПОЛНАЯ побайтная сверка; `*.session` (сессия телеграма) не трогаются. Перенос в пределах тома —
 переименование (место освободится, когда владелец удалит карантин). Опись — `<карантин>\опись.tsv` (перенесённый, оставленный, размер).
 
   _dedup_move.py --dups <dups.json> [--go]       (без --go — только сводка)
@@ -41,6 +43,8 @@ def main():
     moved = bad = 0; mb = 0; t0 = time.time()
     for i, (src, keep, size) in enumerate(plan, 1):
         try:
+            if os.path.exists(src) and os.path.exists(keep) and os.path.samefile(src, keep):
+                bad += 1; print(f"  ТОТ ЖЕ файл (junction), не дубль: {src}"); continue     # 10.11: так ушли единственные копии
             if not (os.path.exists(src) and os.path.exists(keep)) or os.path.getsize(src) != os.path.getsize(keep) \
                     or not filecmp.cmp(src, keep, shallow=False):
                 bad += 1; print(f"  не совпали / нет: {src}"); continue
