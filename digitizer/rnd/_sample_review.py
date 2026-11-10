@@ -1,9 +1,9 @@
 r"""_sample_review.py — случайная выборка листов: скан + эталон эксперта + выдача прода, вердикт по каждой кривой; разбор промахов (03.11).
 
-Выдача — повтор прода NSE19 ВНЕ ФОЛДА (`taskS/rp_lvl/NSE19`: модели не видели скважину листа) — честная картина для новых сканов.
+Выдача — повтор прода (`--mode`, по умолчанию NSE19) ВНЕ ФОЛДА (`taskS/rp_lvl/<mode>`: модели не видели скважину листа) — честная картина для новых сканов.
 Итоговая оцифровка (`final_2026-10/FINAL`) по листам корпуса завышена (модели учены на всём корпусе) — её вердикт рядом, для сверки.
 Мера — приёмки (plane2 в значениях): функции скопированы из `_name_cost_prod.py` (он исполняется при импорте); полистные счёты
-сверяются с его дампом `rp_lvl_NS_NSE19.pkl` — расхождение = ошибка копии, прогон падает.
+сверяются с его дампом `rp_lvl_NS_<mode>.pkl` — расхождение = ошибка копии, прогон падает.
 
 Причина промаха кривой эталона (первая подходящая):
   верно / верно под другим именем (1:1 внутри трека, как безымянный счёт) / нет кривой с этим именем / уровень масштаба (в пикселях
@@ -28,7 +28,8 @@ import decode_levels as DL
 TS = Path(r"F:/nds/output/taskS")
 POOLS = ["pools", "pools_gate", "pools_wide", "pools_more", "pools_div", "pools_heldout", "pools_all"]
 ARCH = Path(r"F:\nds\projects\Archive")
-OOF = TS / "rp_lvl" / "NSE19"
+MODE = "NSE19"                                    # --mode: какой повтор прода показывать (каталог rp_lvl/<MODE>, дамп rp_lvl_NS_<MODE>.pkl)
+OOF = TS / "rp_lvl" / MODE
 FINAL = Path(r"F:/nds/output/final_2026-10/FINAL")
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
 CATS = ["верно", "верно под другим именем", "нет кривой с этим именем", "уровень масштаба", "нет общей глубины",
@@ -202,7 +203,7 @@ def diagnose(src, got, tr_map):
 
 # ── разложение всех промахов ─────────────────────────────────────────────────────────────────────────────────────────────────
 def population(out):
-    TRACK = load_tracks(); S = eval_sets(); dump = pickle.load(open(TS / "rp_lvl_NS_NSE19.pkl", "rb"))["NSE19"]
+    TRACK = load_tracks(); S = eval_sets(); dump = pickle.load(open(TS / f"rp_lvl_NS_{MODE}.pkl", "rb"))[MODE]
     SRC = {q.name: q for q in ARCH.glob("*/wlg/*.nlgx")}
     rows, bad, n = [], 0, 0
     agg = {k: Counter() for k in list(S) + ["поле+вне"]}
@@ -226,7 +227,7 @@ def population(out):
     (out / "pop_curves.tsv").write_text("\n".join("\t".join(r) for r in
                                         [["часть", "лист", "кривая", "трек", "причина", "d", "cov", "best_d"]] + rows) + "\n",
                                         encoding="utf-8")
-    L = [f"★ листов {n}, сверка с дампом NSE19: {'СОШЛОСЬ' if not bad else f'⛔ {bad} расхождений'}"]
+    L = [f"★ листов {n}, сверка с дампом {MODE}: {'СОШЛОСЬ' if not bad else f'⛔ {bad} расхождений'}"]
     for part in ["поле+вне", "поле", "вне", "сорт A"]:
         c = agg[part]; tot = sum(v for k, v in c.items() if k in CATS)
         L += ["", f"## {part}: кривых эталона {tot}"]
@@ -374,7 +375,7 @@ def sample(out, n, seed):
     import _final_exif                            # load_rgb с разворотом EXIF и починкой пустых полос TIFF (§6.352)
     from dataset_build import find_image
     TRACK = load_tracks(); S = eval_sets(); SRC = {q.name: q for q in ARCH.glob("*/wlg/*.nlgx")}
-    dump = pickle.load(open(TS / "rp_lvl_NS_NSE19.pkl", "rb"))["NSE19"]
+    dump = pickle.load(open(TS / f"rp_lvl_NS_{MODE}.pkl", "rb"))[MODE]
     part = {nm: p for p, SS in S.items() for nm in SS}
     uni = sorted(nm for nm in part if nm in SRC and any((OOF / sheet_dir(nm)).glob("*_auto.nlgx")))
     order = np.random.default_rng(seed).permutation(len(uni))
@@ -425,7 +426,7 @@ def html(out, meta, skipped, seed):
          "color:#111}img{max-width:100%;border:1px solid #ccc}table{border-collapse:collapse}td,th{border:1px solid #ccc;"
          "padding:3px 8px;text-align:left}.ok{color:#080}.bad{color:#c00}h2{margin-top:2.2em}</style>",
          f"<h1>Случайная выборка: {len(meta)} листов (seed {seed})</h1>",
-         "<p>Оцифровка — прод на листах, чью скважину модели не видели (повтор NSE19 вне фолда): так алгоритм поведёт себя на новых "
+         f"<p>Оцифровка — прод на листах, чью скважину модели не видели (повтор {MODE} вне фолда): так алгоритм поведёт себя на новых "
          "сканах. На картинках: толстая полупрозрачная линия — эталон эксперта, тонкая того же цвета — наша кривая под тем же "
          "именем. Мера приёмки: медиана расстояния на плоскости в обе стороны ≤ 3 px, покрытие ≥ 0.9, в значениях шкалы. "
          "«В итоговой выдаче» — тот же лист в итоговой оцифровке архива: её модели видели весь корпус, по листам корпуса она лучше "
@@ -467,7 +468,9 @@ if __name__ == "__main__":
     ap.add_argument("--sample", type=int, default=0)
     ap.add_argument("--seed", type=int, default=20261103)
     ap.add_argument("--html-only", action="store_true")
+    ap.add_argument("--mode", default="NSE19", help="повтор прода: rp_lvl/<mode>, дамп rp_lvl_NS_<mode>.pkl")
     a = ap.parse_args()
+    MODE = a.mode; OOF = TS / "rp_lvl" / MODE
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     if a.pop:
         population(out)

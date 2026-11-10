@@ -13,8 +13,8 @@ $try = 0
 while (-not (Test-Path "$ts/_strict_spikeseg.json") -and $try -lt 3) {
   $try++
   while ((FreeCommitGB) -lt 25) { Start-Sleep -Seconds 60 }
-  Say ("попытка {0}: строгая мера NSE19 + spikeseg / spikeseg2 / spikeseg15 (ЦП, Idle, 2 процесса; свободно выделяемой {1} ГБ)" -f $try, (FreeCommitGB))
-  $p = Start-Process -FilePath $py -ArgumentList @('-I','-X','utf8','_strict_stand.py','--filters','spikeseg','spikeseg2','spikeseg15','--workers','2','--tag','spikeseg') -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$ts/_strict_spikeseg.log" -RedirectStandardError "$ts/_strict_spikeseg.err" -PassThru
+  Say ("попытка {0}: строгая мера NSE19 + spikeseg / spikeseg2 / spikeseg15 (ЦП, Idle, 4 процесса; свободно выделяемой {1} ГБ)" -f $try, (FreeCommitGB))
+  $p = Start-Process -FilePath $py -ArgumentList @('-I','-X','utf8','_strict_stand.py','--filters','spikeseg','spikeseg2','spikeseg15','--workers','4','--tag','spikeseg') -WorkingDirectory $rnd -WindowStyle Hidden -RedirectStandardOutput "$ts/_strict_spikeseg.log" -RedirectStandardError "$ts/_strict_spikeseg.err" -PassThru
   $null = $p.Handle
   try { $p.PriorityClass = 'Idle' } catch {}
   $p.WaitForExit(); Say ("strict_spikeseg: код {0}" -f $p.ExitCode)

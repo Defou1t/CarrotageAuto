@@ -25,7 +25,7 @@ def one(args):
         return nm, part, None, f"{type(e).__name__}"
     LG = {c["name"]: S.lv_rows(c) for c in mt["curves"] if c["name"] in gts}
     LW = {c["name"]: S.lv_rows(c) for c in mw["curves"] if c["name"] in wr}
-    C = Counter(); runlen = []; pos = {"a": [], "b": []}; zero = Counter()
+    C = Counter(); runlen = []; pos = {"a": [], "b": []}; zero = Counter(); TY = Counter()
     ORC = {k: np.zeros(2, int) for k in ("метка", "перо 5×→1×", "перо 1×→5×", "всё")}
     for c in mt["curves"]:
         g = c["name"]
@@ -36,6 +36,8 @@ def one(args):
             continue
         w, gt, lw, lg = wr[g], gts[g], LW.get(g, {}), LG.get(g, {})
         wl = S.relevel(w, lw, lg, ch)
+        _r = abs(ch[1]["v_right"] - ch[1]["v_left"]) / (abs(ch[0]["v_right"] - ch[0]["v_left"]) or 1)
+        typ = "сдвиг" if _r < 1.5 else "перья"
         s0 = ch[0]; x0, x1 = min(s0["x_left"], s0["x_right"]), max(s0["x_left"], s0["x_right"])
         # центрированная цепочка: ноль значения внутри шкалы уровня 0
         v0, v1 = s0["v_left"], s0["v_right"]
@@ -51,6 +53,7 @@ def one(args):
                 continue
             ln += 1
             k = "a" if abs(w[y] - gt[y]) <= 10 else "b"
+            TY[(typ, k)] += 1
             C[(k, lo, lt)] += 1
             pos[k].append((w[y] - x0) / ((x1 - x0) or 1))
             if zx is not None:
@@ -65,6 +68,7 @@ def one(args):
         def meas(w_, lw_):
             S._TREES.clear()
             return bool(S.HON(*S.err(S.relevel(w_, lw_, lg, ch), gt)))
+        ORC_last = meas
         r0 = meas(w, lw)
         for nm_, sel in (("метка", lambda t: t[0] == "a"), ("перо 5×→1×", lambda t: t[0] == "b" and t[1] > t[2]),
                          ("перо 1×→5×", lambda t: t[0] == "b" and t[1] < t[2]), ("всё", lambda t: True)):
@@ -77,8 +81,9 @@ def one(args):
                 if cls[y][0] == "b":
                     w2[y] = gt[y]
             ORC[nm_] += [r0, meas(w2, lw2)]
+            ORC.setdefault(f"{typ}: {nm_}", np.zeros(2, int)); ORC[f"{typ}: {nm_}"] += [r0, ORC_last(w2, lw2) if ys else r0]
     return nm, part, (dict((f"{k}|{a}|{b}", v) for (k, a, b), v in C.items()), runlen, pos, {f"{k}|{z}": v for (k, z), v in zero.items()},
-                      {k: v.tolist() for k, v in ORC.items()}), ""
+                      {k: v.tolist() for k, v in ORC.items()}, {f"{t}|{k}": v for (t, k), v in TY.items()}), ""
 
 
 def main():
@@ -126,8 +131,13 @@ def main():
         if r:
             for k, v in r[4].items():
                 O[k] = O.get(k, np.zeros(2, int)) + np.array(v)
-    for k, v in O.items():
+    for k, v in sorted(O.items()):
         print(f"★ оракул «{k}»: верных приёмкой {v[0]} → {v[1]} ({v[1] - v[0]:+d})")
+    T_ = Counter()
+    for _, _, r, _ in res:
+        if r and len(r) > 5:
+            T_.update(r[5])
+    print("★ строки лишнего уровня по типу цепочки (сдвиг — ширина уровня 1 ≈ уровня 0; перья — ×5 / ×10):", dict(T_))
     za, zb = Z.get("a|True", 0), Z.get("b|True", 0)
     print(f"★ у нуля центрированной цепочки (± 10% ширины): та же тушь {za} из {Z.get('a|True', 0) + Z.get('a|False', 0)}, "
           f"другая {zb} из {Z.get('b|True', 0) + Z.get('b|False', 0)}")
