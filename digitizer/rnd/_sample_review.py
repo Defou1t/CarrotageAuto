@@ -397,6 +397,8 @@ def sample(out, n, seed):
         fin = next(iter(sorted((FINAL / sheet_dir(nm)).glob("*_auto.nlgx"))), None)
         fcnt = diagnose(src, fin, TRACK.get(nm, {}))[2] if fin else None
         mt, mw, gts, wr = curves(src, got)
+        if not gts:                               # у эталона нет плотных кривых (только пустые / NULL) — показывать нечего
+            picked.pop(); skipped.append((nm, "у эталона нет кривых с точками")); continue
         rgb = _final_exif.load_rgb(str(img))
         tag = f"{len(picked):02d}"
         title = (f"{tag}. {nm}  ({part[nm]}, скв. {src.parent.parent.name})  — верно {cnt[0]} из {cnt[2]}"
