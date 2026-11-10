@@ -214,7 +214,10 @@ REPLAY_KEYS = {"rdpick": ("rowdec_pick", int), "rdmodel": ("rowdec_pick_model", 
                "spikets": ("spike_ts", float),
                "spiketc": ("spike_tc", float),
                "spikelong": ("spike_long", int),        # §6.356: и отлёты 4…N строк
-               "levelsegvote": ("level_segvote", float)}   # §6.357: один уровень на отрезок трассы между прыжками (J)
+               "levelsegvote": ("level_segvote", float),   # §6.357: один уровень на отрезок трассы между прыжками (J)
+               "lcnodup": ("lc_nodup", float),          # §6.359: выбор трассы без дублей — порог доли совпавших строк
+               "lcnoduptau": ("lc_nodup_tau", float),   # §6.359: мин. P замены у слота-дубля
+               "lcnoduprule": ("lc_nodup_rule", str)}   # §6.359: кого переносить — p / sum
 
 
 def cmd_replay():
@@ -298,6 +301,9 @@ def cmd_replay():
             cfg.cv.detour = ""                    # §6.355 — только явно `detour=` (и `detourseg=`, `detourtau=`)
             cfg.cv.spike_seg = ""                 # §6.356 — только явно `spikeseg=`
             cfg.cv.level_segvote = 0.0            # §6.357 — только явно `levelsegvote=`
+            cfg.cv.lc_nodup = 0.0                 # §6.359 — только явно `lcnodup=`
+            cfg.cv.lc_nodup_tau = 0.05
+            cfg.cv.lc_nodup_rule = "p"
             for k, v in kw.items():
                 attr, conv = REPLAY_KEYS[k]
                 setattr(cfg.cv, attr, conv(v))

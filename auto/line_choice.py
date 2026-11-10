@@ -13,6 +13,7 @@ r"""line_choice.py — ВЫБОР ТРАССЫ ДЛЯ СЛОТА СРЕДИ КА
 раскладка не меняется, и об этом говорится вслух.
 """
 import json
+import os
 import re
 from pathlib import Path
 
@@ -198,7 +199,7 @@ def _clusters(CS):
     return lab
 
 
-def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
+def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None, nodup=None):
     """§6.283: два яруса + назначение 1:1 по листу (как `digitizer/rnd/_line_choice_assign.py --feat stack --extra`).
     → {имя слота: индекс кандидата или None (слот опустел: его трассу забрал другой слот)}."""
     from scipy.optimize import linear_sum_assignment
@@ -321,10 +322,111 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None):
         else:
             i = max([i for i in by[si] if cl[ROWS[i][1]] == new], key=lambda i: P[i])
             out[slots[si][0]] = (ROWS[i][1], float(P[i]))
+    if nodup is not None:
+        _nodup(slots, by, ROWS, P, cl, out, *nodup)
     return out
 
 
-def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None, segfam=None):
+def _arr(d):
+    ys = np.fromiter(d.keys(), np.int64, len(d)); xs = np.fromiter(d.values(), np.float64, len(d))
+    o = np.argsort(ys)
+    return ys[o], xs[o]
+
+
+def _ovl(a, b, tol=3.0):
+    """доли строк a и b, где другая трасса ближе tol px (по общим строкам)"""
+    cm, ia, ib = np.intersect1d(a[0], b[0], assume_unique=True, return_indices=True)
+    if not len(cm):
+        return 0.0, 0.0
+    k = int(np.sum(np.abs(a[1][ia] - b[1][ib]) <= tol))
+    return k / max(1, len(a[0])), k / max(1, len(b[0]))
+
+
+def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p"):
+    """§6.359: после назначения 1:1 — слоты, чьи трассы совпадают (≤ 3 px) на доле строк ≥ θ (любой из двух): один из пары берёт
+    лучшего своего кандидата с P ≥ τ2, который ни с одним другим слотом не совпадает на ≥ θ и не из занятого кластера. Кого
+    переносить: rule "p" — слот с меньшей P; "sum" — вариант с большей суммой P пары. Нет замены — как есть. Меняет `out` (≤ 3 прохода)."""
+    A = {}
+    def arr_k(k):
+        if k not in A:
+            A[k] = _arr(dense[k]) if len(dense[k]) else None
+        return A[k]
+    fin = {}                                              # si → (кандидат или None, массивы трассы, P)
+    for si in sorted(by):
+        name = slots[si][0]
+        if name in out:
+            k, p = out[name]
+            if k is not None:
+                fin[si] = (k, arr_k(k), p)
+            continue
+        here = [i for i in by[si] if ROWS[i][3]]
+        if here:
+            i = max(here, key=lambda i: P[i]); fin[si] = (ROWS[i][1], arr_k(ROWS[i][1]), float(P[i]))
+        elif name in written and len(written[name]) >= 50:
+            fin[si] = (None, _arr(written[name]), 0.0)
+    for si, (name, *_r) in enumerate(slots):              # слоты без строк назначения — только как препятствие
+        if si not in fin and si not in by and name in written and len(written[name]) >= 50:
+            fin[si] = (None, _arr(written[name]), 1.0)
+    for _ in range(3):
+        conf = []
+        keys = sorted(fin)
+        for a_ in range(len(keys)):
+            for b_ in range(a_ + 1, len(keys)):
+                si, sj = keys[a_], keys[b_]
+                fa, fb = _ovl(fin[si][1], fin[sj][1])
+                if max(fa, fb) >= theta:
+                    conf.append((max(fa, fb), si, sj, fa, fb))
+        if not conf:
+            break
+        def alt(lo):
+            """лучший кандидат слота lo с P ≥ τ2, не совпадающий ни с одним другим слотом и не из занятого кластера"""
+            if lo not in by:
+                return None
+            taken = {cl[fin[s][0]] for s in fin if s != lo and fin[s][0] is not None}
+            for i in sorted(by[lo], key=lambda i: -P[i]):
+                k = ROWS[i][1]
+                if P[i] < tau2:
+                    return None
+                if k == fin[lo][0] or cl[k] in taken or arr_k(k) is None:
+                    continue
+                if all(max(_ovl(arr_k(k), fin[s][1])) < theta for s in fin if s != lo):
+                    return i
+            return None
+        moved = False
+        for _m, si, sj, fa, fb in sorted(conf, reverse=True):
+            fa2, fb2 = _ovl(fin[si][1], fin[sj][1])       # пара могла разойтись после прежних замен этого прохода
+            if max(fa2, fb2) < theta:
+                continue
+            # кого переносить: вариант с большей суммой P пары (как цель назначения 1:1); у трассы без строк назначения P = 0
+            opts = []
+            if rule == "sum":                             # кого переносить — вариант с большей суммой P пары
+                for lo, hi in ((si, sj), (sj, si)):
+                    i = alt(lo)
+                    if i is not None:
+                        opts.append((float(P[i]) + fin[hi][2], lo, i))
+            else:                                         # "p": переносится слот с меньшей P (при равенстве — с большей долей совпадения)
+                lo = si if (fin[si][2], -fa2) < (fin[sj][2], -fb2) else sj
+                i = alt(lo)
+                if i is not None:
+                    opts.append((float(P[i]), lo, i))
+            if not opts:
+                continue
+            _s, lo, best = max(opts)
+            k = ROWS[best][1]
+            if os.environ.get("NDS_NODUP_LOG"):            # отладка стенда §6.359
+                with open(os.environ["NDS_NODUP_LOG"], "a", encoding="utf-8") as _f:
+                    _f.write(json.dumps({"pair": [slots[si][0], slots[sj][0]], "frac": [round(fa2, 3), round(fb2, 3)],
+                                         "p": [round(fin[si][2], 3), round(fin[sj][2], 3)],
+                                         "opts": [[round(o[0], 3), slots[o[1]][0], int(ROWS[o[2]][1]), round(float(P[o[2]]), 3)] for o in opts],
+                                         "moved": slots[lo][0], "k": int(k)}, ensure_ascii=False) + chr(10))
+            fin[lo] = (k, arr_k(k), float(P[best]))
+            out[slots[lo][0]] = (k, float(P[best]))
+            moved = True
+        if not moved:
+            break
+
+
+def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None, segfam=None, nodup=0.0, nodup_tau=0.05, nodup_rule="p"):
     """slots — [(имя, top_y, n_rows, (xl, xr))] в порядке рамки (только слоты с цепочкой шкал);
     cands — [dict(src, tr — исходная трасса, dense, style, rough)];
     written — [(имя, плотная записанная трасса)] в порядке рамки (что стоит в слотах сейчас).
@@ -375,7 +477,9 @@ def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, 
                 _announce("⚠ модель выбора трассы ждёт признак по семействам (§6.350), а `line_choice_segfam` не задан — признак пуст")
             for c_, v_ in zip(CS, sm_):
                 c_["segfam"] = v_
-        return _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales)
+        out = _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales,
+                            nodup=(nodup, nodup_tau, [c["dense"] for c in cands], dict(written), nodup_rule) if nodup > 0 else None)
+        return out
     model, fams, tau, dlt = ck["model"], dict(ck["fams"]), ck["tau"], ck["delta"]
     # занятость: кандидат стоит в слоте, если x совпадает в 1 px на ≥ 90% общих строк (как в стенде по файлам выдачи)
     used = {}
