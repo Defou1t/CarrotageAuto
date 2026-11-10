@@ -128,7 +128,7 @@ def stand(a):
     W_ = {}
     for (nm, g, ci, a_, b_, x, y, fd), p in zip(rows, P):
         W_.setdefault(nm, {}).setdefault(g, []).append((float(p), ci, a_, b_))
-    TG = [(t_, g_) if g_ else t_ for t_ in a.tau for g_ in a.guard]
+    TG = [(t_, g_, o_) if o_ else ((t_, g_) if g_ else t_) for t_ in a.tau for g_ in a.guard for o_ in a.occ]
     jobs = [(nm, r["part"], SRC[nm], next(iter(sorted((S.OOF / S.sheet_dir(nm)).glob("*_auto.nlgx"))), None), nm in fld,
              W_.get(nm, {}), TG) for nm, r in D.items()]
     jobs = [j for j in jobs if j[3] is not None]
@@ -171,7 +171,7 @@ def eval_sheet(args):
     LG = {c["name"]: S.lv_rows(c) for c in mt["curves"] if c["name"] in gts}
     CH = {c["name"]: DL.build_family(mt, c) for c in mt["curves"] if c["name"] in gts}
     LW = {c["name"]: S.lv_rows(c) for c in mw["curves"] if c["name"] in wr}
-    from auto.detour import take, jump_ok
+    from auto.detour import take, jump_ok, occ_ok
     out = {tau: [np.zeros(8), 0, 0] for tau in taus}
     for g, gt in gts.items():
         if g not in wr:
@@ -179,9 +179,10 @@ def eval_sheet(args):
         w = wr[g]; lw, lg, ch = LW.get(g, {}), LG.get(g, {}), CH.get(g, [])
         r0 = _measure(S, T, w, gt, lw, lg, ch)
         for tau in taus:                                  # τ или (τ, G) — G: запрет прыжка, `auto.detour.jump_ok`
-            t_, G = tau if isinstance(tau, tuple) else (tau, 0)
+            t_, G, O = (tuple(tau) + (0,) * 3)[:3] if isinstance(tau, tuple) else (tau, 0, 0)
             w2 = dict(w)
-            taken = take(Wn.get(g, []), t_, ok=lambda ci, a_, b_: jump_ok(w, C[ci], a_, b_, G))
+            oth = [wr[g2] for g2 in wr if g2 != g] if O else []
+            taken = take(Wn.get(g, []), t_, ok=lambda ci, a_, b_: jump_ok(w, C[ci], a_, b_, G) and occ_ok(C[ci], oth, a_, b_, O))
             for ci, a_, b_ in taken:
                 t = C[ci]
                 for yy in range(a_, b_ + 1):
@@ -203,5 +204,6 @@ if __name__ == "__main__":
     ap.add_argument("--out-dir", default=str(OUT))
     ap.add_argument("--fit-only", action="store_true", help="только модели (фолды, все, прод) — без меры")
     ap.add_argument("--guard", type=float, nargs="+", default=[0], help="запрет прыжка куска кандидата > G px (0 — без)")
+    ap.add_argument("--occ", type=float, nargs="+", default=[0], help="§6.360: запрет куска на линии другой кривой выдачи — доля строк ≥ O (0 — без)")
     a = ap.parse_args()
     extract(a) if a.cmd == "extract" else stand(a)

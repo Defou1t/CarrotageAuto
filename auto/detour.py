@@ -191,6 +191,18 @@ def jump_ok(w, t, a, b, G):
     return m1 <= max(G, m0)
 
 
+def occ_ok(t, others, a, b, O, tol=3.0):
+    """§6.360 (разбор выборки §6.358, 24 GZ11): кусок кандидата t на [a, b] не ложится на линию, которую ведёт другая кривая выдачи:
+    доля строк куска, где какая-то из `others` (плотные трассы {y: x}) ближе tol px, < O; O ≤ 0 — без запрета"""
+    if O <= 0 or not others:
+        return True
+    ys = [y for y in range(a, b + 1) if y in t]
+    if not ys:
+        return True
+    hit = sum(1 for y in ys if any(y in o and abs(o[y] - t[y]) <= tol for o in others))
+    return hit < O * len(ys)
+
+
 def resolve(spec, sheet=None):
     """модель: имя в auto/models, путь, или «oof:<каталог>» — модель фолда листа (`detour_folds.json`; иначе `detour_all.pkl`)"""
     if not spec:
