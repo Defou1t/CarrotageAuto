@@ -319,7 +319,7 @@ def _level_segments(tr, model, curve, top_y, n, gray=None):
         return single
 
 
-def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name, out, stem, tag="namestyle"):
+def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name, out, stem, tag="namestyle", only=None, tau=None):
     """§6.273: стиль каждой кривой (вдоль трассы, как её запишет цикл ниже) → парная модель «какой стиль какому имени» в
     треке → перестановки трасс между слотами (меняется `mapping` на месте). Перестановки — в `<stem>_namestyle.json`."""
     from . import name_style as NS, level_ink as LI
@@ -359,7 +359,7 @@ def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name,
     path = NS.resolve(spec, sheet=sheet_name)
     if path is None:
         return
-    sw = NS.swaps(entries, sheet_name, path, meta_mod.mnem_root, chains=chains)
+    sw = NS.swaps(entries, sheet_name, path, meta_mod.mnem_root, chains=chains, tau=tau, only=only)
     for A, B, p in sw:
         mapping[A], mapping[B] = mapping[B], mapping[A]
     if sw:
@@ -443,8 +443,9 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
                 segfam = (_FR.apply_row_shift(rgb, _rs), _sp2)
             else:
                 segfam = (rgb, _sp2)
+    info_ = {}
     rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root, scales=scales, look=(gray, paper), seg=seg,
-                     segfam=segfam, nodup=nodup, nodup_tau=nodup_tau, nodup_rule=nodup_rule)
+                     segfam=segfam, nodup=nodup, nodup_tau=nodup_tau, nodup_rule=nodup_rule, info=info_)
     for name, (k, p) in rep_.items():
         if k is None:                                   # §6.283: трассу слота забрал другой слот, своей нет — слот пуст
             mapping.pop(name, None)
@@ -457,6 +458,7 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
                 ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
+    return info_.get("pairs", [])                       # §6.361: пары, раздвинутые `line_choice._nodup`
 
 
 def _detour_pass(spec, seg_spec, tau, model, mapping, traces, get_rgb, sheet_name, out, stem, frame_nlgx=None, jump=0.0):
@@ -940,12 +942,19 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     # ★★ 04.10 (§6.280): ВЫБОР ТРАССЫ ДЛЯ СЛОТА среди кандидатов ведения (прод-путь + декодер) — после перестановки имён, как
     #   на стенде. Стенд: поле +24 (25 / 1), сорт A +8.
     _lcp = getattr(_cvp0, "line_choice", "") or ""
+    _lcpairs = []
     if _lcp:
-        _line_choice_pass(_lcp, model, mapping, traces, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem,
+        _lcpairs = _line_choice_pass(_lcp, model, mapping, traces, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem,
                           seg_spec=getattr(_cvp0, "line_choice_seg", "") or "", frame=frame, frame_nlgx=frame_nlgx,
                           segfam_spec=getattr(_cvp0, "line_choice_segfam", "") or "",
                           nodup=float(getattr(_cvp0, "lc_nodup", 0.0) or 0.0), nodup_tau=float(getattr(_cvp0, "lc_nodup_tau", 0.05)),
-                          nodup_rule=getattr(_cvp0, "lc_nodup_rule", "p") or "p")
+                          nodup_rule=getattr(_cvp0, "lc_nodup_rule", "p") or "p") or []
+    # §6.361: пары слотов, раздвинутые выбором без дублей, — какому слоту какая из двух трасс, решает модель имён по стилю
+    #   (меняет местами, если P(порядок верен) < cv.lc_nodup_names; 0 — выкл.)
+    _lnn = float(getattr(_cvp0, "lc_nodup_names", 0.0) or 0.0)
+    if _nsp and _lcpairs and _lnn > 0:
+        _name_style_pass(_nsp, model, frame, mapping, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem, tag="namestyle_nodup",
+                         only={frozenset(p_) for p_ in _lcpairs}, tau=1.0 - _lnn)
     # ★ 04.10 (§6.286): имена по стилю ЕЩЁ РАЗ, уже по трассам после выбора (перестановки — в `<лист>_namestyle2.json`)
     if _nsp and _lcp and getattr(_cvp0, "name_style_after", False):
         _name_style_pass(_nsp, model, frame, mapping, _get_gray, _get_rgb, Path(frame_nlgx).name, out, stem, tag="namestyle2")

@@ -176,9 +176,9 @@ def _load(path):
     return _CACHE[key]
 
 
-def swaps(entries, sheet, path, root_of, tau=None, chains=None):
+def swaps(entries, sheet, path, root_of, tau=None, chains=None, only=None):
     """entries — [(имя, трек, стиль)] (стиль None — кривая не участвует) → [(A, B, P)] перестановок имён;
-    chains — имя → цепочка шкал (нужна модели с `vals`)"""
+    chains — имя → цепочка шкал (нужна модели с `vals`); only — §6.361: только эти пары имён (множество frozenset)"""
     ck = _load(path)
     chains = (chains or {}) if ck.get("vals") else None
     model, fams = ck["model"], dict(ck["fams"])
@@ -193,6 +193,8 @@ def swaps(entries, sheet, path, root_of, tau=None, chains=None):
         for i in range(len(L)):
             for j in range(i + 1, len(L)):
                 A, sa = L[i]; B, sb = L[j]
+                if only is not None and frozenset((A, B)) not in only:
+                    continue
                 p = float(model.predict_proba(np.array([feat(sa, sb, A, B, sheet, fams, root_of, chains)], float))[0, 1])
                 if p < 1 - tau:
                     cand.append((p, A, B))

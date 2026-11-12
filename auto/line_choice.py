@@ -342,7 +342,7 @@ def _ovl(a, b, tol=3.0):
     return k / max(1, len(a[0])), k / max(1, len(b[0]))
 
 
-def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p"):
+def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", info=None):
     """§6.359: после назначения 1:1 — слоты, чьи трассы совпадают (≤ 3 px) на доле строк ≥ θ (любой из двух): один из пары берёт
     лучшего своего кандидата с P ≥ τ2, который ни с одним другим слотом не совпадает на ≥ θ и не из занятого кластера. Кого
     переносить: rule "p" — слот с меньшей P; "sum" — вариант с большей суммой P пары. Нет замены — как есть. Меняет `out` (≤ 3 прохода)."""
@@ -421,12 +421,14 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p"):
                                          "moved": slots[lo][0], "k": int(k)}, ensure_ascii=False) + chr(10))
             fin[lo] = (k, arr_k(k), float(P[best]))
             out[slots[lo][0]] = (k, float(P[best]))
+            if info is not None:                          # §6.361: пары, раздвинутые здесь — имена им решит стиль
+                info.setdefault("pairs", []).append((slots[si][0], slots[sj][0]))
             moved = True
         if not moved:
             break
 
 
-def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None, segfam=None, nodup=0.0, nodup_tau=0.05, nodup_rule="p"):
+def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None, segfam=None, nodup=0.0, nodup_tau=0.05, nodup_rule="p", info=None):
     """slots — [(имя, top_y, n_rows, (xl, xr))] в порядке рамки (только слоты с цепочкой шкал);
     cands — [dict(src, tr — исходная трасса, dense, style, rough)];
     written — [(имя, плотная записанная трасса)] в порядке рамки (что стоит в слотах сейчас).
@@ -478,7 +480,7 @@ def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, 
             for c_, v_ in zip(CS, sm_):
                 c_["segfam"] = v_
         out = _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales,
-                            nodup=(nodup, nodup_tau, [c["dense"] for c in cands], dict(written), nodup_rule) if nodup > 0 else None)
+                            nodup=(nodup, nodup_tau, [c["dense"] for c in cands], dict(written), nodup_rule, info) if nodup > 0 else None)
         return out
     model, fams, tau, dlt = ck["model"], dict(ck["fams"]), ck["tau"], ck["delta"]
     # занятость: кандидат стоит в слоте, если x совпадает в 1 px на ≥ 90% общих строк (как в стенде по файлам выдачи)

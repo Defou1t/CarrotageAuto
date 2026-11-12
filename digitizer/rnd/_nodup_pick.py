@@ -19,6 +19,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--modes", nargs="+", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--need", nargs="*", default=["сорт A"], help="части, где именных Δ ≥ 0 обязательно (§6.361: вне и сорт A)")
     a = ap.parse_args()
     R = {}
     for m in a.modes:
@@ -35,7 +36,7 @@ def main():
     best = max(R, key=lambda m: (R[m][("поле+вне", "именных")][0], -R[m][("поле+вне", "именных")][1]))
     d = R[best]
     ok = (d[("поле+вне", "именных")][0] >= 15 and d[("поле+вне", "именных")][1] < 0.01 and d[("поле+вне", "безымянных")][0] >= 0
-          and d[("сорт A", "именных")][0] >= 0)
+          and all(d[(pt, "именных")][0] >= 0 for pt in a.need))
     print(f"★ лучший {best}: критерий стенда §6.359 {'ВЗЯТ — в полный A/B' if ok else 'НЕ ВЗЯТ'}")
     if ok:
         tmp = Path(a.out + ".tmp"); tmp.write_text(best + "\n", encoding="utf-8"); tmp.replace(a.out)
