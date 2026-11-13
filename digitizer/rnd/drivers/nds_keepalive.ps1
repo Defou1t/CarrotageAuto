@@ -55,7 +55,8 @@ $jobs = @(
   @{ task='nds_nodup';        log='F:\nds\output\taskS\_nodup.log';        done='=== NODUP DONE ===' },
   @{ task='nds_nodupn';       log='F:\nds\output\taskS\_nodupn.log';       done='=== NODUPN DONE ===' },
   @{ task='nds_nodupx';       log='F:\nds\output\taskS\_nodupx.log';       done='=== NODUPX DONE ===' },
-  @{ task='nds_final_exif2';  log='F:\nds\output\taskS\_final_exif2.log';  done='=== FINAL EXIF2 DONE ===' }
+  @{ task='nds_final_exif2';  log='F:\nds\output\taskS\_final_exif2.log';  done='=== FINAL EXIF2 DONE ===' },
+  @{ task='nds_nse26';        log='F:\nds\output\taskS\_nse26.log';        done='=== NSE26 DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue

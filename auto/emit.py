@@ -887,15 +887,31 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         mapping = merged
     ifds = read_full(open(frame_nlgx, "rb").read())
 
-    def curve_pred(short):
+    def curve_pred(short, exact=False):
         def is_this(tags):
             if 34768 not in tags or struct.unpack("<I", tags[34768][2][:4])[0] != 7:
                 return False
             if 35470 not in tags:
                 return False
             nm = tags[35470][2].split(b"\x00")[0].decode("latin1")
-            return nm == short or nm.startswith(short.split()[0] + " ")
+            return nm == short or (not exact and nm.startswith(short.split()[0] + " "))
         return is_this
+
+    # ★ 13.11 (выборка 13.11, лист 03): IFD кривой — СНАЧАЛА по точному имени. Прежде — первый IFD с тем же первым словом имени:
+    #   при повторе слова (NGK1 DA1 / NGK1 DA2, GZ41 SA3 / SA4, BKZ1 SA1–SA3) трасса второго слота писалась в IFD первого, а его
+    #   IFD не писался и не чистился (на стенде там оставалась трасса эксперта — ложное «верно»; в проде слот пуст или чужой).
+    #   По первому слову — только если точного нет и IFD не принадлежит точно другой кривой модели.
+    _exact_own = {}
+    for _c in model.get("curves", []):
+        _ix = find_ifd(ifds, curve_pred(_c["name"], exact=True))
+        if _ix:
+            _exact_own[_c["name"]] = _ix
+    _taken_exact = {k for v in _exact_own.values() for k in v}
+
+    def ifd_of(name):
+        if name in _exact_own:
+            return _exact_own[name]
+        return [k for k in find_ifd(ifds, curve_pred(name)) if k not in _taken_exact]
 
     # gray скана грузим ЛЕНИВО и ОДИН раз — только если есть MBK-кривая (для image off-scale
     # декода уровней). Большие сканы (до 62k px) не грузим зря.
@@ -998,7 +1014,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         new_xs = [int(round(tr[top_y + i])) if (top_y + i) in tr else NULL for i in range(n)]
         if sum(1 for x in new_xs if x != NULL) < 30:
             continue
-        idxs = find_ifd(ifds, curve_pred(name))
+        idxs = ifd_of(name)
         if not idxs:
             continue
         k = idxs[0]
@@ -1028,7 +1044,7 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
     for c in model.get("curves", []):
         if meta_mod.mnem_root(c.get("name", "")) == "DA":       # ось глубин — не трасса, не трогаем
             continue
-        idxs = find_ifd(ifds, curve_pred(c["name"]))
+        idxs = ifd_of(c["name"])
         if not idxs or idxs[0] in wrote_ifd:
             continue
         k = idxs[0]
