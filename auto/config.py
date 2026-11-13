@@ -181,7 +181,8 @@ class CVParams:
     #   другим слотом (`auto.line_choice._nodup`). 0 — выкл. ⚠ ДО A/B — 0. Повтор: `lcnodup=`, `lcnoduptau=`.
     lc_nodup: float = 0.0
     lc_nodup_tau: float = 0.05
-    lc_nodup_rule: str = "p"                # "p" — уступает слот с меньшей P; "sum" — по сумме P пары
+    lc_nodup_rule: str = "p"                # "p" — уступает слот с меньшей P; "sum" — по сумме P пары; "agree" (§6.363) — по сумме,
+                                            #   но только если переносимый слот не вероятнее второго на общей линии; "arb" — арбитр
     # §6.361: имена пар, раздвинутых §6.359, — по модели стиля (`name_style`): обмен трассами, если P(порядок верен) < порога;
     #   0 — выкл. ⚠ ДО A/B — 0. Повтор: `lcnodupnames=`.
     lc_nodup_names: float = 0.0

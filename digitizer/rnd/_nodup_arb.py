@@ -136,15 +136,54 @@ def train(a):
     print(f"★ модели: фолды 0–{K - 1} + all, запас {a.margin}; карта фолдов — {len(D['folds'])} листов стенда → {OUT}")
 
 
+def rules(a):
+    """простые правила на признаках журнала: Δ именных против «как есть» и против ДО"""
+    D = pickle.load(open(OUT / "data.pkl", "rb")); R = D["rows"]; F = {k: i for i, k in enumerate(D["feats"])}
+    if a.part != "all":                            # §6.363: разработка — листы `dev_sheets.json` (журнал на 13.11 08:05), отложенные — прочие
+        dev = set(json.loads((OUT / "dev_sheets.json").read_text(encoding="utf-8")))
+        R = [r for r in R if (r["sheet"] in dev) == (a.part == "dev")]
+        print(f"★ часть: {a.part}")
+    keep = np.array([r["keep"] for r in R]); cur = np.array([r["cur"] for r in R]); swp = np.array([r["swp"] for r in R])
+    X = np.array([r["x"] for r in R], float)
+    g = lambda k: X[:, F[k]]
+    print(f"★ пар {len(R)}: ДО {keep.sum()}, как есть {cur.sum()}, обмен {swp.sum()}")
+    def show(name, mask_keep=None, mask_swp=None):
+        ch = np.ones(len(R), int)
+        if mask_keep is not None:
+            ch[np.nan_to_num(mask_keep).astype(bool)] = 0
+        if mask_swp is not None:
+            ch[np.nan_to_num(mask_swp).astype(bool) & (ch == 1)] = 2
+        val = np.choose(ch, [keep, cur, swp])
+        print(f"  {name:58s} не раздв. {int((ch == 0).sum()):4d}, обмен {int((ch == 2).sum()):4d} → против как есть {val.sum() - cur.sum():+4d}, "
+              f"против ДО {val.sum() - keep.sum():+4d}")
+    nohi = g("has_alt_hi") == 0
+    show("у hi нет альтернативы → не раздвигать", nohi)
+    show("P(lo) > P(hi) на общей → не раздвигать", g("p_lo") > g("p_hi"))
+    show("P(lo) > P(hi) на общей → обмен", None, g("p_lo") > g("p_hi"))
+    show("нет альтернативы у hi и P(lo) > P(hi) → не раздвигать", nohi & (g("p_lo") > g("p_hi")))
+    show("lo не сменён 1:1, hi сменён → не раздвигать", (g("chg_lo") == 0) & (g("chg_hi") == 1))
+    show("lo не сменён 1:1, hi сменён → обмен", None, (g("chg_lo") == 0) & (g("chg_hi") == 1))
+    show("исходная трасса lo на общей (wov ≥ 0.5), hi нет (< 0.2) → не раздв.", (g("wov_lo") >= 0.5) & (g("wov_hi") < 0.2))
+    show("исходная трасса lo на общей (wov ≥ 0.5), hi нет (< 0.2) → обмен", None, (g("wov_lo") >= 0.5) & (g("wov_hi") < 0.2))
+    show("P альтернативы lo < 0.2 → не раздвигать", g("palt_lo") < 0.2)
+    show("P альтернативы lo < 0.1 → не раздвигать", g("palt_lo") < 0.1)
+    show("общая — первый кандидат lo (rank 0), у hi нет → не раздв.", (g("rank_lo") == 0) & (g("rank_hi") > 0))
+    for k in ("chg", "wov", "rank", "own"):
+        lo_, hi_ = g(k + "_lo"), g(k + "_hi")
+        print(f"    {k}: lo {np.nanmean(lo_):.2f} / hi {np.nanmean(hi_):.2f}; ДО (1,0) lo {np.nanmean(lo_[(keep >= 1) & (cur < keep)]):.2f} "
+              f"hi {np.nanmean(hi_[(keep >= 1) & (cur < keep)]):.2f}; выигрыш lo {np.nanmean(lo_[cur > keep]):.2f} hi {np.nanmean(hi_[cur > keep]):.2f}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["build", "oof", "train"])
+    ap.add_argument("cmd", choices=["build", "oof", "train", "rules"])
     ap.add_argument("--with-scan", action="store_true")
     ap.add_argument("--imp", action="store_true")
     ap.add_argument("--margin", type=float, default=0.2)
+    ap.add_argument("--part", default="all", choices=["all", "dev", "hold"])
     ap.add_argument("--log", default="NDY3", help="журнал повтора: NDX3 (первый) / NDY3 (расширенный)")
     a = ap.parse_args()
-    {"build": build, "oof": oof, "train": train}[a.cmd](a)
+    {"build": build, "oof": oof, "train": train, "rules": rules}[a.cmd](a)
 
 
 if __name__ == "__main__":

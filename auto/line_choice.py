@@ -400,7 +400,7 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", i
                 continue
             # кого переносить: вариант с большей суммой P пары (как цель назначения 1:1); у трассы без строк назначения P = 0
             opts = []
-            if rule in ("sum", "arb"):                    # кого переносить — вариант с большей суммой P пары («arb» — так же, решает арбитр)
+            if rule in ("sum", "arb", "agree"):           # кого переносить — вариант с большей суммой P пары («arb», «agree» — так же, см. ниже)
                 for lo, hi in ((si, sj), (sj, si)):
                     i = alt(lo)
                     if i is not None:
@@ -457,6 +457,8 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", i
             if _dec == "keep":                            # §6.363: арбитр — не раздвигать
                 continue
             hi = sj if lo == si else si
+            if rule == "agree" and fin[lo][2] > fin[hi][2]:   # §6.363: «sum» и «p» не согласны (переносимый — вероятнее владелец) — не раздвигать
+                continue
             if _dec == "swp" and hi in by:                # §6.363: обмен — lo остаётся на общей линии, его альтернативу берёт hi
                 p_hk = _p_on(hi, k)
                 fin[hi] = (k, arr_k(k), float(p_hk if p_hk is not None else P[best]))
