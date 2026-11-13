@@ -75,7 +75,7 @@ def add_failed(out, sheets, pat):
             p = line.split("\t")
             if len(p) >= 3:
                 st[p[0]] = p[2]
-    base = Path(sheets).read_text(encoding="utf-8").split()
+    base = [l.strip() for l in Path(sheets).read_text(encoding="utf-8").splitlines() if l.strip()]   # 13.11: имена с пробелами
     add = sorted(n for n, s in st.items() if any(x in s for x in pat.split("|")) and n not in base)
     new = Path(sheets).with_name(Path(sheets).stem + "_run.txt")
     new.write_text("\n".join(base + add) + "\n", encoding="utf-8")
@@ -85,7 +85,7 @@ def add_failed(out, sheets, pat):
 
 def requeue(out, sheets, q):
     import _final_run
-    for n in Path(sheets).read_text(encoding="utf-8").split():
+    for n in [l.strip() for l in Path(sheets).read_text(encoding="utf-8").splitlines() if l.strip()]:   # 13.11: имена с пробелами
         d = Path(out) / _final_run.sheet_dir(Path(n))
         if not d.is_dir():
             continue
