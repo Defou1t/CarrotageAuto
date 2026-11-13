@@ -905,11 +905,15 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         if not _gray["loaded"]:
             _gray["loaded"] = True
             try:
-                if image:
-                    from PIL import Image as _Im
-                    _Im.MAX_IMAGE_PIXELS = None
-                    import numpy as _np
-                    _gray["arr"] = _np.asarray(_Im.open(image).convert("L"))
+                if image:                               # §6.352: та же система, что у ведения (разворот EXIF, починка TIFF)
+                    from . import imaging as _IMG
+                    if _IMG.EXIF_TRANSPOSE:
+                        _gray["arr"] = _IMG.load_gray(image)
+                    else:                               # повтор стенда — чтение как до §6.352 (так собраны кэши и база A/B)
+                        from PIL import Image as _Im
+                        _Im.MAX_IMAGE_PIXELS = None
+                        import numpy as _np
+                        _gray["arr"] = _np.asarray(_Im.open(image).convert("L"))
             except Exception:
                 _gray["arr"] = None
         return _gray["arr"]
@@ -920,11 +924,15 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         if not _rgb["loaded"]:
             _rgb["loaded"] = True
             try:
-                if image:
-                    from PIL import Image as _Im
-                    _Im.MAX_IMAGE_PIXELS = None
-                    import numpy as _np
-                    _rgb["arr"] = _np.asarray(_Im.open(image).convert("RGB"))
+                if image:                               # §6.352: та же система, что у ведения (разворот EXIF, починка TIFF)
+                    from . import imaging as _IMG
+                    if _IMG.EXIF_TRANSPOSE:
+                        _rgb["arr"] = _IMG.load_rgb(image)
+                    else:                               # повтор стенда — чтение как до §6.352 (так собраны кэши и база A/B)
+                        from PIL import Image as _Im
+                        _Im.MAX_IMAGE_PIXELS = None
+                        import numpy as _np
+                        _rgb["arr"] = _np.asarray(_Im.open(image).convert("RGB"))
             except Exception:
                 _rgb["arr"] = None
         return _rgb["arr"]

@@ -65,6 +65,7 @@ def pack(tr):
 def cmd_paths():
     from types import SimpleNamespace
     from auto import rowdec as RD, imaging as im, frame as FR, meta as Mm, ink_seg as IS, emit as EM
+    im.EXIF_TRANSPOSE = False                     # §6.352: кэши стендов собраны по скану без разворота EXIF
     from auto.config import Config
     from extract_nlgx import extract
     folds = json.loads((Path(a.seg) / "folds.json").read_text(encoding="utf-8"))

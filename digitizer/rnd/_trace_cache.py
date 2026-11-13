@@ -513,4 +513,7 @@ def cmd_redec():
         sys.exit(3)
 
 
+from auto import imaging as _IMG                 # §6.352: кэши стендов собраны по скану БЕЗ разворота EXIF и без починки
+_IMG.EXIF_TRANSPOSE = False                      #   TIFF в emit — повтор / сборка / пересчёт читают так же (база A/B не сдвигается)
+
 {"build": cmd_build, "replay": cmd_replay, "upgrade": cmd_upgrade, "redec": cmd_redec}[a.cmd]()

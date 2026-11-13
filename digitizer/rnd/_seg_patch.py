@@ -41,6 +41,7 @@ def one(job):
     from extract_nlgx import extract
     from _multi_replica_probe import dense
     from auto import meta as Mm, imaging as im, frame as FR
+    im.EXIF_TRANSPOSE = False                     # §6.352: кэши стендов собраны по скану без разворота EXIF
     sh, q, tc, well, out, per, S, seed, fam = job
     of = Path(out) / (hashlib.md5(sh.encode("utf-8")).hexdigest()[:16] + ".npz")
     if of.exists():

@@ -39,6 +39,7 @@ def main():
     import hashlib
     from _cand_ceiling import dense_tr
     from auto import imaging as im, frame as FR, ink_seg as IS
+    im.EXIF_TRANSPOSE = False                     # §6.352: кэши стендов собраны по скану без разворота EXIF
     si, sn = map(int, a.shard.split("/"))
     FO = json.loads((Path(a.seg) / "folds.json").read_text(encoding="utf-8"))
     SRC = {q.name: q for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx")}
