@@ -170,7 +170,11 @@ def qc_file(nlgx, image=None, overlay=False, verbose=True):
     if not img or not Path(img).is_file():
         if verbose: print(f"  {Path(nlgx).stem[:46]}: нет картинки — пропуск")
         return []
-    rgb = np.asarray(Image.open(img).convert("RGB"))
+    from PIL import ImageOps                     # §6.352: скан в системе рамки — развёрнутый по EXIF (у сканов без тега — тот же массив)
+    Image.MAX_IMAGE_PIXELS = None
+    with Image.open(img) as _im:
+        _o = _im.getexif().get(0x0112, 1)
+        rgb = np.asarray((ImageOps.exif_transpose(_im) if _o not in (None, 0, 1) else _im).convert("RGB"))
     H, W = rgb.shape[:2]
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     masks = dm.compute_masks(rgb, m)
