@@ -323,7 +323,7 @@ def _choose_stack(ck, sheet, slots, CS, used, root_of, scales=None, nodup=None):
             i = max([i for i in by[si] if cl[ROWS[i][1]] == new], key=lambda i: P[i])
             out[slots[si][0]] = (ROWS[i][1], float(P[i]))
     if nodup is not None:
-        _nodup(slots, by, ROWS, P, cl, out, *nodup)
+        _nodup(slots, by, ROWS, P, cl, out, *nodup, sheet=sheet)
     return out
 
 
@@ -342,7 +342,7 @@ def _ovl(a, b, tol=3.0):
     return k / max(1, len(a[0])), k / max(1, len(b[0]))
 
 
-def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", info=None):
+def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", info=None, arb=None, sheet=None):
     """§6.359: после назначения 1:1 — слоты, чьи трассы совпадают (≤ 3 px) на доле строк ≥ θ (любой из двух): один из пары берёт
     лучшего своего кандидата с P ≥ τ2, который ни с одним другим слотом не совпадает на ≥ θ и не из занятого кластера. Кого
     переносить: rule "p" — слот с меньшей P; "sum" — вариант с большей суммой P пары. Нет замены — как есть. Меняет `out` (≤ 3 прохода)."""
@@ -351,6 +351,7 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", i
         if k not in A:
             A[k] = _arr(dense[k]) if len(dense[k]) else None
         return A[k]
+    chg0 = set(out)                                       # §6.363 (журнал): слоты, чью трассу сменило назначение 1:1
     fin = {}                                              # si → (кандидат или None, массивы трассы, P)
     for si in sorted(by):
         name = slots[si][0]
@@ -399,7 +400,7 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", i
                 continue
             # кого переносить: вариант с большей суммой P пары (как цель назначения 1:1); у трассы без строк назначения P = 0
             opts = []
-            if rule == "sum":                             # кого переносить — вариант с большей суммой P пары
+            if rule in ("sum", "arb"):                    # кого переносить — вариант с большей суммой P пары («arb» — так же, решает арбитр)
                 for lo, hi in ((si, sj), (sj, si)):
                     i = alt(lo)
                     if i is not None:
@@ -409,16 +410,61 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", i
                 i = alt(lo)
                 if i is not None:
                     opts.append((float(P[i]), lo, i))
+            def _p_on(s_, k_):
+                v = [float(P[i]) for i in by.get(s_, []) if ROWS[i][1] == k_]
+                return round(max(v), 3) if v else None
+            _rec = None; _dec = None
+            if os.environ.get("NDS_NODUP_LOG") or (rule == "arb" and arb is not None and opts):
+                # запись конфликта: журнал стенда (§6.359 / §6.362) и признаки арбитра §6.363 — одна и та же
+                _alts = {}
+                for lo_, hi_ in ((si, sj), (sj, si)):
+                    i_ = alt(lo_)
+                    if i_ is not None:
+                        k_ = ROWS[i_][1]
+                        _alts[slots[lo_][0]] = [int(k_), round(float(P[i_]), 3), _p_on(hi_, k_), int(len(arr_k(k_)[0])),
+                                                round(float(np.median(arr_k(k_)[1])), 1)]
+                def _wov(s_):
+                    w_ = written.get(slots[s_][0])
+                    return round(_ovl(_arr(w_), fin[s_][1])[0], 3) if w_ is not None and len(w_) >= 50 else None
+                def _rank(s_):
+                    if s_ not in by or fin[s_][0] is None:
+                        return None
+                    o_ = sorted(by[s_], key=lambda i: -P[i])
+                    return next((r for r, i in enumerate(o_) if ROWS[i][1] == fin[s_][0]), None)
+                _rec_x = {"chg": [slots[si][0] in chg0, slots[sj][0] in chg0], "wov": [_wov(si), _wov(sj)],
+                          "rank": [_rank(si), _rank(sj)],
+                          "ncand": [sum(1 for i in by.get(s_, []) if P[i] >= 0.05) for s_ in (si, sj)],
+                          "pmax": [round(max([float(P[i]) for i in by.get(s_, [])] or [0.0]), 3) for s_ in (si, sj)]}
+                _rec = {"sheet": sheet, "pair": [slots[si][0], slots[sj][0]], "frac": [round(fa2, 3), round(fb2, 3)],
+                        "p": [round(fin[si][2], 3), round(fin[sj][2], 3)], "own": [fin[si][0] is not None, fin[sj][0] is not None],
+                        "n": [int(len(fin[si][1][0])), int(len(fin[sj][1][0]))],
+                        "x": [round(float(np.median(fin[si][1][1])), 1), round(float(np.median(fin[sj][1][1])), 1)],
+                        "slot": [[float(v) for v in (slots[si][3] or ())], [float(v) for v in (slots[sj][3] or ())]],
+                        "y": [[int(slots[si][1]), int(slots[si][2])], [int(slots[sj][1]), int(slots[sj][2])]],
+                        "alts": _alts, "opts": [[round(o[0], 3), slots[o[1]][0], int(ROWS[o[2]][1]), round(float(P[o[2]]), 3)] for o in opts],
+                        "moved": slots[max(opts)[1]][0] if opts else None, "rule": rule, **_rec_x}
+                if rule == "arb" and arb is not None and opts:
+                    from . import nodup_arb as NA
+                    _dec, _rc, _rs = NA.decide(_rec, arb[0], arb[1])
+                if os.environ.get("NDS_NODUP_LOG"):
+                    _w = dict(_rec, arb=[_dec, round(_rc, 3), round(_rs, 3)]) if _dec else _rec
+                    with open(os.environ["NDS_NODUP_LOG"], "a", encoding="utf-8") as _f:
+                        _f.write(json.dumps(_w, ensure_ascii=False) + chr(10))
             if not opts:
                 continue
             _s, lo, best = max(opts)
             k = ROWS[best][1]
-            if os.environ.get("NDS_NODUP_LOG"):            # отладка стенда §6.359
-                with open(os.environ["NDS_NODUP_LOG"], "a", encoding="utf-8") as _f:
-                    _f.write(json.dumps({"pair": [slots[si][0], slots[sj][0]], "frac": [round(fa2, 3), round(fb2, 3)],
-                                         "p": [round(fin[si][2], 3), round(fin[sj][2], 3)],
-                                         "opts": [[round(o[0], 3), slots[o[1]][0], int(ROWS[o[2]][1]), round(float(P[o[2]]), 3)] for o in opts],
-                                         "moved": slots[lo][0], "k": int(k)}, ensure_ascii=False) + chr(10))
+            if _dec == "keep":                            # §6.363: арбитр — не раздвигать
+                continue
+            hi = sj if lo == si else si
+            if _dec == "swp" and hi in by:                # §6.363: обмен — lo остаётся на общей линии, его альтернативу берёт hi
+                p_hk = _p_on(hi, k)
+                fin[hi] = (k, arr_k(k), float(p_hk if p_hk is not None else P[best]))
+                out[slots[hi][0]] = (k, fin[hi][2])
+                if info is not None:
+                    info.setdefault("pairs", []).append((slots[si][0], slots[sj][0]))
+                moved = True
+                continue
             fin[lo] = (k, arr_k(k), float(P[best]))
             out[slots[lo][0]] = (k, float(P[best]))
             if info is not None:                          # §6.361: пары, раздвинутые здесь — имена им решит стиль
@@ -428,7 +474,8 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", i
             break
 
 
-def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None, segfam=None, nodup=0.0, nodup_tau=0.05, nodup_rule="p", info=None):
+def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, seg=None, segfam=None, nodup=0.0, nodup_tau=0.05, nodup_rule="p", info=None,
+           nodup_arb=None):
     """slots — [(имя, top_y, n_rows, (xl, xr))] в порядке рамки (только слоты с цепочкой шкал);
     cands — [dict(src, tr — исходная трасса, dense, style, rough)];
     written — [(имя, плотная записанная трасса)] в порядке рамки (что стоит в слотах сейчас).
@@ -480,7 +527,7 @@ def choose(sheet, slots, cands, written, path, root_of, scales=None, look=None, 
             for c_, v_ in zip(CS, sm_):
                 c_["segfam"] = v_
         out = _choose_stack(ck, sheet, slots, CS, used, root_of, scales=scales,
-                            nodup=(nodup, nodup_tau, [c["dense"] for c in cands], dict(written), nodup_rule, info) if nodup > 0 else None)
+                            nodup=(nodup, nodup_tau, [c["dense"] for c in cands], dict(written), nodup_rule, info, nodup_arb) if nodup > 0 else None)
         return out
     model, fams, tau, dlt = ck["model"], dict(ck["fams"]), ck["tau"], ck["delta"]
     # занятость: кандидат стоит в слоте, если x совпадает в 1 px на ≥ 90% общих строк (как в стенде по файлам выдачи)

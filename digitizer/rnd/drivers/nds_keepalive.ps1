@@ -45,7 +45,7 @@ $jobs = @(
   @{ task='nds_segfampaths';  log='F:\nds\output\taskS\_segfampaths.log';  done='=== SEGFAM PATHS DONE ===' },
   @{ task='nds_segfamfull';   log='F:\nds\output\taskS\_segfamfull.log';   done='=== SEGFAM FULL DONE ===' },
   @{ task='nds_compact_quar'; log='F:\nds\output\taskS\_compact.log';      done='=== COMPACT QUAR DONE ===' },
-  @{ task='nds_segclean';     log='F:\nds\output\taskS\_segclean.log';     done='=== SEGCLEAN DONE ===' },
+  @{ task='nds_segclean';     log='F:\nds\output\taskS\_segclean.log';     done='=== SEGCLEAN DONE ===' },
   @{ task='nds_tm80';         log='F:\nds\output\taskS\_tm80.log';         done='=== TM80 DONE ===' },
   @{ task='nds_detour_ab';    log='F:\nds\output\taskS\_detour_ab.log';    done='=== DETOUR AB DONE ===' },
   @{ task='nds_spikeseg';     log='F:\nds\output\taskS\_spikeseg.log';     done='=== SPIKESEG DONE ===' },
@@ -53,7 +53,8 @@ $jobs = @(
   @{ task='nds_nse22_fix';    log='F:\nds\output\taskS\_nse22_fix.log';    done='=== NSE22 FIX DONE ===' },
   @{ task='nds_segvote_ab';   log='F:\nds\output\taskS\_segvote_ab.log';   done='=== SEGVOTE AB DONE ===' },
   @{ task='nds_nodup';        log='F:\nds\output\taskS\_nodup.log';        done='=== NODUP DONE ===' },
-  @{ task='nds_nodupn';       log='F:\nds\output\taskS\_nodupn.log';       done='=== NODUPN DONE ===' }
+  @{ task='nds_nodupn';       log='F:\nds\output\taskS\_nodupn.log';       done='=== NODUPN DONE ===' },
+  @{ task='nds_nodupx';       log='F:\nds\output\taskS\_nodupx.log';       done='=== NODUPX DONE ===' }
 )
 foreach ($j in $jobs) {
   $t = Get-ScheduledTask -TaskName $j.task -ErrorAction SilentlyContinue

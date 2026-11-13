@@ -371,7 +371,7 @@ def _name_style_pass(spec, model, frame, mapping, get_gray, get_rgb, sheet_name,
 
 
 def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_name, out, stem, seg_spec="", frame=None, frame_nlgx=None,
-                      segfam_spec="", nodup=0.0, nodup_tau=0.05, nodup_rule="p"):
+                      segfam_spec="", nodup=0.0, nodup_tau=0.05, nodup_rule="p", nodup_arb="", nodup_arb_m=-1.0):
     """§6.280: модель выбора трассы для слота (auto/line_choice.py) — замена трассы слота на свободного кандидата ведения
     (меняется `mapping` на месте). Замены — в `<stem>_linechoice.json`."""
     from . import line_choice as LC, name_style as NS, level_ink as LI
@@ -444,8 +444,16 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
             else:
                 segfam = (rgb, _sp2)
     info_ = {}
+    arb_ = None
+    if nodup > 0 and nodup_rule == "arb":                # §6.363: арбитр раздвигания — модель по фолду скважины листа
+        from . import nodup_arb as NA
+        ck_ = NA.load(nodup_arb, sheet_name) if nodup_arb else None
+        if ck_ is None:
+            LC._announce(f"⚠ арбитр раздвигания ({nodup_arb or 'не задан'}) НЕ включён: нет модели — правило «sum»")
+        else:
+            arb_ = (ck_, float(nodup_arb_m))
     rep_ = LC.choose(sheet_name, slots, cands, written, path, meta_mod.mnem_root, scales=scales, look=(gray, paper), seg=seg,
-                     segfam=segfam, nodup=nodup, nodup_tau=nodup_tau, nodup_rule=nodup_rule, info=info_)
+                     segfam=segfam, nodup=nodup, nodup_tau=nodup_tau, nodup_rule=nodup_rule, info=info_, nodup_arb=arb_)
     for name, (k, p) in rep_.items():
         if k is None:                                   # §6.283: трассу слота забрал другой слот, своей нет — слот пуст
             mapping.pop(name, None)
@@ -948,7 +956,8 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
                           seg_spec=getattr(_cvp0, "line_choice_seg", "") or "", frame=frame, frame_nlgx=frame_nlgx,
                           segfam_spec=getattr(_cvp0, "line_choice_segfam", "") or "",
                           nodup=float(getattr(_cvp0, "lc_nodup", 0.0) or 0.0), nodup_tau=float(getattr(_cvp0, "lc_nodup_tau", 0.05)),
-                          nodup_rule=getattr(_cvp0, "lc_nodup_rule", "p") or "p") or []
+                          nodup_rule=getattr(_cvp0, "lc_nodup_rule", "p") or "p",
+                          nodup_arb=getattr(_cvp0, "lc_nodup_arb", "") or "", nodup_arb_m=float(getattr(_cvp0, "lc_nodup_arb_m", -1.0))) or []
     # §6.361: пары слотов, раздвинутые выбором без дублей, — какому слоту какая из двух трасс, решает модель имён по стилю
     #   (меняет местами, если P(порядок верен) < cv.lc_nodup_names; 0 — выкл.)
     _lnn = float(getattr(_cvp0, "lc_nodup_names", 0.0) or 0.0)

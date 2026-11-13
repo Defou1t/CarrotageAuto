@@ -210,13 +210,64 @@ def decomp(a):
     print(f"★ потолок по парам (лучшее из: не раздвигать / как есть / обмен): Δ {best:+d}")
 
 
+def cont(a):
+    """непрерывность без скана: согласие новых трасс NDS3 (X — новая, Y — общая) с СОБСТВЕННЫМИ строками слотов в NSE22
+    (строки, где трассы пары не совпадали) → taskS/nodup_selfstyle/cont_<mode>.json; затем точность правила"""
+    import _sample_review as SR
+    from extract_nlgx import extract
+    from _multi_replica_probe import dense
+    from auto import meta as M
+    _idle()
+    cf = OUT / f"cont_{a.mode}.json"
+    C = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else {}
+    L = [json.loads(l) for l in (OUT / f"pairs_{a.mode}.jsonl").read_text(encoding="utf-8").splitlines()]
+    rd = lambda f: {c["name"]: dense(c) for c in extract(str(f))["curves"] if M.mnem_root(c["name"]) != "DA"}
+    for r in L:
+        if not r["pairs"] or r["sheet"] in C:
+            continue
+        d = SR.sheet_dir(r["sheet"])
+        gb = next(iter(sorted((TS / "rp_lvl" / a.base / d).glob("*_auto.nlgx"))))
+        gm = next(iter(sorted((TS / "rp_lvl" / a.mode / d).glob("*_auto.nlgx"))))
+        pre, post = rd(gb), rd(gm)
+        out = []
+        for p in r["pairs"]:
+            X, Y = p["X"], p["Y"]
+            pX, pY, qX, qY = pre[X], pre[Y], post[X], post[Y]
+            oX = {y: x for y, x in pX.items() if y not in pY or abs(pY[y] - x) > 3}
+            oY = {y: x for y, x in pY.items() if y not in pX or abs(pX[y] - x) > 3}
+            out.append({"X": X, "Y": Y, "nX": len(oX), "nY": len(oY),
+                        "aXX": round(ovl(oX, qX), 3), "aYY": round(ovl(oY, qY), 3),
+                        "aXY": round(ovl(oX, qY), 3), "aYX": round(ovl(oY, qX), 3)})
+        C[r["sheet"]] = out
+    tmp = cf.with_suffix(".tmp"); tmp.write_text(json.dumps(C, ensure_ascii=False), encoding="utf-8"); tmp.replace(cf)
+    R = []
+    for r in L:
+        for p, c in zip(r["pairs"], C.get(r["sheet"], [])):
+            R.append((p, c))
+    print(f"★ пар {len(R)}")
+    for need in (0, 50, 200):
+        for thr in (0.0, 0.1, 0.2, 0.4):
+            sw = []; dd = []
+            for p, c in R:
+                wX = c["nX"] >= need; wY = c["nY"] >= need
+                if not (wX or wY):
+                    continue
+                m = (c["aXX"] - c["aXY"]) * wX + (c["aYY"] - c["aYX"]) * wY    # > 0: новая трасса продолжает X, общая — Y
+                if m < -thr:
+                    sw.append(p)
+                if p["cur"] != p["swp"] and abs(m) > thr:
+                    dd.append((m > 0) == (p["cur"] > p["swp"]))
+            print(f"  свои строки ≥ {need:3d}, запас > {thr}: обменов {len(sw):4d}, Δ {sum(p['swp'] - p['cur'] for p in sw):+4d}, "
+                  f"точность {np.mean(dd) if dd else 0:.2f} из {len(dd)}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["scan", "report", "decomp"])
+    ap.add_argument("cmd", choices=["scan", "report", "decomp", "cont"])
     ap.add_argument("--base", default="NSE22")
     ap.add_argument("--mode", default="NDS3")
     a = ap.parse_args()
-    {"scan": scan, "report": report, "decomp": decomp}[a.cmd](a)
+    {"scan": scan, "report": report, "decomp": decomp, "cont": cont}[a.cmd](a)
 
 
 if __name__ == "__main__":
