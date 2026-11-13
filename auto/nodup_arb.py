@@ -83,12 +83,12 @@ def load(spec, sheet=None):
     return _CACHE[str(p)]
 
 
-def decide(rec, ck, margin=None):
-    """→ ("keep" | "cur" | "swp", r̂ как есть, r̂ обмен)"""
+def decide(rec, ck, margin=None, can_swp=True):
+    """→ ("keep" | "cur" | "swp", r̂ как есть, r̂ обмен); can_swp=False (у hi нет трассы-кандидата) — выбор только keep / cur"""
     x = np.array([vec(rec, ck["feats"])], float)
     rc = float(ck["mc"].predict(x)[0]); rs = float(ck["ms"].predict(x)[0])
     m = ck.get("margin", 0.0) if margin is None or margin < 0 else margin
-    if rs > rc + m and rs > m:
+    if can_swp and rs > rc + m and rs > m:
         return "swp", rc, rs
     if rc < -m:
         return "keep", rc, rs

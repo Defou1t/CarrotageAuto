@@ -445,7 +445,9 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", i
                         "moved": slots[max(opts)[1]][0] if opts else None, "rule": rule, **_rec_x}
                 if rule == "arb" and arb is not None and opts:
                     from . import nodup_arb as NA
-                    _dec, _rc, _rs = NA.decide(_rec, arb[0], arb[1])
+                    _lo0 = max(opts)[1]; _hi0 = sj if _lo0 == si else si
+                    # обмен = как в разметке стенда: lo берёт ТЕКУЩУЮ трассу hi (кандидат), hi — альтернативу lo; иначе обмена нет
+                    _dec, _rc, _rs = NA.decide(_rec, arb[0], arb[1], can_swp=(_hi0 in by and fin[_hi0][0] is not None))
                 if os.environ.get("NDS_NODUP_LOG"):
                     _w = dict(_rec, arb=[_dec, round(_rc, 3), round(_rs, 3)]) if _dec else _rec
                     with open(os.environ["NDS_NODUP_LOG"], "a", encoding="utf-8") as _f:
@@ -459,8 +461,11 @@ def _nodup(slots, by, ROWS, P, cl, out, theta, tau2, dense, written, rule="p", i
             hi = sj if lo == si else si
             if rule == "agree" and fin[lo][2] > fin[hi][2]:   # §6.363: «sum» и «p» не согласны (переносимый — вероятнее владелец) — не раздвигать
                 continue
-            if _dec == "swp" and hi in by:                # §6.363: обмен — lo остаётся на общей линии, его альтернативу берёт hi
-                p_hk = _p_on(hi, k)
+            if _dec == "swp":                             # §6.363: обмен трасс — lo берёт текущую трассу hi, hi — альтернативу lo
+                kh = fin[hi][0]
+                p_lh = _p_on(lo, kh); p_hk = _p_on(hi, k)
+                fin[lo] = (kh, arr_k(kh), float(p_lh if p_lh is not None else fin[hi][2]))
+                out[slots[lo][0]] = (kh, fin[lo][2])
                 fin[hi] = (k, arr_k(k), float(p_hk if p_hk is not None else P[best]))
                 out[slots[hi][0]] = (k, fin[hi][2])
                 if info is not None:
