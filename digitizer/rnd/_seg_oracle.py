@@ -4,7 +4,7 @@ r"""_seg_oracle.py — §6.365 РАЗВЕДКА: ПОТОЛОК СБОРКИ К�
 у части слотов честного ЦЕЛОГО кандидата нет. Если резать кандидатов на пересечениях и собирать кривую из кусков, сколько кривых эталона
 станут достижимы? Пул — как у прода (`traces` + `alt` + доп. кэши, как в повторе NSE22/26). Для каждой кривой эталона:
   целый — есть кандидат, честный на плоскости (`_line_choice_scan.honest_d`: медиана ≤ 3 px в обе стороны, покрытие ≥ 0.9);
-  куски — доля строк эталона, где хоть один кандидат ≤ 3 px (по строке), и минимум смен кандидата, чтобы её набрать (DP);
+  куски — доля строк эталона, где хоть один кандидат ≤ 3 px (на плоскости, 13.11 — было по строке: склоны), и минимум смен кандидата, чтобы её набрать (DP);
   «достижим кусками» — покрытие кусками ≥ 0.9 при ≤ K сменах (K = 2, 4, 8).
 
   _seg_oracle.py --n 150 [--seed 1]   → taskS/seg_oracle/<часть>.jsonl (продолжаемо), сводка
@@ -92,9 +92,10 @@ def main():
                 whole = any(honest_d(C[k], TC[k], gt, tg)[0] for k in range(len(C)))
                 ys = np.array(sorted(gt)); gx = np.array([gt[y] for y in ys])
                 Mx = np.zeros((len(ys), len(C)), bool)
-                for k, d in enumerate(C):
-                    cx = np.array([d.get(int(y), np.nan) for y in ys])
-                    Mx[:, k] = np.abs(cx - gx) <= 3.0
+                pts = np.stack([ys.astype(float), gx], 1)
+                for k, d in enumerate(C):                       # расстояние НА ПЛОСКОСТИ до ломаной кандидата (как мера приёмки)
+                    dk, _ = TC[k].query(pts, distance_upper_bound=3.01)
+                    Mx[:, k] = np.isfinite(dk) & (dk <= 3.0)
                 anyc = Mx.any(1)
                 cov = float(anyc.mean())
                 sw = min_switches(Mx[anyc][::5]) if cov >= 0.9 else None
