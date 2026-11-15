@@ -51,7 +51,8 @@ def cmd_paths(a):
     folds = json.loads((SEG / "folds.json").read_text(encoding="utf-8"))
     orig = RD.trace_track
     T0 = time.time(); done = 0
-    for n in sheets_of(a.sheets):
+    si, sn = (int(x) for x in a.shard.split("/"))        # §6.375: сборка на всех листах — шарды по порядку списка
+    for n in [q for i, q in enumerate(sheets_of(a.sheets)) if i % sn == si]:
         todo = [v for v in a.vars if not (OUT / v / (sheet_dir(n) + ".pkl")).exists()]
         if not todo:
             continue
@@ -211,6 +212,7 @@ def main():
     ap.add_argument("cmd", choices=["paths", "ceil", "diag"])
     ap.add_argument("--sheets", required=True)
     ap.add_argument("--vars", nargs="+", default=list(VARS))
+    ap.add_argument("--shard", default="0/1", help="paths: i/n — свой кусок списка")
     a = ap.parse_args()
     {"paths": cmd_paths, "ceil": cmd_ceil, "diag": cmd_diag}[a.cmd](a)
 
