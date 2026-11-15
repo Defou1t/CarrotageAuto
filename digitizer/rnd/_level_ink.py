@@ -552,6 +552,10 @@ def main_train(a):
         m = torch.arange(KMAX, device=dev)[None, :, None] >= kc[:, None, None]
         return lo.masked_fill(m, -1e4)
 
+    # §6.379: веса классов уровня в потере (`--cls-w w0,w1,w2,w3`; пусто = без весов, прежнее обучение)
+    CLSW = torch.tensor([float(v) for v in a.cls_w.split(',')], device=dev) if a.cls_w else None
+    if CLSW is not None and len(CLSW) != KMAX:
+        raise ValueError(f'--cls-w: нужно {KMAX} весов')
     def fit(tr_idx, tag, seed=0):
         torch.manual_seed(seed); rs = np.random.RandomState(seed)
         tr_idx = [i for i in tr_idx if (D[i]["lab"] >= 0).any()]
@@ -579,7 +583,7 @@ def main_train(a):
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
                 lo = net(x)
             lo = mask_logits(lo.float(), kc)
-            loss = F.cross_entropy(lo, y, ignore_index=-1)
+            loss = F.cross_entropy(lo, y, ignore_index=-1, weight=CLSW)   # §6.379: CLSW None = прежнее обучение бит-в-бит
             opt.zero_grad(set_to_none=True); loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
             opt.step(); sch.step()
@@ -725,6 +729,7 @@ def main():
     ap.add_argument("--v4", action="store_true", help="§6.271: скан — длина вертикальных ранов и цвет туши; обучение — эти каналы")
     ap.add_argument("--vthr", type=int, default=100)
     ap.add_argument("--min-run", type=int, default=25)
+    ap.add_argument("--cls-w", default="", help="§6.379: веса классов уровня 0..KMAX−1 в потере (пусто = без весов)")
     ap.add_argument("--dump", default=r"F:/nds/output/taskS/level_ink_pred.pkl")
     ap.add_argument("--model-out", default=r"F:/nds/output/taskS/level_ink_model.pt")
     a = ap.parse_args()
