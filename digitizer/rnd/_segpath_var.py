@@ -150,13 +150,64 @@ def cmd_ceil(a):
               f"с честным {r['h_hit']}/{r['h']} = {r['h_hit'] / max(r['h'], 1):.1%}; путей на лист {r['paths'] / max(r['sheets'], 1):.1f}")
 
 
+def cmd_diag(a):
+    """почему путей нет: у слотов без честного кандидата — лучший одиночный путь (покрытие при медиане ≤ 3 / ≤ 6 px) и объединённое покрытие
+    всех путей варианта (строки эталона, где какой-то путь в ≤ 3 px на плоскости)"""
+    from extract_nlgx import extract
+    from _multi_replica_probe import dense
+    from _cand_ceiling import _tree, dense_tr
+    from _line_choice_scan import honest_d
+    lab = {}
+    for d in ("line_choice_r", "line_choice_out_r"):
+        for f in (TS / d).glob("*.pkl"):
+            r = pickle.load(open(f, "rb"))
+            lab[r["sheet"]] = {s["name"]: any(x.get("lab") and x["lab"][0] for x in s["cands"]) for s in r["slots"] if s.get("has_truth")}
+    un = lambda t: dict(zip(t[0].tolist(), t[1].tolist()))
+    R = {v: [] for v in a.vars}
+    for n in sheets_of(a.sheets):
+        if n.name not in lab or all(lab[n.name].values()):
+            continue
+        P = {}
+        for v in a.vars:
+            f = OUT / v / (sheet_dir(n) + ".pkl")
+            if f.exists():
+                P[v] = [dense_tr(un(t)) for L, t in (pickle.load(open(f, "rb"))["alt"] or [])]
+        if len(P) < len(a.vars):
+            continue
+        G = {c["name"]: dense(c) for c in extract(str(n))["curves"]}
+        for nm, had in lab[n.name].items():
+            g = G.get(nm)
+            if had or not g or len(g) < 50:
+                continue
+            tg = _tree(g); ys = np.array(sorted(g)); Q = np.array([[y, g[y]] for y in ys], float)
+            for v in a.vars:
+                c3 = c6 = 0.0; near = np.zeros(len(ys), bool)
+                for p in P[v]:
+                    if len(p) < 50:
+                        continue
+                    tp = _tree(p)
+                    _, cov, m = honest_d(p, tp, g, tg)
+                    if m <= 3: c3 = max(c3, cov)
+                    if m <= 6: c6 = max(c6, cov)
+                    d, _ = tp.query(Q); near |= d <= 3
+                R[v].append((c3, c6, float(near.mean())))
+    print("★ слоты без честного кандидата: лучший путь варианта и объединение путей")
+    for v in a.vars:
+        X = np.array(R[v]) if R[v] else np.zeros((0, 3))
+        if not len(X):
+            continue
+        print(f"   {v}: n {len(X)}; одиночный ≤3 px: покр. ≥ 0.9 {np.mean(X[:, 0] >= 0.9):.0%}, ≥ 0.7 {np.mean(X[:, 0] >= 0.7):.0%}, медиана {np.median(X[:, 0]):.2f}"
+              f" | ≤6 px: ≥ 0.9 {np.mean(X[:, 1] >= 0.9):.0%}, ≥ 0.7 {np.mean(X[:, 1] >= 0.7):.0%}"
+              f" | объединение ≤3 px: ≥ 0.9 {np.mean(X[:, 2] >= 0.9):.0%}, ≥ 0.7 {np.mean(X[:, 2] >= 0.7):.0%}, медиана {np.median(X[:, 2]):.2f}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["paths", "ceil"])
+    ap.add_argument("cmd", choices=["paths", "ceil", "diag"])
     ap.add_argument("--sheets", required=True)
     ap.add_argument("--vars", nargs="+", default=list(VARS))
     a = ap.parse_args()
-    {"paths": cmd_paths, "ceil": cmd_ceil}[a.cmd](a)
+    {"paths": cmd_paths, "ceil": cmd_ceil, "diag": cmd_diag}[a.cmd](a)
 
 
 if __name__ == "__main__":
