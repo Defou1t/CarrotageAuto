@@ -20,7 +20,9 @@ TS = Path(r"F:/nds/output/taskS")
 OUT = TS / "segpath_var"
 SEG = TS / "ink_seg_f"
 VARS = {"E": (0.6, 0, 0.15), "A": (0.3, 0, 0.15), "B": (0.6, 2, 0.15), "C": (0.6, 0, 0.05), "D": (0.3, 2, 0.05),
-        "F": (0.6, 0, 0.5), "G": (0.6, 0, 1.5), "H": (0.6, 2, 0.5)}           # F–H — §6.373: сильнее штраф скачка
+        "F": (0.6, 0, 0.5), "G": (0.6, 0, 1.5), "H": (0.6, 2, 0.5),           # F–H — §6.373: сильнее штраф скачка
+        "I": (0.6, 0, 0.15), "J": (0.6, 2, 0.15)}                             # I–J — §6.374: удержание (HOLD)
+HOLD = {"I": 0.3, "J": 0.3}     # §6.374: `cv.rowdec_hold` — путь может не брать пик, если рядом доступного нет (§6.237), вместо прыжка
 WM = str(TS / "rowdec_wellmap.json").replace("\\", "/")
 TRACE_KNOBS = dict(row_decoder="auto5", rowdec_wellmap=WM, rowdec_slot_all=True, rowdec_slot_len=0.18, rowdec_ink_seg="")
 
@@ -80,7 +82,7 @@ def cmd_paths(a):
                 setattr(cfg.cv, k, val)
             p = cfg.cv
             p.rowdec_ink_seg = ""; p.rowdec_extra_thr = 0.0; p.rowdec_extra_inert = ""; p.rowdec_extra_learn = ""
-            p.rowdec_ink_segfam = ""; p.rowdec_peak_thr = pthr
+            p.rowdec_ink_segfam = ""; p.rowdec_peak_thr = pthr; p.rowdec_hold = HOLD.get(v, 0.0)
             sheet = SimpleNamespace(lines=c["lines"], frame=c["frame"], meta=c["meta"], k_slots=c["k_slots"])
 
             def tt(rgb_, track, k, p_, ck, y0, y1, conf_out=None, **kw):
@@ -147,7 +149,7 @@ def cmd_ceil(a):
     print("★ варианты путей по карте сети: у слотов без честного кандидата в пуле — доля с честным путём варианта")
     for v in a.vars:
         r = res[v]; pthr, kp, wj = VARS[v]
-        print(f"   {v} (pthr {pthr}, K+{kp}, wjump {wj}): без честного {r['nh_hit']}/{r['nh']} = {r['nh_hit'] / max(r['nh'], 1):.1%}; "
+        print(f"   {v} (pthr {pthr}, K+{kp}, wjump {wj}{f', hold {HOLD[v]}' if v in HOLD else ''}): без честного {r['nh_hit']}/{r['nh']} = {r['nh_hit'] / max(r['nh'], 1):.1%}; "
               f"с честным {r['h_hit']}/{r['h']} = {r['h_hit'] / max(r['h'], 1):.1%}; путей на лист {r['paths'] / max(r['sheets'], 1):.1f}")
 
 
