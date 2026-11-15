@@ -19,7 +19,8 @@ import numpy as np
 TS = Path(r"F:/nds/output/taskS")
 OUT = TS / "segpath_var"
 SEG = TS / "ink_seg_f"
-VARS = {"E": (0.6, 0, 0.15), "A": (0.3, 0, 0.15), "B": (0.6, 2, 0.15), "C": (0.6, 0, 0.05), "D": (0.3, 2, 0.05)}
+VARS = {"E": (0.6, 0, 0.15), "A": (0.3, 0, 0.15), "B": (0.6, 2, 0.15), "C": (0.6, 0, 0.05), "D": (0.3, 2, 0.05),
+        "F": (0.6, 0, 0.5), "G": (0.6, 0, 1.5), "H": (0.6, 2, 0.5)}           # F–H — §6.373: сильнее штраф скачка
 WM = str(TS / "rowdec_wellmap.json").replace("\\", "/")
 TRACE_KNOBS = dict(row_decoder="auto5", rowdec_wellmap=WM, rowdec_slot_all=True, rowdec_slot_len=0.18, rowdec_ink_seg="")
 
