@@ -54,11 +54,17 @@ def main():
         g = dense([cc for cc in extract(str(n))["curves"] if cc["name"] == r["curve"]][0])
         P = [dense_tr(un(t)) for L, t in (pickle.load(open(PV / a.var / (sheet_dir(n) + ".pkl"), "rb"))["alt"] or [])]
         ys_ = r["y"]
-        # ушедший путь: на линии в [y*-20, y*], далеко в [y*+25, y*+45]
-        def is_dep(p):
-            b = [abs(p[y] - g[y]) <= 4 for y in range(ys_ - 20, ys_ + 1) if y in p and y in g]
-            f = [abs(p[y] - g[y]) > 8 for y in range(ys_ + 25, ys_ + 45) if y in p and y in g]
-            return len(b) >= 15 and np.mean(b) > 0.8 and len(f) >= 10 and np.mean(f) > 0.8
+        # ушедший путь: на линии в [y*-20, y*], далеко в [y*+16, y*+36] (уход ≥ 20 строк начинается не позже y* + 16)
+        from _cand_ceiling import _tree
+        tg = _tree(g)
+
+        def is_dep(p):                                    # плоскость, как в разведке (построчно изрезанные линии не узнаются)
+            yb = [y for y in range(ys_ - 20, ys_ + 1) if y in p and y in g]
+            yf = [y for y in range(ys_ + 16, ys_ + 36) if y in p and y in g]
+            if len(yb) < 15 or len(yf) < 10:
+                return False
+            db, _ = tg.query(np.array([[y, p[y]] for y in yb], float)); df, _ = tg.query(np.array([[y, p[y]] for y in yf], float))
+            return np.mean(db <= 3) > 0.8 and np.mean(df > 8) > 0.8
         dep = [p for p in P if is_dep(p)]
         y0, y1 = max(0, ys_ - 100), min(rgb.shape[0], ys_ + 100)
         xs = [g[y] for y in range(y0, y1) if y in g] + [p[y] for p in dep for y in range(y0, y1) if y in p]
