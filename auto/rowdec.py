@@ -362,10 +362,14 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
                     embs[:, i, peaks[i]].T.astype(np.float32) if k >= emb_min_k else None) for i in range(prob.shape[0])]
             LC_ = link_costs([float(prob[i].max()) for i in range(prob.shape[0])], _pe, k,
                              _link_model(str(getattr(p, "rowdec_link_model", "") or "link_model.pkl"), _DUMP_CTX[0]))
+        # §6.375: радиус исключения занятых пиков (`cv.rowdec_excl`, 3 = прод бит-в-бит; < 0 — без исключения: путь может идти по
+        #   пику, уже взятому прежним путём, — только замер, пути по карте сети как доп. кандидаты)
+        _ex = getattr(p, "rowdec_excl", None)
+        excl = 3 if _ex is None else int(_ex)
         for j in range(k + kplus):
             rows, cands, locs, kept = [], [], [], []
             for i in range(prob.shape[0]):
-                _kp = np.array([q for q, x in enumerate(peaks[i]) if not any(abs(x - t) <= 3 for t in taken[i])], int)
+                _kp = np.array([q for q, x in enumerate(peaks[i]) if not any(abs(x - t) <= excl for t in taken[i])], int)
                 idx = np.asarray(peaks[i], int)[_kp] if len(_kp) else np.zeros(0, int)
                 if not len(idx):
                     continue
