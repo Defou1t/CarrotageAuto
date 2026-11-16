@@ -526,7 +526,7 @@ class CVParams:
     #   ★ 31.10 (§6.349) В ПРОДЕ «0.05,-1» вместе с line_choice_v19p (откат — оба: «ink_seg_v1.pt:0.05» и v18p).
     rowdec_ink_seg: str = "ink_seg_v1.pt:0.05,-1"
     # §6.375: + пути по карте сети туши (m < 0) БЕЗ исключения занятых пиков — последней группой доп. кандидатов выбора трассы
-    #   (False = прод бит-в-бит; включать только вместе с выбором трассы, учёным на этих путях — line_choice_v22*)
+    #   (False = прод бит-в-бит). ⛔ 16.11: A/B NSE27 (с line_choice_v22e) +16 при p = 0.45, сорт A −7 — не отгружено
     rowdec_seg_noexcl: bool = False
     rowdec_link_model: str = "link_model.pkl"     # модель перехода (`_link_train.py`) в auto/models или полный путь
     rowdec_inert_w: float = 1.0
