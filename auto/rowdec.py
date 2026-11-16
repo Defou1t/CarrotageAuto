@@ -225,7 +225,7 @@ def ink_color(rgb, p, tr, step=8, halfw=3, min_rows=8):
 
 
 def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.0, conf_out=None, extra_thr=None,
-                extra_out=None, extra_inert=None, extra_learn=None, seg=None):
+                extra_out=None, extra_inert=None, extra_learn=None, seg=None, seg_noexcl=False):
     """→ list[{row: x}] длиной k: траектории кривых трека в координатах ЛИСТА.
     §6.287: `extra_thr` — второй порог пиков по той же карте (сеть не пересчитывается); его k траекторий — в `extra_out`."""
     import torch
@@ -308,7 +308,7 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
     pthr = 0.6 if _v is None else float(_v)      # ⚠ не `or 0.6`: 0.0 («все пики») превращался бы в 0.6
     wemb = float(getattr(p, "rowdec_emb_w", wemb) if getattr(p, "rowdec_emb_w", None) is not None else wemb)
 
-    def _paths(pthr, inert=False, kplus=0, learn=False):
+    def _paths(pthr, inert=False, kplus=0, learn=False, excl_=None):
         """§6.305: inert — состояние несёт сглаженный наклон пути v (EMA `rowdec_inert_alpha`), переход + `rowdec_inert_w`·|Δx/dy − v|;
         kplus — путей больше k (прототипы личности — по k). Оба выкл = прежний путь бит-в-бит."""
         peaks = []
@@ -365,7 +365,7 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
         # §6.375: радиус исключения занятых пиков (`cv.rowdec_excl`, 3 = прод бит-в-бит; < 0 — без исключения: путь может идти по
         #   пику, уже взятому прежним путём, — только замер, пути по карте сети как доп. кандидаты)
         _ex = getattr(p, "rowdec_excl", None)
-        excl = 3 if _ex is None else int(_ex)
+        excl = int(excl_) if excl_ is not None else (3 if _ex is None else int(_ex))
         for j in range(k + kplus):
             rows, cands, locs, kept = [], [], [], []
             for i in range(prob.shape[0]):
@@ -455,6 +455,9 @@ def trace_track(rgb, track, k, p, ckpt, y0, y1, emb_min_k=3, wjump=0.15, wemb=1.
             extra_out.append(_paths(pthr))
             for _t, _kp in (extra_inert or []):
                 extra_out.append(_paths(float(_t), inert=True, kplus=int(_kp)))
+        if seg_noexcl and any(_m < 0 for _m in _ms):       # §6.375: пути по карте сети БЕЗ исключения занятых пиков — последней группой
+            prob = _sg
+            extra_out.append(_paths(pthr, excl_=-1))
     return out
 
 
@@ -708,7 +711,8 @@ def trace_auto(rgb, sheet, p):
         _sp, _, _sm = _sg.rpartition(":")
         _sp = _sp if _P(_sp).is_absolute() else str(_P(__file__).parent / "models" / _sp)
         seg = (_sp, [float(m_) for m_ in _sm.split(",") if m_.strip()])
-    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []) + len(xle or []) + ((1 + len(xin or [])) * len(seg[1]) if seg else 0))]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
+    nox = int(bool(seg) and bool(getattr(p, "rowdec_seg_noexcl", False)) and any(m_ < 0 for m_ in seg[1]))   # §6.375: + группа без исключения
+    extra_by = [[] for _ in range(len(xthr or []) + len(xin or []) + len(xle or []) + ((1 + len(xin or [])) * len(seg[1]) if seg else 0) + nox)]      # §6.287: по порогу — все треки листа (порядок как у кэшей по порогам)
     for ti, lines in by_track.items():
         track = sheet.frame.tracks[ti]
         if lines:
@@ -725,7 +729,7 @@ def trace_auto(rgb, sheet, p):
         global _DUMP_CTX
         _DUMP_CTX = (getattr(getattr(sheet, "meta", None), "raw_stem", "") or "", ti)      # §6.305: подпись выгрузки пиков
         trs = trace_track(rgb, track, K, p, ck, y0, y1, conf_out=conf, extra_thr=xthr, extra_out=ext, extra_inert=xin, extra_learn=xle,
-                          seg=seg)
+                          seg=seg, seg_noexcl=bool(nox))
         out.extend(_pair(trs, lines, ti))
         for _j, _e in enumerate(ext or []):       # §6.287: пути доп. порогов — та же привязка к линиям
             extra_by[_j].extend(_pair(_e, lines, ti))
