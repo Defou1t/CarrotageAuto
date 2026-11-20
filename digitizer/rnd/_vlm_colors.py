@@ -37,6 +37,7 @@ def main():
     ap.add_argument("--out", default=r"F:/nds/output/taskS/vlm_colors")
     ap.add_argument("--rows", type=int, default=3000)
     ap.add_argument("--max-side", type=int, default=1280)
+    ap.add_argument("--max-tokens", type=int, default=300)
     a = ap.parse_args()
     from PIL import Image
     from extract_nlgx import extract
@@ -81,7 +82,7 @@ def main():
             if sc < 1:
                 crop = crop.resize((max(1, int(crop.width * sc)), max(1, int(crop.height * sc))), Image.LANCZOS)
             b = io.BytesIO(); crop.save(b, "PNG"); b64 = base64.b64encode(b.getvalue()).decode()
-            body = {"model": a.model, "temperature": 0, "max_tokens": 300, "messages": [{"role": "user", "content": [
+            body = {"model": a.model, "temperature": 0, "max_tokens": a.max_tokens, "messages": [{"role": "user", "content": [
                 {"type": "text", "text": PROMPT}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}]}]}
             t1 = time.time()
             try:
@@ -89,7 +90,8 @@ def main():
                 txt = json.loads(urllib.request.urlopen(req, timeout=600).read())["choices"][0]["message"]["content"]
             except Exception as e:
                 txt = f"ERROR {type(e).__name__}: {e}"
-            words = re.findall(r"[a-z]+", txt.lower())
+            js = re.findall(r'\{[^{}]*"colou?rs"[^{}]*\}', txt, flags=re.I)          # рассуждающая модель: берётся ПОСЛЕДНИЙ JSON
+            words = re.findall(r"[a-z]+", (js[-1] if js else txt).lower())
             fams = sorted({WORD[w] for w in words if w in WORD})
             rec = dict(sheet=nm, track=tk, answer=txt[:400], fams=fams, tru=sorted(truth.get((nm, tk), set())), sec=round(time.time() - t1, 1))
             with open(jf, "a", encoding="utf-8") as fh:
