@@ -24,6 +24,7 @@ def main():
     ap.add_argument("--n", type=int, default=24)
     ap.add_argument("--seed", type=int, default=2)
     ap.add_argument("--out", default=r"F:/nds/output/header_2026-11-16")
+    ap.add_argument("--names-only", action="store_true", help="§6.386: в index — только имена кривых по трекам (без цветов эталона)")
     a = ap.parse_args()
     from PIL import Image
     from extract_nlgx import extract
@@ -57,7 +58,7 @@ def main():
         fn = f"{i + 1:02d}_{nm[:50]}.jpg".replace(" ", "_").replace(",", "")
         crop.save(out / fn, quality=88)
         rows.append(f"{fn}\t{nm}\tначало кривых y={top} (кадр — строки 0…{y1})\t" +
-                    " | ".join(f"{tk}: " + ", ".join(f"{c} {tuple(int(v) for v in rgb_)}" for c, rgb_ in R) for tk, R in cols.items()))
+                    " | ".join(f"{tk}: " + ", ".join((c if a.names_only else f"{c} {tuple(int(v) for v in rgb_)}") for c, rgb_ in R) for tk, R in cols.items()))
         del rgb
         print(f"  {fn}")
     (out / "index.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
