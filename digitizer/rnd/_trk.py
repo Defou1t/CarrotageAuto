@@ -56,26 +56,27 @@ def cmd_data(a):
     from _multi_replica_probe import dense
     from auto import imaging as im
     im.EXIF_TRANSPOSE = False
-    OUT.mkdir(parents=True, exist_ok=True)
+    DD = OUT / a.data_dir if a.data_dir else OUT
+    DD.mkdir(parents=True, exist_ok=True)
     wells, _, SRC = eval_wells()
     names = []
     for f in ("tcache_sheets.txt", "outside_sheets.txt"):
         names += [l.strip() for l in (TS / f).read_text(encoding="utf-8").splitlines() if l.strip()]
     names = sorted(set(names)); random.Random(1).shuffle(names)
     names = [s for s in names if s in SRC and SRC[s].parent.parent.name not in wells]
-    done_f = OUT / "data_done.txt"
+    done_f = DD / "data_done.txt"
     done = set(done_f.read_text(encoding="utf-8").splitlines()) if done_f.exists() else set()
     rng = np.random.default_rng(7)
-    X, T, buf_sheets, shard = [], [], [], len(list(OUT.glob("data_*.npz")))
+    X, T, buf_sheets, shard = [], [], [], len(list(DD.glob("data_*.npz")))
     T0 = time.time()
 
     def flush():
         nonlocal X, T, buf_sheets, shard
         if not X:
             return
-        tmp = OUT / f"data_{shard:03d}.tmp.npz"
+        tmp = DD / f"data_{shard:03d}.tmp.npz"
         np.savez(tmp, X=np.stack(X), T=np.stack(T))
-        tmp.replace(OUT / f"data_{shard:03d}.npz")
+        tmp.replace(DD / f"data_{shard:03d}.npz")
         with open(done_f, "a", encoding="utf-8") as fh:
             fh.write("\n".join(buf_sheets) + "\n")
         shard += 1; X, T, buf_sheets = [], [], []
@@ -142,7 +143,7 @@ def net_def():
 def cmd_train(a):
     import torch, torch.nn.functional as F
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    files = sorted(OUT.glob("data_[0-9][0-9][0-9].npz"))
+    files = sorted((OUT / a.data_dir).glob("data_[0-9][0-9][0-9].npz")) if a.data_dir else sorted(OUT.glob("data_[0-9][0-9][0-9].npz"))
     D = [np.load(f) for f in files]
     X = np.concatenate([d["X"] for d in D]); T = np.concatenate([d["T"] for d in D])
     print(f"  примеров {len(X)} из {len(files)} шардов")
@@ -158,6 +159,13 @@ def cmd_train(a):
             xb = torch.flip(xb, dims=[3]); tb = torch.from_numpy(2 * HW - 1 - T[idx].astype(np.int64)).to(dev)
         else:
             tb = torch.from_numpy(T[idx].astype(np.int64)).to(dev)
+        if a.jitter:                             # §6.387 (2): против дрейфа — кадр не по центру линии и сдвинутая история
+            d1 = int(rng.integers(-a.jitter, a.jitter + 1))
+            if d1:
+                xb = torch.roll(xb, d1, dims=3); tb = (tb + d1).clamp(0, 2 * HW - 1)
+            if rng.random() < 0.5:
+                d2 = int(rng.integers(-a.jitter, a.jitter + 1))
+                xb[:, 3] = torch.roll(xb[:, 3], d2, dims=2)
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
             lo = net(xb)
         loss = F.cross_entropy(lo.float().reshape(-1, 2 * HW), tb.reshape(-1))
@@ -166,8 +174,8 @@ def cmd_train(a):
         if (st + 1) % 2000 == 0:
             acc = float((lo.argmax(-1) - tb).abs().le(3).float().mean())
             print(f"  шаг {st + 1}/{steps}: потеря {run:.3f}, |Δ| ≤ 3 px {acc:.1%}, {time.time() - T0:.0f} с")
-            torch.save(net.state_dict(), OUT / "trk.tmp.pt"); (OUT / "trk.tmp.pt").replace(OUT / "trk.pt")
-    torch.save(net.state_dict(), OUT / "trk.tmp.pt"); (OUT / "trk.tmp.pt").replace(OUT / "trk.pt")
+            torch.save(net.state_dict(), OUT / f"trk{a.tag}.tmp.pt"); (OUT / f"trk{a.tag}.tmp.pt").replace(OUT / f"trk{a.tag}.pt")
+    torch.save(net.state_dict(), OUT / f"trk{a.tag}.tmp.pt"); (OUT / f"trk{a.tag}.tmp.pt").replace(OUT / f"trk{a.tag}.pt")
     print(f"★ TRAIN: {steps} шагов, {time.time() - T0:.0f} с")
 
 
@@ -180,7 +188,7 @@ def cmd_eval(a):
     from auto import imaging as im
     im.EXIF_TRANSPOSE = False
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = net_def()().to(dev); net.load_state_dict(torch.load(OUT / "trk.pt", map_location=dev)); net.eval()
+    net = net_def()().to(dev); net.load_state_dict(torch.load(OUT / f"trk{a.tag}.pt", map_location=dev)); net.eval()
     _, ev, SRC = eval_wells()
     lab = {}
     for d in ("line_choice_r", "line_choice_out_r"):
@@ -188,7 +196,7 @@ def cmd_eval(a):
             r = pickle.load(open(f, "rb"))
             lab[r["sheet"]] = {s["name"]: any(x.get("lab") and x["lab"][0] for x in s["cands"]) for s in r["slots"] if s.get("has_truth")}
     res = {False: [0, 0], True: [0, 0]}; T0 = time.time()
-    jf = OUT / "eval.jsonl"; jf.unlink(missing_ok=True)
+    jf = OUT / f"eval{a.tag}.jsonl"; jf.unlink(missing_ok=True)
     for nm in ev:
         if nm not in lab or nm not in SRC:
             continue
@@ -205,6 +213,9 @@ def cmd_eval(a):
                 continue
             ys = sorted(g); y = ys[0] + UP; yend = ys[-1]
             path = {yy: g[yy] for yy in range(ys[0], y + 1) if yy in g}            # затравка: первые 32 строки эксперта
+            if not path:
+                continue
+            y = max(path)                                                         # у эксперта бывают разрывы строк
             with torch.no_grad():
                 while y < yend:
                     xb = torch.from_numpy(crop(rgb, path, y, path[y])[None]).to(dev).permute(0, 3, 1, 2).float() / 255.0
@@ -235,6 +246,9 @@ def main():
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--step", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--jitter", type=int, default=0, help="§6.387 (2): сдвиги кадра / истории при обучении, px")
+    ap.add_argument("--tag", default="", help="суффикс файлов модели и оценки")
+    ap.add_argument("--data-dir", default="", help="подкаталог trk с данными")
     a = ap.parse_args()
     {"data": cmd_data, "train": cmd_train, "eval": cmd_eval}[a.cmd](a)
 
