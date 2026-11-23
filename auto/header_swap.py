@@ -47,6 +47,8 @@ def ink_rgb(rgb, gray, tr):
 def colors_for(spec, sheet_name):
     if spec not in _CACHE:
         p = Path(spec)
+        if not p.is_file():
+            p = Path(__file__).resolve().parent / "models" / spec
         _CACHE[spec] = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
     return _CACHE[spec].get(sheet_name) or {}
 

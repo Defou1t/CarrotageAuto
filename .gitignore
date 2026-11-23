@@ -37,6 +37,8 @@ graphify-out/
 
 # client data listings (kept locally)
 digitizer/archive_report.txt
+# §6.386: цвета имён по шапке листов (облачное чтение) — список листов заказчика, только локально
+auto/models/header_colors_v*.json
 
 # client data listings (kept locally)
 digitizer/manifest_all.csv
