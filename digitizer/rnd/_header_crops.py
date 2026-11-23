@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--seed", type=int, default=2)
     ap.add_argument("--out", default=r"F:/nds/output/header_2026-11-16")
     ap.add_argument("--names-only", action="store_true", help="§6.386: в index — только имена кривых по трекам (без цветов эталона)")
+    ap.add_argument("--sheets", default="")
+    ap.add_argument("--skip-index", default="")
     a = ap.parse_args()
     from PIL import Image
     from extract_nlgx import extract
@@ -39,7 +41,24 @@ def main():
                 by.setdefault(r["track"], []).append(r)
         if any(len(R) >= 2 and max(dist(x["ct"], y["ct"]) for i, x in enumerate(R) for y in R[i + 1:]) >= 50 for R in by.values()):
             pick.append((q["sheet"], {tk: [(r["curve"], r["ct"]) for r in R] for tk, R in by.items()}))
-    random.Random(a.seed).shuffle(pick); pick = pick[:a.n]
+    if a.sheets:                                     # §6.386 масштаб: свой список листов; имена — все кривые эталона по трекам
+        want = [l.strip() for l in Path(a.sheets).read_text(encoding="utf-8").splitlines() if l.strip()]
+        skip = set()
+        if a.skip_index:
+            skip = {l.split("	")[1] for l in Path(a.skip_index).read_text(encoding="utf-8").splitlines() if l.strip()}
+        allr = {}
+        for l in (TS / "color_clash" / "rows.jsonl").read_text(encoding="utf-8").splitlines():
+            q = json.loads(l); allr[q["sheet"]] = q
+        pick = []
+        for w in want:
+            if w in skip or w not in allr:
+                continue
+            cols = {}
+            for r in allr[w]["recs"]:
+                cols.setdefault(r["track"], []).append((r["curve"], r["ct"] or [0, 0, 0]))
+            pick.append((w, cols))
+    else:
+        random.Random(a.seed).shuffle(pick); pick = pick[:a.n]
     SRC = {q.name: q for q in Path(r"F:\nds\projects\Archive").glob("*/wlg/*.nlgx")}
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     rows = []
