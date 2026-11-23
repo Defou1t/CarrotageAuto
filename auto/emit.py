@@ -469,6 +469,34 @@ def _line_choice_pass(spec, model, mapping, traces, get_gray, get_rgb, sheet_nam
     return info_.get("pairs", [])                       # §6.361: пары, раздвинутые `line_choice._nodup`
 
 
+def _header_swap_pass(spec, model, mapping, get_rgb, sheet_name, out, stem):
+    """§6.386: обмен имён по цвету шапки (`auto/header_swap.py`; цвет имени — облачное чтение шапки, кэш JSON по листу).
+    Меняет `mapping` на месте; обмены — в `<stem>_hdrswap.json`."""
+    from . import header_swap as HS
+    hdr = HS.colors_for(spec, sheet_name)
+    if not hdr:
+        return
+    rgb = get_rgb()
+    if rgb is None:
+        return
+    gray = rgb.mean(2)
+    ours = {}
+    for c in model.get("curves", []):
+        name = c["name"]
+        if name not in mapping or name not in hdr:
+            continue
+        tr = mapping[name][1]; top_y = c["top_y"]; n = c["n_rows"]
+        d = {top_y + i: float(int(round(tr[top_y + i]))) for i in range(n) if (top_y + i) in tr}
+        if len(d) < 200:
+            continue
+        ours[name] = HS.family(HS.ink_rgb(rgb, gray, d))
+    sw = HS.swaps(hdr, ours)
+    for A, B in sw:
+        mapping[A], mapping[B] = mapping[B], mapping[A]
+    if sw:
+        (Path(out) / f"{stem}_hdrswap.json").write_text(json.dumps([dict(a=A, b=B) for A, B in sw], ensure_ascii=False), encoding="utf-8")
+
+
 def _detour_pass(spec, seg_spec, tau, model, mapping, traces, get_rgb, sheet_name, out, stem, frame_nlgx=None, jump=0.0):
     """§6.355: объезды (auto/detour.py) — окно кривой выдачи, где она расходится с кандидатом ведения и сходится до и после,
     заменяется куском кандидата при P(кандидат верен) > τ (меняется `mapping` на месте). Замены — в `<stem>_detour.json`."""
@@ -1003,6 +1031,10 @@ def emit_into_frame(traces, frame_nlgx, frame, out, stem, mnemonics_path,
         _spike_pass(_spp, model, mapping, _get_rgb, out, stem, frame_nlgx=frame_nlgx,
                     ts=float(getattr(_cvp0, "spike_ts", 0.1)), tc=float(getattr(_cvp0, "spike_tc", 0.5)),
                     long_=int(getattr(_cvp0, "spike_long", 0) or 0))
+    # §6.386: обмен имён по цвету шапки — после всех правок трасс, до записи (`cv.header_swap` — JSON цветов шапки; пусто = выкл.)
+    _hsp = getattr(_cvp0, "header_swap", "") or ""
+    if _hsp:
+        _header_swap_pass(_hsp, model, mapping, _get_rgb, Path(frame_nlgx).name, out, stem)
     written, wrote_ifd = [], set()
     ink_jobs = []                       # §6.266: (кривая, ifd, xs, сегменты прежнего декодера) — для второго прохода
     for c in model.get("curves", []):

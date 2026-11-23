@@ -528,6 +528,8 @@ class CVParams:
     # §6.375: + пути по карте сети туши (m < 0) БЕЗ исключения занятых пиков — последней группой доп. кандидатов выбора трассы
     #   (False = прод бит-в-бит). ⛔ 16.11: A/B NSE27 (с line_choice_v22e) +16 при p = 0.45, сорт A −7 — не отгружено
     rowdec_seg_noexcl: bool = False
+    # §6.386: обмен имён по цвету шапки — путь к JSON {лист nlgx: {имя: цвет}} (облачное чтение шапок); "" = выкл = прод бит-в-бит
+    header_swap: str = ""
     rowdec_link_model: str = "link_model.pkl"     # модель перехода (`_link_train.py`) в auto/models или полный путь
     rowdec_inert_w: float = 1.0
     rowdec_inert_alpha: float = 0.3
