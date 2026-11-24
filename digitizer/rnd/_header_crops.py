@@ -27,6 +27,8 @@ def main():
     ap.add_argument("--names-only", action="store_true", help="§6.386: в index — только имена кривых по трекам (без цветов эталона)")
     ap.add_argument("--sheets", default="")
     ap.add_argument("--skip-index", default="")
+    ap.add_argument("--below", type=int, default=150, help="§6.388: строк кадра ниже начала кривых")
+    ap.add_argument("--above", type=int, default=0, help="§6.388: строк выше начала кривых (0 — от верха скана)")
     a = ap.parse_args()
     from PIL import Image
     from extract_nlgx import extract
@@ -70,13 +72,13 @@ def main():
         rgb = im.load_rgb(pickle.load(open(src, "rb"))["image"])
         m = extract(str(n))
         top = min(c["top_y"] for c in m["curves"] if c.get("top_y") is not None)
-        y1 = int(min(rgb.shape[0], top + 150)); y0 = 0
+        y1 = int(min(rgb.shape[0], top + a.below)); y0 = int(max(0, top - a.above)) if a.above else 0
         crop = Image.fromarray(rgb[y0:y1])
         if crop.width > 2400:
             crop = crop.resize((2400, int(crop.height * 2400 / crop.width)), Image.LANCZOS)
         fn = f"{i + 1:02d}_{nm[:50]}.jpg".replace(" ", "_").replace(",", "")
         crop.save(out / fn, quality=88)
-        rows.append(f"{fn}\t{nm}\tначало кривых y={top} (кадр — строки 0…{y1})\t" +
+        rows.append(f"{fn}\t{nm}\tначало кривых y={top} (кадр — строки {y0}…{y1})\t" +
                     " | ".join(f"{tk}: " + ", ".join((c if a.names_only else f"{c} {tuple(int(v) for v in rgb_)}") for c, rgb_ in R) for tk, R in cols.items()))
         del rgb
         print(f"  {fn}")
