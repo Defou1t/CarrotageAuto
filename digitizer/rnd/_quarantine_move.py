@@ -25,8 +25,8 @@ for line in open(a.list, encoding="utf-8"):
     if os.path.splitdrive(real)[0].upper() != "E:": print("не E:, пропуск", src); continue
     parts = [x.lower() for x in real.replace("/", os.sep).split(os.sep)]
     # защита: не корни (≥ 2 уровня под taskS / output), не пулы, не архив, не сам карантин
-    if (len(parts) < 5 or any(x.startswith(("pool", "allpool")) for x in parts) or "archive" in parts
-            or "_quarantine" in parts or parts[-1] in ("tasks", "output", "rp_lvl", "projects", "data")):
+    if (len(parts) < 4 or (len(parts) == 4 and parts[2] != "output") or any(x.startswith(("pool", "allpool")) for x in parts) or "archive" in parts
+            or "_quarantine" in parts or parts[-1].startswith("final_") or parts[-1] in ("tasks", "output", "rp_lvl", "projects", "data")):
         print("ЗАПРЕЩЕНО, пропуск", src, real); continue
     sz = size(real); tot += sz
     dst = os.path.join(dst_dir, os.path.basename(real.rstrip("\\/")))
