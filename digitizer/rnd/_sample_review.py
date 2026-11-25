@@ -30,7 +30,7 @@ POOLS = ["pools", "pools_gate", "pools_wide", "pools_more", "pools_div", "pools_
 ARCH = Path(r"F:\nds\projects\Archive")
 MODE = "NSE19"                                    # --mode: какой повтор прода показывать (каталог rp_lvl/<MODE>, дамп rp_lvl_NS_<MODE>.pkl)
 OOF = TS / "rp_lvl" / MODE
-FINAL = Path(r"F:/nds/output/final_2026-10/FINAL")
+FINAL = Path(r"F:/nds/output/final_2026-11/FINAL")  # 25.11: FINAL11 (прод 97b5226); прежний final_2026-10 — в карантине
 HON = lambda m, c: m is not None and m <= 3.0 and c >= 0.9
 CATS = ["верно", "верно под другим именем", "нет кривой с этим именем", "уровень масштаба", "нет общей глубины",
         "короткая (покрытие < 0.9)", "близко (3–6 px)", "на другой кривой эталона", "не та линия"]
