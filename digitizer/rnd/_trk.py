@@ -122,10 +122,11 @@ def cmd_data(a):
     print(f"★ DATA: шардов {shard}, {time.time() - T0:.0f} с")
 
 
-def net_def():
+def net_def(arch=1):
     import torch, torch.nn as nn
 
     class Trk(nn.Module):
+        """§6.387 (⚠ §6.389: строка выхода i — полоса кадра 4i…4i+3, а не строка y+1+i — экстраполяция по прошлому)"""
         def __init__(s, ch=48):
             super().__init__()
             def blk(i, o, st=(1, 1)):
@@ -137,7 +138,21 @@ def net_def():
 
         def forward(s, x):                       # x [B, 4, 64, 192] → logits [B, 16, 192]
             return s.head(s.enc(x))[:, 0]
-    return Trk
+
+    class Trk2(nn.Module):
+        """§6.389: без сжатия по вертикали, расширение 1…16 (поле ±32 строки); выход — строки кадра UP+1 … UP+FUT"""
+        def __init__(s, ch=64):
+            super().__init__()
+            def blk(i, o, d=1):
+                return nn.Sequential(nn.Conv2d(i, o, 3, 1, (d, 1), dilation=(d, 1)), nn.BatchNorm2d(o), nn.ReLU(inplace=True))
+            s.enc = nn.Sequential(blk(4, ch), blk(ch, ch), blk(ch, ch, 2), blk(ch, ch, 4), blk(ch, ch, 8), blk(ch, ch, 16), blk(ch, ch),
+                                  nn.Conv2d(ch, ch, (1, 9), 1, (0, 4)), nn.ReLU(inplace=True),
+                                  nn.Conv2d(ch, ch, (1, 9), 1, (0, 8), dilation=(1, 2)), nn.ReLU(inplace=True))
+            s.head = nn.Conv2d(ch, 1, 1)
+
+        def forward(s, x):                       # x [B, 4, 64, 192] → logits [B, 16, 192] для строк y+1 … y+16
+            return s.head(s.enc(x))[:, 0, UP + 1:UP + 1 + FUT]
+    return Trk if arch == 1 else Trk2
 
 
 def cmd_train(a):
@@ -147,7 +162,7 @@ def cmd_train(a):
     D = [np.load(f) for f in files]
     X = np.concatenate([d["X"] for d in D]); T = np.concatenate([d["T"] for d in D])
     print(f"  примеров {len(X)} из {len(files)} шардов")
-    net = net_def()().to(dev)
+    net = net_def(a.arch)().to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=2e-3, weight_decay=1e-4)
     steps = a.epochs * (len(X) // a.batch)
     sch = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=2e-3, total_steps=steps, pct_start=0.05)
@@ -188,7 +203,7 @@ def cmd_eval(a):
     from auto import imaging as im
     im.EXIF_TRANSPOSE = False
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = net_def()().to(dev); net.load_state_dict(torch.load(OUT / f"trk{a.tag}.pt", map_location=dev)); net.eval()
+    net = net_def(a.arch)().to(dev); net.load_state_dict(torch.load(OUT / f"trk{a.tag}.pt", map_location=dev)); net.eval()
     _, ev, SRC = eval_wells()
     lab = {}
     for d in ("line_choice_r", "line_choice_out_r"):
@@ -228,19 +243,59 @@ def cmd_eval(a):
                     y += a.step
             P = dense_tr(path)
             hit, cov, md = honest_d(P, _tree(P), g, _tree(g))
+            yy = [q for q in sorted(g) if q in P]
+            off = next((i for i, q in enumerate(yy) if abs(P[q] - g[q]) > 6), len(yy))
+            first_off = off / max(1, len(yy))
             res[has][0] += 1; res[has][1] += int(hit)
             with open(jf, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(dict(sheet=nm, curve=cn, has=has, hit=bool(hit), cov=round(cov, 3), med=round(md, 2)), ensure_ascii=False) + "\n")
+                fh.write(json.dumps(dict(sheet=nm, curve=cn, has=has, hit=bool(hit), cov=round(cov, 3), med=round(md, 2), first_off=round(first_off, 3)), ensure_ascii=False) + "\n")
         del rgb
     for has, nmh in ((False, "без честного кандидата"), (True, "с кандидатом")):
         n, h = res[has]
         print(f"★ слоты {nmh}: трекер (затравка — 32 строки эксперта, шаг {a.step}) честен у {h}/{n} = {h / max(n, 1):.1%}")
+    L = [json.loads(l) for l in open(jf, encoding="utf-8")]
+    if L:
+        fo = np.array([x["first_off"] for x in L])
+        print(f"  до первого ухода > 6 px: медиана {np.median(fo):.1%} строк линии, ≥ 50% линии у {np.mean(fo >= 0.5):.1%} слотов")
     print(f"  {time.time() - T0:.0f} с")
+
+
+def cmd_tf(a):
+    """§6.389 диагностика: ведение по ВЕРНОЙ истории (кадр у линии эксперта) — доля |Δ| ≤ 3 px по шагу вперёд t"""
+    import torch
+    from extract_nlgx import extract
+    from _multi_replica_probe import dense
+    from auto import imaging as im
+    im.EXIF_TRANSPOSE = False
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    net = net_def(a.arch)().to(dev); net.load_state_dict(torch.load(OUT / f"trk{a.tag}.pt", map_location=dev)); net.eval()
+    _, ev, SRC = eval_wells()
+    ok = np.zeros(FUT); n = 0
+    for nm in ev[:a.limit or None]:
+        if nm not in SRC or src_of(SRC[nm]) is None:
+            continue
+        rgb = im.load_rgb(pickle.load(open(src_of(SRC[nm]), "rb"))["image"])
+        for c in extract(str(SRC[nm]))["curves"]:
+            g = dense(c)
+            if len(g) < 500:
+                continue
+            ys = [y for y in sorted(g)[UP::97] if all((y + t) in g for t in range(1, FUT + 1))]
+            if not ys:
+                continue
+            xb = torch.from_numpy(np.stack([crop(rgb, g, y, g[y]) for y in ys])).to(dev).permute(0, 3, 1, 2).float() / 255.0
+            with torch.no_grad():
+                pr = net(xb).argmax(-1).cpu().numpy()
+            for k, y in enumerate(ys):
+                x0 = int(round(g[y])) - HW
+                ok += np.array([abs(x0 + pr[k, t - 1] - g[y + t]) <= 3 for t in range(1, FUT + 1)])
+                n += 1
+        del rgb
+    print(f"★ TF arch {a.arch} tag {a.tag!r}: кадров {n}; |Δ| ≤ 3 px  t=1 {ok[0] / n:.1%}  t=4 {ok[3] / n:.1%}  t=8 {ok[7] / n:.1%}  t=16 {ok[15] / n:.1%}")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["data", "train", "eval"])
+    ap.add_argument("cmd", choices=["data", "train", "eval", "tf"])
     ap.add_argument("--per", type=int, default=60)
     ap.add_argument("--epochs", type=int, default=6)
     ap.add_argument("--batch", type=int, default=128)
@@ -248,9 +303,10 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--jitter", type=int, default=0, help="§6.387 (2): сдвиги кадра / истории при обучении, px")
     ap.add_argument("--tag", default="", help="суффикс файлов модели и оценки")
+    ap.add_argument("--arch", type=int, default=1, help="1 — §6.387; 2 — §6.389 (выход по строкам будущего)")
     ap.add_argument("--data-dir", default="", help="подкаталог trk с данными")
     a = ap.parse_args()
-    {"data": cmd_data, "train": cmd_train, "eval": cmd_eval}[a.cmd](a)
+    {"data": cmd_data, "train": cmd_train, "eval": cmd_eval, "tf": cmd_tf}[a.cmd](a)
 
 
 if __name__ == "__main__":
